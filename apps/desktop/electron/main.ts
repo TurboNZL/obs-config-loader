@@ -3,10 +3,11 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { execFile } from 'node:child_process'
 import {
-  applyImport, detectInstalls, exportBundle, planImport, portableInstall, readBundle, realHost,
-  writeBundleDir, writeBundleZip, type Bundle, type ObsInstall,
+  applyImport, assetNeeds, captureLive, cloneRepo, detectInstalls, exportBundle, gitAvailable, initRepo, planImport, portableInstall,
+  markSynced, pullRepo, pushRepo, readBundle, readBundleDir, realHost, repoLog, repoStatus, writeBundleDir, writeBundleZip,
+  type Bundle, type ObsInstall,
 } from '@obs-config-loader/core'
-import type { BundleSummary, ExportRequest, ExportResult, ImportRequest, InstallInfo } from './api'
+import type { BundleSummary, ExportRequest, ExportResult, ImportRequest, InstallInfo, Locations, RepoInfo } from './api'
 
 const host = realHost()
 const bundles = new Map<string, Bundle & { source: string }>()
@@ -14,9 +15,10 @@ let nextHandle = 1
 
 // ── settings (user-added installs) ───────────────────────────────────────────
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json')
-interface Settings { customInstalls: ObsInstall[] }
+interface RepoEntry { path: string; installId?: string }
+interface Settings { customInstalls: ObsInstall[]; repos: RepoEntry[] }
 function loadSettings(): Settings {
-  try { return { customInstalls: [], ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) } } catch { return { customInstalls: [] } }
+  try { return { customInstalls: [], repos: [], ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) } } catch { return { customInstalls: [], repos: [] } }
 }
 function saveSettings(s: Settings) {
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true })
@@ -67,8 +69,35 @@ async function describe(i: ObsInstall, running: boolean): Promise<InstallInfo> {
 function summarise(b: Bundle, source: string): BundleSummary {
   const handle = String(nextHandle++)
   bundles.set(handle, { ...b, source })
-  return { handle, manifest: b.manifest, source, mediaFiles: [...b.files.keys()].filter((k) => k.startsWith('media/')).length }
+  const isRepo = fs.existsSync(source) && fs.statSync(source).isDirectory() && fs.existsSync(path.join(source, '.git'))
+  return {
+    handle, manifest: b.manifest, source, mediaFiles: [...b.files.keys()].filter((k) => k.startsWith('media/')).length,
+    ...(isRepo ? { repoDir: source } : {}),
+  }
 }
+
+// ── machine-specific answers for a bundle: where its big media are, folder choices (never secrets) ──
+const locationsPath = () => path.join(app.getPath('userData'), 'locations.json')
+function readLocations(): Record<string, Locations> {
+  try { return JSON.parse(fs.readFileSync(locationsPath(), 'utf8')) } catch { return {} }
+}
+function writeLocations(all: Record<string, Locations>) {
+  fs.mkdirSync(path.dirname(locationsPath()), { recursive: true })
+  fs.writeFileSync(locationsPath(), JSON.stringify(all, null, 2))
+}
+
+// ── config repositories ──────────────────────────────────────────────────────
+async function repoInfo(e: RepoEntry): Promise<RepoInfo> {
+  const status = await repoStatus(e.path)
+  return { path: e.path, name: status.manifest?.name ?? path.basename(e.path), installId: e.installId, status }
+}
+function rememberRepo(p: string, installId?: string) {
+  const s = loadSettings()
+  const hit = s.repos.find((r) => r.path === p)
+  if (hit) { if (installId) hit.installId = installId } else s.repos.push({ path: p, installId })
+  saveSettings(s)
+}
+const gitMissing = 'Git was not found. Install git (https://git-scm.com) and try again.'
 
 async function openBundlePath(p: string): Promise<BundleSummary | { error: string }> {
   try { return summarise(await readBundle(p), p) } catch (e) { return { error: (e as Error).message } }
@@ -130,7 +159,10 @@ function registerIpc() {
   }
   ipcMain.handle('import:plan', async (_e, r: ImportRequest) => planImport(await importOpts(r)).report)
   ipcMain.handle('import:apply', async (_e, r: ImportRequest) => {
-    const res = applyImport(planImport(await importOpts(r)))
+    const opts = await importOpts(r)
+    const res = applyImport(planImport(opts))
+    // Loaded from a repository: OBS now matches its current state, so later live edits are measured from here.
+    if (fs.existsSync(path.join(opts.bundle.source, '.git'))) await markSynced(opts.bundle.source, opts.install)
     return { written: res.written.length, backedUp: res.backedUp.length, backupDir: res.backupDir }
   })
 
@@ -165,6 +197,75 @@ function registerIpc() {
         warnings: [],
       }
     } catch (e) { return { error: (e as Error).message } }
+  })
+
+  ipcMain.handle('repos:list', async () => Promise.all(loadSettings().repos.filter((r) => fs.existsSync(r.path)).map(repoInfo)))
+  ipcMain.handle('repos:remove', (_e, p: string) => {
+    const s = loadSettings(); s.repos = s.repos.filter((r) => r.path !== p); saveSettings(s)
+  })
+  ipcMain.handle('repos:setInstall', (_e, p: string, installId: string) => rememberRepo(p, installId))
+  ipcMain.handle('repos:addExisting', async () => {
+    if (!(await gitAvailable())) return { error: gitMissing }
+    const r = await dialog.showOpenDialog({ title: 'Choose a config repository folder', properties: ['openDirectory'] })
+    if (r.canceled || !r.filePaths[0]) return { cancelled: true }
+    const st = await repoStatus(r.filePaths[0])
+    if (!st.isRepo) return { error: 'That folder is not a git repository (it must be the top folder of one).' }
+    if (!st.hasManifest) return { error: 'That repository has no manifest.json, so it is not an OBS config bundle.' }
+    rememberRepo(r.filePaths[0])
+    return { added: await repoInfo({ path: r.filePaths[0] }) }
+  })
+  ipcMain.handle('repos:clone', async (_e, url: string) => {
+    if (!(await gitAvailable())) return { error: gitMissing }
+    const r = await dialog.showOpenDialog({ title: 'Choose an empty folder to clone into', properties: ['openDirectory', 'createDirectory'] })
+    if (r.canceled || !r.filePaths[0]) return { cancelled: true }
+    try { await cloneRepo(url.trim(), r.filePaths[0]) } catch (e) { return { error: (e as Error).message } }
+    if (!fs.existsSync(path.join(r.filePaths[0], 'manifest.json'))) return { error: 'Cloned, but it has no manifest.json: it is not an OBS config bundle.' }
+    rememberRepo(r.filePaths[0])
+    return { added: await repoInfo({ path: r.filePaths[0] }) }
+  })
+  ipcMain.handle('repos:create', async (_e, installId: string, name: string) => {
+    if (!(await gitAvailable())) return { error: gitMissing }
+    const r = await dialog.showOpenDialog({ title: 'Choose an empty folder for the new repository', properties: ['openDirectory', 'createDirectory'] })
+    if (r.canceled || !r.filePaths[0]) return { cancelled: true }
+    if (fs.readdirSync(r.filePaths[0]).length) return { error: 'That folder is not empty.' }
+    try {
+      await initRepo(r.filePaths[0])
+      const res = await captureLive({ host, install: findInstall(installId), dir: r.filePaths[0], name, appVersion: app.getVersion() })
+      if (res.status === 'error') return { error: res.message }
+    } catch (e) { return { error: (e as Error).message } }
+    rememberRepo(r.filePaths[0], installId)
+    return { added: await repoInfo({ path: r.filePaths[0], installId }) }
+  })
+  ipcMain.handle('repos:live', async (_e, p: string, installId: string) => {
+    const r = await captureLive({ host, install: findInstall(installId), dir: p, dryRun: true })
+    if (r.status === 'error') return { error: r.message }
+    return { changed: r.status === 'changes' ? r.files : [] }
+  })
+  ipcMain.handle('repos:save', async (_e, p: string, installId: string, commitDirtyFirst: boolean) => {
+    const r = await captureLive({
+      host, install: findInstall(installId), dir: p, onDirty: commitDirtyFirst ? 'commit-first' : 'refuse', appVersion: app.getVersion(),
+    })
+    if (r.status === 'changes') return { status: 'unchanged' }
+    return r
+  })
+  ipcMain.handle('repos:pull', (_e, p: string) => pullRepo(p))
+  ipcMain.handle('repos:push', (_e, p: string) => pushRepo(p))
+  ipcMain.handle('repos:log', (_e, p: string) => repoLog(p, 15))
+  ipcMain.handle('repos:needs', async (_e, p: string) => {
+    const m = readBundleDir(p).manifest
+    return assetNeeds(m, readLocations()[m.id]?.assets ?? {})
+  })
+  ipcMain.handle('repos:setAsset', (_e, p: string, assetId: string, file: string) => {
+    const m = readBundleDir(p).manifest
+    const all = readLocations()
+    const cur = all[m.id] ?? { assets: {}, variables: {} }
+    cur.assets[assetId] = file
+    all[m.id] = cur
+    writeLocations(all)
+  })
+  ipcMain.handle('locations:load', (_e, id: string) => readLocations()[id] ?? { assets: {}, variables: {} })
+  ipcMain.handle('locations:save', (_e, id: string, l: Locations) => {
+    const all = readLocations(); all[id] = l; writeLocations(all)
   })
 
   ipcMain.handle('files:pick', async (_e, title: string, folder?: boolean) => {

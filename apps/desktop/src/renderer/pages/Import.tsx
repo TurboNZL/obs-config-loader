@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { BundleSummary, ConflictMode, ImportReport, ImportRequest, InstallInfo } from '../../../electron/api'
 import { Card, Chip, Field, KIND_LABEL, Message, Page } from '../ui'
 
-export function ImportPage({ installs, preselect, refresh }: { installs: InstallInfo[] | null; preselect?: string; refresh: () => Promise<void> }) {
+export function ImportPage({ installs, preselect, openPath, refresh }: { installs: InstallInfo[] | null; preselect?: string; openPath?: string; refresh: () => Promise<void> }) {
   const [bundle, setBundle] = useState<BundleSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [installId, setInstallId] = useState<string>(preselect ?? '')
@@ -18,6 +18,8 @@ export function ImportPage({ installs, preselect, refresh }: { installs: Install
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<string | null>(null)
   const [drag, setDrag] = useState(false)
+  const [liveChanges, setLiveChanges] = useState<string[]>([])
+  const [saving, setSaving] = useState(false)
 
   const usable = useMemo(() => (installs ?? []), [installs])
   useEffect(() => { if (!installId && usable[0]) setInstallId(usable[0].id) }, [usable, installId])
@@ -30,9 +32,22 @@ export function ImportPage({ installs, preselect, refresh }: { installs: Install
     setBundle(r)
     setCollections(r.manifest.collections.map((c) => c.id))
     setProfiles(r.manifest.profiles.map((c) => c.id))
-    setAssetFiles({})
-    setVariables(await window.obsLoader.secrets.load(r.manifest.id))
+    // what this computer remembers about the bundle: where its media are, folder choices, secrets
+    const [loc, secrets] = await Promise.all([window.obsLoader.locations.load(r.manifest.id), window.obsLoader.secrets.load(r.manifest.id)])
+    setAssetFiles(loc.assets)
+    setVariables({ ...loc.variables, ...secrets })
   }
+
+  useEffect(() => { if (openPath) void window.obsLoader.bundle.openPath(openPath).then(load) }, [openPath]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A repository folder: warn when OBS has edits the repo does not have yet, because importing would replace them.
+  const repoDir = bundle?.repoDir
+  const checkLive = async () => {
+    if (!repoDir || !installId) { setLiveChanges([]); return }
+    const r = await window.obsLoader.repos.live(repoDir, installId)
+    setLiveChanges('error' in r ? [] : r.changed)
+  }
+  useEffect(() => { void checkLive() }, [repoDir, installId, done]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const request = (): ImportRequest => ({
     handle: bundle!.handle, installId, collections, profiles, variables: clean(variables), assetFiles, conflict, activate, preferPipewire,
@@ -54,6 +69,10 @@ export function ImportPage({ installs, preselect, refresh }: { installs: Install
     setBusy(true); setError(null)
     try {
       const r = await window.obsLoader.import.apply(request())
+      await window.obsLoader.locations.save(bundle!.manifest.id, {
+        assets: assetFiles,
+        variables: Object.fromEntries(bundle!.manifest.variables.filter((v) => v.kind !== 'secret' && variables[v.name]).map((v) => [v.name, variables[v.name]])),
+      })
       if (remember) {
         const secrets = Object.fromEntries(bundle!.manifest.variables.filter((v) => v.kind === 'secret' && variables[v.name]).map((v) => [v.name, variables[v.name]]))
         if (Object.keys(secrets).length) await window.obsLoader.secrets.save(bundle!.manifest.id, secrets)
@@ -239,9 +258,25 @@ export function ImportPage({ installs, preselect, refresh }: { installs: Install
                 </ul>
               </details>
 
+              {liveChanges.length > 0 && (
+                <Message tone="warn">
+                  OBS has changes that are not in this repository yet ({liveChanges.join(', ')}). Importing replaces them (a backup is kept), so save them to the repository first.
+                  <div className="mt-2">
+                    <button className="btn btn-accent px-3 py-1" disabled={saving} onClick={async () => {
+                      setSaving(true)
+                      const r = await window.obsLoader.repos.save(repoDir!, installId, false)
+                      setSaving(false)
+                      if (r.status === 'dirty') setError(`The repository has uncommitted edits (${r.files.join(', ')}). Use the Git repositories page to commit them first.`)
+                      else if (r.status === 'error') setError(r.message)
+                      else if (r.status === 'conflict') setError(`OBS and the repository changed the same part of ${r.conflicts.join(', ')}. Resolve it on the Git repositories page first.`)
+                      else await checkLive()
+                    }}>{saving ? 'Saving…' : 'Save them to the repository now'}</button>
+                  </div>
+                </Message>
+              )}
               <div className="flex gap-2">
                 <button className="btn btn-accent px-4 py-2" disabled={busy || report.blockers.length > 0 || report.willWrite.length === 0} onClick={apply}>
-                  {busy ? 'Importing…' : 'Import'}
+                  {busy ? 'Importing…' : liveChanges.length > 0 ? 'Import anyway' : 'Import'}
                 </button>
               </div>
             </Card>

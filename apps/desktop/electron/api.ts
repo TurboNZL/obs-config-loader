@@ -1,4 +1,4 @@
-import type { ImportReport, ObsInstall, Manifest, ConflictMode, PluginFinding } from '@obs-config-loader/core'
+import type { ImportReport, ObsInstall, Manifest, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed } from '@obs-config-loader/core'
 
 /** What the renderer may ask of the main process. One place, so both sides agree. */
 export interface InstallInfo extends ObsInstall {
@@ -12,6 +12,8 @@ export interface BundleSummary {
   manifest: Manifest
   source: string
   mediaFiles: number
+  /** Set when the bundle is a git repository folder (so the import page can check for unsaved live changes). */
+  repoDir?: string
 }
 
 export interface ImportRequest {
@@ -45,7 +47,24 @@ export interface ExportResult {
   warnings: string[]
 }
 
-export type { ImportReport, ConflictMode, PluginFinding }
+export interface RepoInfo {
+  path: string
+  name: string
+  /** OBS install this repo is saved from / applied to on this computer. */
+  installId?: string
+  status: RepoStatus
+}
+
+export type SaveResult =
+  | { status: 'unchanged' }
+  | { status: 'committed'; files: string[]; commit: string; merged: boolean }
+  | { status: 'conflict'; conflicts: string[] }
+  | { status: 'dirty'; files: string[] }
+  | { status: 'error'; message: string }
+
+export interface Locations { assets: Record<string, string>; variables: Record<string, string> }
+
+export type { ImportReport, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed }
 
 export interface Api {
   platform: 'win32' | 'darwin' | 'linux'
@@ -66,6 +85,26 @@ export interface Api {
   }
   export: {
     run(r: ExportRequest): Promise<ExportResult | { error: string } | null>
+  }
+  repos: {
+    list(): Promise<RepoInfo[]>
+    addExisting(): Promise<{ added?: RepoInfo; error?: string; cancelled?: boolean }>
+    clone(url: string): Promise<{ added?: RepoInfo; error?: string; cancelled?: boolean }>
+    create(installId: string, name: string): Promise<{ added?: RepoInfo; error?: string; cancelled?: boolean }>
+    remove(path: string): Promise<void>
+    setInstall(path: string, installId: string): Promise<void>
+    /** What OBS has changed since the last save (dry run). */
+    live(path: string, installId: string): Promise<{ changed: string[] } | { error: string }>
+    save(path: string, installId: string, commitDirtyFirst: boolean): Promise<SaveResult>
+    pull(path: string): Promise<PullResult>
+    push(path: string): Promise<PushResult>
+    log(path: string): Promise<LogEntry[]>
+    needs(path: string): Promise<AssetNeed[]>
+    setAsset(path: string, assetId: string, file: string): Promise<void>
+  }
+  locations: {
+    load(bundleId: string): Promise<Locations>
+    save(bundleId: string, l: Locations): Promise<void>
   }
   files: {
     pick(title: string, folder?: boolean): Promise<string | null>
