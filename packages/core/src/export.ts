@@ -64,6 +64,14 @@ export function tokenisePathPrefix(p: string, home?: string): string | undefined
   return ['{{home}}', ...rest].join('/')
 }
 
+function folderLabel(key: string | undefined): string {
+  const k = (key ?? '').split('.').pop() ?? ''
+  if (k === 'FilePath') return 'Recording folder (simple output)'
+  if (k === 'RecFilePath') return 'Recording folder (advanced output)'
+  if (k === 'FFFilePath') return 'Recording folder (custom ffmpeg output)'
+  return `Folder for ${key ?? 'a setting'}`
+}
+
 class Collector {
   readonly assets: Asset[] = []
   readonly variables: Variable[] = []
@@ -117,7 +125,7 @@ class Collector {
     while (this.variables.some((v) => v.name === name)) name = `${baseName}_${n++}`
     this.varByValue.set(value, name)
     this.variables.push({
-      name, kind: 'path', label: `Folder for ${key ?? 'a setting'}`, default: tokenisePathPrefix(value, this.host.home),
+      name, kind: 'path', label: folderLabel(key), default: tokenisePathPrefix(value, this.host.home),
     })
     return `{{var:${name}}}`
   }
@@ -216,7 +224,7 @@ export function exportBundle(opts: ExportOptions): Bundle {
     profiles,
     ...(activeCol ? { activeCollection: activeCol.id } : {}),
     ...(activeProf ? { activeProfile: activeProf.id } : {}),
-    variables: [...scrub.variables, ...col.variables],
+    variables: [...[...scrub.variables].sort((a, b) => Number(b.name === 'STREAM_KEY') - Number(a.name === 'STREAM_KEY')), ...col.variables],
     assets: col.assets,
     plugins: manifestPlugins(report),
     platformMap,

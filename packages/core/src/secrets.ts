@@ -36,11 +36,11 @@ export class SecretScrubber {
         for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
           if (typeof x === 'string' && x !== '' && !x.includes('{{') && isSecretKey(k)) {
             const isPrimary = primary && [...path, k].join('.') === primary
-            const name = this.nameFor(x, isPrimary ? 'STREAM_KEY' : `${file.replace(/\.[a-z]+$/i, '')}_${path.join('_')}_${k}`)
+            const name = this.nameFor(x, isPrimary ? 'STREAM_KEY' : `${file.split('/').pop()!.replace(/\.[a-z]+$/i, '')}_${path.join('_')}_${k}`)
             if (!this.variables.some((vv) => vv.name === name)) {
               this.variables.push({
                 name, kind: 'secret', required: false,
-                label: isPrimary ? 'Stream key' : `Secret in ${file} (${[...path, k].join('.')})`,
+                label: isPrimary ? 'Stream key' : `Secret in ${file.split('/').pop()} (${[...path, k].join('.')})`,
                 target: `${file}#${[...path, k].join('.')}`,
               })
             }

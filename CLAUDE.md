@@ -24,11 +24,14 @@ This app is pinned to TurboNZL/turboengine (see `.turboengine.json`). The engine
 ## Repo layout
 - `docs/FORMAT.md`: the open bundle format spec (source of truth for the core)
 - `packages/core/src`: `types` (manifest), `detect` (OBS installs per OS, injectable `Host`), `export` / `import` (plan, then apply), `bundleIO` (zip + directory form), `tokens`, `secrets`, `plugins`, `sources` (platform-specific source ids and the default platform map), `ini`
+- `apps/desktop`: Electron app. `electron/` (main, preload, `api.ts` = the typed IPC contract), `src/renderer` (React + turbothemes + Tailwind 3: pages Installs, Import, Export, Appearance, About), `scripts/build.mjs` (esbuild for main/preload with core bundled in, Vite for the renderer)
+- `vendor/turbothemes`: copy of the engine's themes package (see `scripts/sync-themes.mjs`)
 - `.github/workflows`: `check.yml` (core on Linux/Windows/macOS), `auto-pr.yml`
 
 ## What exists and is tested
 - Core (`pnpm --filter @obs-config-loader/core test`, 20 tests): detection with fake machines for Linux native/Flatpak/Snap/portable, Windows, macOS; export (secrets scrubbed, small media bundled, big media external with hash, plugin report); import (Linux round trip, idempotent, backup/keep-both/skip, OBS-running block, Linux to Windows substitution and path conversion, unmappable sources hidden); zip and directory forms.
-- Not done: Electron UI, git workflow (pull prompts for missing assets), instances, release/updater wiring, Windows/macOS real-machine runs.
+- Desktop app: typechecks and builds; driven end to end in a real Electron under Xvfb (Playwright `_electron`, stubbed file dialogs): detect a Flatpak install, export a bundle, add a portable install, open the bundle, fill secrets, dry-run report, import, verify the files written. Re-run it with `xvfb-run -a node apps/desktop/e2e/e2e.cjs` after `pnpm --filter @obs-config-loader/desktop build` (needs playwright and the Electron binary).
+- Not done: git workflow (pull prompts for missing assets), instances, release/updater wiring, Windows/macOS real-machine runs.
 
 ## Hard-won gotchas
 - OBS rewrites its config on exit: importing while OBS runs is lost. Import is blocked when the caller says OBS runs.
@@ -40,5 +43,11 @@ This app is pinned to TurboNZL/turboengine (see `.turboengine.json`). The engine
 - OBS appends `_vN` to versioned ids (`text_ft2_source_v2`); strip before matching.
 - A substituted source loses its settings on purpose (devices/windows do not translate); a source with no equivalent keeps its id and settings and its scene items are hidden.
 
+- Electron 39+/40+ could not be installed in the cloud sandbox (`@electron-internal/extract-zip` 404 on the npm mirror), so `electron` is pinned to 38. Revisit on a normal machine. Electron's binary needs `--no-sandbox` when run as root, and the postinstall is skipped by pnpm: run `node node_modules/electron/install.js` once.
+- pnpm cannot fetch the `themes/` sub-folder of turboengine in the cloud sandbox (codeload 403), hence the vendored copy.
+- The theme updater's network call fails with a certificate error inside the sandbox; harmless, the built-in themes are used.
+- Secrets typed in the Import page are remembered only when `safeStorage` encryption is available; otherwise they are never written.
+
 ## Session log
 - 2026-10-29: repo created from TurboEngine templates; format spec drafted; core library built on branch `claude/obs-config-core` with tests.
+- 2026-10-29: Desktop app (branch `claude/obs-config-desktop`, built on the core branch): installs list, import wizard with live dry-run report, export, appearance picker. Verified in a real Electron run.

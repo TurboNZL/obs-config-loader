@@ -312,9 +312,6 @@ export function planImport(o: ImportOptions): ImportPlan {
     if (kind === 'builtin') warnings.push(`Unknown folder token {{${name}}}.`)
   }
   const plugins = checkPlugins(m.plugins, installedModules(host, install))
-  for (const f of plugins) {
-    if (f.status === 'missing' && f.plugin.required !== false) warnings.push(`Plugin missing: ${f.plugin.name}.`)
-  }
   if (m.source?.platform && m.source.platform !== target) {
     warnings.push(`Made on ${m.source.platform}, importing on ${target}: capture sources and device choices need checking (see substitutions).`)
   }

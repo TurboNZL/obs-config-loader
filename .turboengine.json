@@ -1,7 +1,18 @@
 {
-  "engine": { "repo": "TurboNZL/turboengine", "ref": "845cd00d3b1a62a4b986b308b6d0313057235c27" },
-  "modules": ["release-pipeline", "updaters", "appearance", "guides-and-docs", "logos", "window-frame", "backup-bundle"],
+  "engine": {
+    "repo": "TurboNZL/turboengine",
+    "ref": "845cd00d3b1a62a4b986b308b6d0313057235c27"
+  },
+  "modules": [
+    "release-pipeline",
+    "updaters",
+    "appearance",
+    "guides-and-docs",
+    "logos",
+    "window-frame",
+    "backup-bundle"
+  ],
   "themes": "on",
   "moved": {},
-  "notes": "Not yet copied: only the pin and module list exist. The bundle format in docs/FORMAT.md is this app's own (backup-bundle is the pattern, not the code). Core is a plain TS package with no Electron dependency."
+  "notes": "turbothemes is vendored in vendor/turbothemes (scripts/sync-themes.mjs refreshes it) because pnpm cannot fetch the themes/ sub-folder from every environment; apps still get newer themes at run time. Modules actually used so far: appearance (picker, theme start), release-pipeline (auto-pr, check). Not yet copied: updaters, window-frame, logos, guides-and-docs. The bundle format in docs/FORMAT.md is this app's own (backup-bundle is the pattern, not the code). Core is a plain TS package with no Electron dependency."
 }

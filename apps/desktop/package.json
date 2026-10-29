@@ -1,0 +1,38 @@
+{
+  "name": "@obs-config-loader/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "OBS Config Loader: load a whole OBS setup into any OBS install",
+  "author": "TurboNZL",
+  "type": "module",
+  "main": "out/main/main.cjs",
+  "scripts": {
+    "dev": "node scripts/build.mjs --watch & electron .",
+    "build": "node scripts/build.mjs",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@obs-config-loader/core": "workspace:^",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "turbothemes": "file:../../vendor/turbothemes"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "autoprefixer": "^10.6.2",
+    "electron": "38",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "postcss": "^8.5.32",
+    "tailwindcss": "3",
+    "typescript": "^5.6.0",
+    "vite": "^8.3.5",
+    "vitest": "^3.0.0"
+  }
+}

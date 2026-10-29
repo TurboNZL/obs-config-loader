@@ -1,0 +1,12 @@
+/* base.css first: the app's own utilities must still beat the generic component rules */
+@import 'turbothemes/base.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+html, body { overflow-x: hidden; }
+body { margin: 0; background: hsl(var(--bg)); color: hsl(var(--fg)); font-family: var(--font, system-ui, sans-serif); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82em; overflow-wrap: anywhere; }
+pre.cmd { background: hsl(var(--raised)); border: 1px solid hsl(var(--line)); padding: 0.5rem 0.7rem; overflow-x: auto; white-space: pre-wrap; }
