@@ -1,0 +1,33 @@
+# Typecheck and test the core on every push to main (other branches are not built; auto-pr opens a PR for them).
+name: Check
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  core:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --ignore-scripts
+      - run: pnpm --filter @obs-config-loader/core typecheck
+      - run: pnpm --filter @obs-config-loader/core test
+
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --ignore-scripts
+      - run: pnpm --filter @obs-config-loader/desktop typecheck
+      - run: pnpm --filter @obs-config-loader/desktop build

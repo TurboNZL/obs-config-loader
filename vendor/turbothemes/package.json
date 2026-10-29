@@ -1,0 +1,25 @@
+{
+  "name": "turbothemes",
+  "version": "1.0.0",
+  "description": "A theming engine that rarely changes, and a folder of themes that can be updated without touching the app that uses them.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/engine.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/engine.js"
+    },
+    "./base.css": "./dist/base.css",
+    "./themes.css": "./dist/themes.css",
+    "./themes.json": "./dist/themes.json",
+    "./manifest.json": "./dist/manifest.json",
+    "./tailwind": {
+      "types": "./dist/types/tailwind.d.ts",
+      "default": "./dist/tailwind.js"
+    },
+    "./package.json": "./package.json"
+  }
+}
