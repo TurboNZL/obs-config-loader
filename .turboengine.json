@@ -1,0 +1,7 @@
+{
+  "engine": { "repo": "TurboNZL/turboengine", "ref": "845cd00d3b1a62a4b986b308b6d0313057235c27" },
+  "modules": ["release-pipeline", "updaters", "appearance", "guides-and-docs", "logos", "window-frame", "backup-bundle"],
+  "themes": "on",
+  "moved": {},
+  "notes": "Not yet copied: only the pin and module list exist. The bundle format in docs/FORMAT.md is this app's own (backup-bundle is the pattern, not the code). Core is a plain TS package with no Electron dependency."
+}
