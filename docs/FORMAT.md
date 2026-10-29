@@ -173,9 +173,19 @@ my-setup/
 - Large or private media are `external`: git stores the **placeholder** (`assets.lock.json`), and a
   pull asks for the files that are missing or whose hash changed.
 - The tool keeps the user's chosen locations in its own local store, not in the repository.
-- **Local edits are preserved:** before the repository is changed from the app (or from an AI
-  tweak), the tool exports the live OBS state and commits it, so edits made in OBS between larger
-  revisions are part of history and a later change starts from them, not from the last revision.
+- **Local edits are preserved.** The tool never writes OBS's live state over the repository. Each clone keeps a local
+  bookmark (a git ref under `refs/obs-config-loader/synced/`, never pushed) for the commit OBS last matched. Saving
+  live edits commits them on top of **that** commit in a scratch checkout and then merges the result into the
+  repository's current head (a fast-forward when nothing else changed). So a change made in the repository in between
+  (by hand, pulled from another machine, or by an AI) and a change made in OBS both survive. A true conflict aborts
+  the merge and is reported; nothing is left half-merged. After the repository is loaded into OBS the bookmark moves
+  to the head.
+- **Uncommitted edits in the repository** are never overwritten: saving refuses until they are committed.
+- `revision` and `exportedAt` in `manifest.json` are left alone in the directory form (git history is the revision list),
+  so two machines never conflict on them.
+- **Platform-specific sources** (for example a Windows `window_capture`) are owned by the platform that first saved
+  them. When another OS saves, its stand-in for that source is ignored and the original stays. (Per-platform variants
+  of one source are a planned extension.)
 
 ## Versioning and compatibility
 
