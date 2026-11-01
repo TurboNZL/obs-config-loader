@@ -31,6 +31,23 @@ jobs:
       - run: pnpm --filter @obs-config-loader/desktop typecheck
       - run: pnpm --filter @obs-config-loader/desktop test
       - run: pnpm --filter @obs-config-loader/desktop build
-      # the same packaging the release does, minus publishing: a mistake shows up on the PR, not on release day
-      - name: Package (unpacked)
-        run: pnpm --filter @obs-config-loader/desktop exec electron-builder --linux dir --publish never
+
+  # The same packaging the release does (real installers: deb + AppImage, NSIS, dmg + zip), minus publishing, so a packaging
+  # mistake shows up on the pull request and not on release day.
+  package:
+    strategy:
+      fail-fast: false
+      matrix: { os: [ubuntu-latest, windows-latest, macos-latest] }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --ignore-scripts
+      - run: pnpm --filter @obs-config-loader/desktop build
+      - run: pnpm --filter @obs-config-loader/desktop exec electron-builder --publish never
+        env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+      - name: What was built
+        shell: bash
+        run: ls -la apps/desktop/dist
