@@ -101,7 +101,8 @@ describe('seeding', () => {
   })
 })
 
-describe('which OBS is running', () => {
+// /proc, symlinks to programs and XDG paths: this is Linux-only functionality, so only Linux machines can test it for real
+describe.skipIf(process.platform !== 'linux')('which OBS is running', () => {
   let proc: string
   beforeEach(() => { proc = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'obscl-proc-')) })
   afterEach(() => { fs.rmSync(proc, { recursive: true, force: true }) })
