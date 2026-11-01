@@ -29,6 +29,8 @@ This app is pinned to TurboNZL/turboengine (see `.turboengine.json`). The engine
 - `apps/desktop`: Electron app. `electron/` (main, preload, `api.ts` = the typed IPC contract), `src/renderer` (React + turbothemes + Tailwind 3: pages Installs, Import, Export, Git repositories, Appearance, About), `scripts/build.mjs` (esbuild for main/preload with core bundled in, Vite for the renderer)
 - `vendor/turbothemes`: copy of the engine's themes package (see `scripts/sync-themes.mjs`)
 - `scripts/ci-local.sh`: runs what CI runs from a **fresh clone of the committed state**. Run it before every push.
+- `apps/desktop/electron-builder.yml` + `electron/updater.ts` (ported from the engine's `updaters` module: .deb install via pkexec / terminal / systemd-run, success decided by dpkg) + `.github/workflows/release.yml` (every merge to main: tag `vYYYY.M.N`, release, installers for Linux deb+AppImage, Windows NSIS, macOS dmg+zip attached; installed apps update from it)
+- `branding/` + `scripts/gen-icons.mjs` + `scripts/logo/`: the engine's `logos` module (emblem `load` = an arrow into a tray, colour `#2fd27a`). Regenerate with `PLAYWRIGHT_MODULE=<playwright index.mjs> CHROMIUM=<chrome> node scripts/gen-icons.mjs --png`; never edit icons by hand.
 - `.github/workflows`: `check.yml` (core on Linux/Windows/macOS + desktop build; also `workflow_dispatch`), `auto-pr.yml`
 
 ## What exists and is tested
@@ -36,7 +38,8 @@ This app is pinned to TurboNZL/turboengine (see `.turboengine.json`). The engine
 - Desktop app: typechecks and builds; driven end to end in a real Electron under Xvfb (Playwright `_electron`, stubbed file dialogs): detect a Flatpak install, export a bundle, add a portable install, open the bundle, fill secrets, dry-run report, import, verify the files written. Re-run it with `xvfb-run -a node apps/desktop/e2e/e2e.cjs` after `pnpm --filter @obs-config-loader/desktop build` (needs playwright and the Electron binary).
 - Git flow driven end to end in real Electron through the screens only (`apps/desktop/e2e/e2e-git.cjs`, with a local stand-in for GitHub's API via `OBSCL_GITHUB_API`): sign in (wrong token, then right), create a repo and publish it in one step, save/push, pull conflict -> "take the online version", save conflict -> "keep OBS's version", publish a second repo later, download from the GitHub list, apply to OBS, and the "git is not installed" screen (`OBSCL_FAKE_NO_GIT=1`).
 - Not run anywhere real: the git install button (winget / xcode-select / pkexec), the GitHub sign-in against the real api.github.com, safeStorage on a desktop with a keychain.
-- Not done: per-platform variants of one source, instances, release/updater wiring, Windows/macOS real-machine runs.
+- Packaging verified on Linux: electron-builder produced a working `.deb` (package `obs-config-loader`, `package-type` marker, launcher + icon) and `.AppImage`, and the **packaged binary passes both e2e suites** (`OBSCL_PACKAGED=<path to linux-unpacked/obs-config-loader> xvfb-run -a node apps/desktop/e2e/e2e.cjs`). Windows/macOS installers are built only by CI (never run by hand).
+- Not done: per-platform variants of one source, instances, Windows/macOS real-machine runs, code signing (macOS auto-update will not work until the app is signed; Windows shows SmartScreen).
 
 ## Hard-won gotchas
 - OBS rewrites its config on exit: importing while OBS runs is lost. Import is blocked when the caller says OBS runs.
@@ -61,8 +64,13 @@ This app is pinned to TurboNZL/turboengine (see `.turboengine.json`). The engine
 - Importing without typing a secret keeps the value already in OBS (`keptSecrets`); it must never blank a stream key.
 - Workflow runs on PRs opened by the Actions bot wait for approval (`action_required`); `workflow_dispatch` on check.yml lets a run be started without that.
 
+- electron-builder: keep only run-time modules in `dependencies` (just `electron-updater`); everything else is bundled by esbuild/Vite and lives in `devDependencies`, or the installer swells. `-c.electronDist=node_modules/electron/dist -c.electronVersion=<v>` lets it package offline.
+- The release workflow sets the desktop package version from the tag (`npm pkg set version`); the dpkg name is `deb.packageName` (= `DEB_PACKAGE` in updater.ts, which the updater uses to confirm an install).
+- Repo settings the release needs (the user does these): Actions enabled, Workflow permissions = Read and write, and "Allow GitHub Actions to create and approve pull requests".
+
 ## Session log
 - 2026-10-29: repo created from TurboEngine templates; format spec drafted; core library built on branch `claude/obs-config-core` with tests.
 - 2026-10-29: Desktop app (branch `claude/obs-config-desktop`, built on the core branch): installs list, import wizard with live dry-run report, export, appearance picker. Verified in a real Electron run.
 - 2026-10-29: Git workflow: `repo.ts` in core, Git repositories page, import-time guard for unsaved live edits, remembered media locations per bundle.
 - 2026-11-01: Fixed CI (see lessons). Moved every git step into the app: GitHub sign-in, create+publish, clone from your list, set/change the online address, conflict choices, install-git helper, bundle-to-repo, default folders. Secrets are kept on import.
+- 2026-11-01: Release pipeline (the engine's mandatory `release-pipeline` + `updaters` + `logos`): packaging config, in-app updater and Updates card, release.yml, packaging dry-run in check.yml, logo. Verified: real .deb/.AppImage built here, packaged app passes e2e.

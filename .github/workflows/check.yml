@@ -29,4 +29,8 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --ignore-scripts
       - run: pnpm --filter @obs-config-loader/desktop typecheck
+      - run: pnpm --filter @obs-config-loader/desktop test
       - run: pnpm --filter @obs-config-loader/desktop build
+      # the same packaging the release does, minus publishing: a mistake shows up on the PR, not on release day
+      - name: Package (unpacked)
+        run: pnpm --filter @obs-config-loader/desktop exec electron-builder --linux dir --publish never

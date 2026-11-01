@@ -1,0 +1,55 @@
+# Every merge to main builds the desktop installers and publishes them as a new release; installed apps update themselves from it
+# (electron-updater, apps/desktop/electron/updater.ts). Nothing to tag by hand.
+# The version is the year, the month and a counter: v2026.11.0, v2026.11.1, ... (the counter restarts each month).
+# Documentation-only changes do not release. "Run workflow" in the Actions tab releases the current main on demand.
+name: Release
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.next.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Work out the next version
+        id: next
+        run: |
+          prefix="v$(date -u +%Y.%-m)."
+          last=$(git tag -l "${prefix}*" | sed "s/^${prefix}//" | sort -n | tail -1)
+          tag="${prefix}$(( ${last:--1} + 1 ))"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag"
+      - name: Create the release (this also creates the tag)
+        run: gh release create "${{ steps.next.outputs.tag }}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "${{ steps.next.outputs.tag }}" --generate-notes
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+
+  desktop:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix: { os: [ubuntu-latest, windows-latest, macos-latest] }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --ignore-scripts
+      - name: Set the version from the tag
+        shell: bash
+        run: cd apps/desktop && npm pkg set version="$(echo '${{ needs.release.outputs.tag }}' | sed 's/^v//')"
+      - name: Build the installers and attach them to the release
+        run: pnpm --filter @obs-config-loader/desktop dist:publish
+        env:
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false' # macOS: not signed (no developer certificate); Windows: likewise

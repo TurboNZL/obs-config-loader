@@ -8,6 +8,7 @@ import {
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
 } from '@obs-config-loader/core'
+import { Updates } from './updater'
 import type { BundleSummary, ExportRequest, ExportResult, GithubState, ImportRequest, InstallInfo, Locations, RepoInfo } from './api'
 
 const host = realHost()
@@ -145,6 +146,11 @@ function readSecrets(): Record<string, Record<string, string>> {
     return JSON.parse(safeStorage.decryptString(raw))
   } catch { return {} }
 }
+
+// ── updates (electron-updater from the project's GitHub releases) ──
+const updates = new Updates(app.isPackaged, (st) => {
+  for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updates:state', st)
+})
 
 // ── IPC ──────────────────────────────────────────────────────────────────────
 function registerIpc() {
@@ -394,6 +400,9 @@ function registerIpc() {
     return true
   })
 
+  ipcMain.handle('updates:state', () => updates.state)
+  ipcMain.handle('updates:check', () => updates.check())
+  ipcMain.handle('updates:install', () => { updates.install() })
   ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('app:openExternal', (_e, url: string) => {
     if (/^https:\/\//.test(url)) return shell.openExternal(url) // only web links, never file: or custom schemes
@@ -422,6 +431,7 @@ else {
   void app.whenReady().then(() => {
     registerIpc()
     createWindow()
+    updates.start()
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
   })
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })

@@ -14,5 +14,7 @@ pnpm install --ignore-scripts
 pnpm --filter @obs-config-loader/core typecheck
 pnpm --filter @obs-config-loader/core test
 pnpm --filter @obs-config-loader/desktop typecheck
+pnpm --filter @obs-config-loader/desktop test
 pnpm --filter @obs-config-loader/desktop build
+# packaging (electron-builder) is checked by CI itself: it needs to download Electron
 echo "ci-local: all green"

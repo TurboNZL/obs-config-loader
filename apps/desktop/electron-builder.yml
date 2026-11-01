@@ -1,0 +1,43 @@
+# Installers for every platform. CI builds and attaches them to each release (.github/workflows/release.yml);
+# installed copies update themselves from those releases (electron/updater.ts, electron-updater).
+appId: app.turbonzl.obsconfigloader
+productName: OBS Config Loader
+copyright: Copyright (c) 2026 TurboNZL
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - package.json
+asar: true
+# lowercase names, os-arch, like every TurboNZL app: obs-config-loader-2026.11.0-linux-x64.deb
+artifactName: obs-config-loader-${version}-${os}-${arch}.${ext}
+publish:
+  provider: github
+  owner: TurboNZL
+  repo: obs-config-loader
+  releaseType: release
+linux:
+  target: [deb, AppImage]
+  category: Utility
+  maintainer: TurboNZL <noreply@users.noreply.github.com>
+  executableName: obs-config-loader
+  syncDesktopName: true
+  desktop:
+    entry:
+      StartupWMClass: obs-config-loader
+      Comment: Load a whole OBS setup into any OBS install
+deb:
+  packageName: obs-config-loader
+win:
+  target: [{ target: nsis, arch: [x64] }]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+mac:
+  # unsigned: macOS shows its "unidentified developer" prompt on first start (right-click > Open)
+  target:
+    - { target: dmg, arch: [x64, arm64] }
+    - { target: zip, arch: [x64, arm64] }
+  category: public.app-category.utilities

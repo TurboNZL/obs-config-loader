@@ -13,7 +13,16 @@ the list of plugins it needs. The same setup works on Linux, Windows and macOS, 
 - Git-backed config repositories with large files kept outside git as placeholders.
 - Manage several OBS instances (where the install type allows it).
 
-## Running it
+## Install
+Every merge to `main` publishes a release with installers; installed copies update themselves.
+
+| OS | Download from the [latest release](https://github.com/TurboNZL/obs-config-loader/releases/latest) |
+|---|---|
+| Linux (Debian, Ubuntu, Kubuntu) | `obs-config-loader-<version>-linux-amd64.deb` (or the `.AppImage`, which needs no root) |
+| Windows | `obs-config-loader-<version>-win-x64.exe` |
+| macOS | `obs-config-loader-<version>-mac-*.dmg` (not signed: right-click > Open the first time; it cannot update itself until it is signed) |
+
+## Running it from source
 ```
 pnpm install
 pnpm test

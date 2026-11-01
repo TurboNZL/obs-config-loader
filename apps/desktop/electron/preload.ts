@@ -61,6 +61,16 @@ const api: Api = {
     load: (id) => call('secrets:load', id),
     save: (id, v) => call('secrets:save', id, v),
   },
+  updates: {
+    state: () => call('updates:state'),
+    check: () => call('updates:check'),
+    install: () => call('updates:install'),
+    onState: (cb) => {
+      const h = (_e: unknown, s: Parameters<typeof cb>[0]) => cb(s)
+      ipcRenderer.on('updates:state', h)
+      return () => { ipcRenderer.removeListener('updates:state', h) }
+    },
+  },
   app: {
     version: () => call('app:version'),
     openExternal: (u) => call('app:openExternal', u),

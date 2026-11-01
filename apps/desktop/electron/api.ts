@@ -57,6 +57,13 @@ export interface RepoInfo {
   status: RepoStatus
 }
 
+export type UpdateState = {
+  status: 'idle' | 'disabled' | 'checking' | 'none' | 'downloading' | 'ready' | 'error'
+  version?: string; percent?: number; message?: string; installing?: boolean
+  /** What to run in a terminal when the app could not install the update itself. */
+  command?: string
+}
+
 export interface GitState { available: boolean; help: GitInstallHelp; platform: string }
 export interface GithubState { connected: boolean; login?: string; /** Token is kept for this session only (no system keychain). */ sessionOnly?: boolean }
 export type Done<T> = ({ ok: true } & T) | { ok: false; error: string; cancelled?: boolean }
@@ -139,6 +146,12 @@ export interface Api {
   secrets: {
     load(bundleId: string): Promise<Record<string, string>>
     save(bundleId: string, values: Record<string, string>): Promise<boolean>
+  }
+  updates: {
+    state(): Promise<UpdateState>
+    check(): Promise<UpdateState>
+    install(): Promise<void>
+    onState(cb: (s: UpdateState) => void): () => void
   }
   app: { version(): Promise<string>; openExternal(url: string): Promise<void> }
   /** Real path of a dropped file (the renderer has no other way to get it). */

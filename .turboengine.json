@@ -14,5 +14,5 @@
   ],
   "themes": "on",
   "moved": {},
-  "notes": "turbothemes is vendored in vendor/turbothemes (scripts/sync-themes.mjs refreshes it) because pnpm cannot fetch the themes/ sub-folder from every environment; apps still get newer themes at run time. Modules actually used so far: appearance (picker, theme start), release-pipeline (auto-pr, check). Not yet copied: updaters, window-frame, logos, guides-and-docs. The bundle format in docs/FORMAT.md is this app's own (backup-bundle is the pattern, not the code). Core is a plain TS package with no Electron dependency."
+  "notes": "turbothemes is vendored in vendor/turbothemes (scripts/sync-themes.mjs refreshes it) because pnpm cannot fetch the themes/ sub-folder from every environment; apps still get newer themes at run time. Modules in use: appearance (picker, theme start), release-pipeline (auto-pr, check, release), updaters (electron/updater.ts, debInstall.ts, updateErrors.ts, Updates card in About; no GitHub-token field because the repo is public), logos (emblem `load`, colour #2fd27a). Not yet copied: window-frame, guides-and-docs. The bundle format in docs/FORMAT.md is this app's own (backup-bundle is the pattern, not the code). Core is a plain TS package with no Electron dependency."
 }
