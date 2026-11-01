@@ -9,7 +9,15 @@ const api: Api = {
     list: () => call('installs:list'),
     addPortable: () => call('installs:addPortable'),
     remove: (id) => call('installs:remove', id),
+    launch: (id) => call('installs:launch', id),
+    verify: (id, since) => call('installs:verify', id, since),
     openFolder: (id) => call('installs:openFolder', id),
+  },
+  instances: {
+    support: (b, n) => call('instances:support', b, n),
+    create: (r) => call('instances:create', r),
+    remove: (id, del) => call('instances:remove', id, del),
+    openPlugins: (id) => call('instances:openPlugins', id),
   },
   bundle: {
     open: () => call('bundle:open'),

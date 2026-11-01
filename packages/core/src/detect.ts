@@ -29,6 +29,8 @@ export type InstallKind =
   | 'windows' | 'windows-portable'
   | 'macos'
   | 'linux-native' | 'flatpak' | 'snap' | 'linux-portable'
+  /** A second OBS that shares a base install's program but has its own settings and plugins. */
+  | 'instance'
 
 export interface ObsInstall {
   /** Stable id: kind + config dir. */
@@ -46,6 +48,8 @@ export interface ObsInstall {
   launch?: { command: string; args: string[]; env?: Record<string, string> }
   /** User-added (portable) rather than auto-detected. */
   custom?: boolean
+  /** Set for kind 'instance': what it is made from and where its own folders are. */
+  instance?: { name: string; of: string; baseKind: InstallKind; configHome: string; dataHome: string }
 }
 
 const FLATPAK_ID = 'com.obsproject.Studio'

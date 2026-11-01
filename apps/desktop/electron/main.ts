@@ -1,9 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import {
-  applyImport, assetNeeds, captureLive, cloneRepo, createRepoFromBundle, detectInstalls, detectLinuxPackageManager, exportBundle, getRemoteUrl,
+  applyImport, assetNeeds, buildInstance, describeLaunch, findObsProcessesLinux, instancePaths, isInstallRunning, seedInstance, captureLive, cloneRepo, createRepoFromBundle, detectInstalls, detectLinuxPackageManager, exportBundle, getRemoteUrl,
   gitAvailable, gitInstallHelp, githubAuthGit, githubListRepos, githubWhoAmI, initRepo, markSynced, planImport, portableInstall, publishToGithub,
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
@@ -40,8 +40,8 @@ function findInstall(id: string): ObsInstall {
   return i
 }
 
-/** Is any OBS process running? OBS rewrites its files on exit, so import must wait. */
-function obsRunning(): Promise<boolean> {
+/** Is any OBS process running? (Windows and macOS: OBS cannot be told apart per settings folder there.) */
+function anyObsRunning(): Promise<boolean> {
   return new Promise((resolve) => {
     if (process.platform === 'win32') {
       execFile('tasklist', ['/FI', 'IMAGENAME eq obs64.exe', '/NH'], (e, out) => resolve(!e && /obs64\.exe/i.test(out)))
@@ -52,6 +52,24 @@ function obsRunning(): Promise<boolean> {
   })
 }
 
+/**
+ * Which installs have a running OBS. OBS rewrites the files of the folder it uses when it quits, so an import must wait
+ * for exactly that OBS: on Linux each process's own settings folder is read, so a separate OBS running does not block the
+ * main one (and the other way round). Elsewhere any OBS counts.
+ */
+async function runningMap(installs: ObsInstall[]): Promise<Map<string, boolean>> {
+  const out = new Map<string, boolean>()
+  if (process.platform === 'linux') {
+    const procs = findObsProcessesLinux()
+    for (const i of installs) out.set(i.id, isInstallRunning(i, procs, host))
+  } else {
+    const any = await anyObsRunning()
+    for (const i of installs) out.set(i.id, any)
+  }
+  return out
+}
+const obsRunningFor = async (i: ObsInstall) => (await runningMap([i])).get(i.id) ?? false
+
 function listDirs(p: string, ext?: string): string[] {
   try {
     return fs.readdirSync(p, { withFileTypes: true })
@@ -61,8 +79,9 @@ function listDirs(p: string, ext?: string): string[] {
 }
 
 async function describe(i: ObsInstall, running: boolean): Promise<InstallInfo> {
+  const base = i.instance ? allInstalls().find((x) => x.id === i.instance!.of) : undefined
   return {
-    ...i, running,
+    ...i, running, baseLabel: base?.label ?? (i.instance ? 'an OBS install that is no longer there' : undefined),
     collections: listDirs(path.join(i.configDir, 'basic', 'scenes'), '.json'),
     profiles: listDirs(path.join(i.configDir, 'basic', 'profiles')),
   }
@@ -155,8 +174,9 @@ const updates = new Updates(app.isPackaged, (st) => {
 // ── IPC ──────────────────────────────────────────────────────────────────────
 function registerIpc() {
   ipcMain.handle('installs:list', async () => {
-    const running = await obsRunning()
-    return Promise.all(allInstalls().map((i) => describe(i, running)))
+    const all = allInstalls()
+    const running = await runningMap(all)
+    return Promise.all(all.map((i) => describe(i, running.get(i.id) ?? false)))
   })
   ipcMain.handle('installs:addPortable', async () => {
     const r = await dialog.showOpenDialog({ title: 'Choose the portable OBS folder', properties: ['openDirectory'] })
@@ -165,7 +185,7 @@ function registerIpc() {
     if ('error' in got) return { error: got.error }
     const s = loadSettings()
     if (!s.customInstalls.some((c) => c.id === got.id)) { s.customInstalls.push(got); saveSettings(s) }
-    return { added: await describe(got, await obsRunning()) }
+    return { added: await describe(got, await obsRunningFor(got)) }
   })
   ipcMain.handle('installs:remove', (_e, id: string) => {
     const s = loadSettings()
@@ -173,6 +193,71 @@ function registerIpc() {
     saveSettings(s)
   })
   ipcMain.handle('installs:openFolder', async (_e, id: string) => { await shell.openPath(findInstall(id).configDir) })
+
+  // ── starting OBS, and separate OBS instances ──
+  ipcMain.handle('installs:launch', async (_e, id: string) => {
+    const i = findInstall(id)
+    if (!i.launch) return { ok: false, message: 'This app does not know how to start that OBS. Start it the usual way.' }
+    const { command, args, env } = i.launch
+    // a portable OBS must be started from its own folder (its settings are found relative to it)
+    const cwd = path.isAbsolute(command) ? path.dirname(command) : undefined
+    try {
+      const child = spawn(command, args, { cwd, env: { ...process.env, ...env }, detached: true, stdio: 'ignore' })
+      const failed = await new Promise<string | null>((resolve) => {
+        child.once('error', (e) => resolve((e as Error).message))
+        setTimeout(() => resolve(null), 400) // an immediate "not found" arrives well before this
+      })
+      if (failed) return { ok: false, message: `Could not start it (${failed}).`, command: describeLaunch(i) }
+      child.unref()
+      return { ok: true, message: 'Starting OBS…', command: describeLaunch(i) }
+    } catch (e) { return { ok: false, message: `Could not start it (${(e as Error).message}).`, command: describeLaunch(i) } }
+  })
+  ipcMain.handle('installs:verify', (_e, id: string, since: number) => {
+    const i = findInstall(id)
+    // Copied settings are there before OBS ever runs, so "the folder exists" proves nothing. OBS writes a new log file into
+    // the folder it really uses every time it starts, and rewrites global.ini: look for something newer than the start.
+    const fresh = (p: string) => { try { return fs.statSync(p).mtimeMs >= since - 2000 } catch { return false } }
+    const logs = path.join(i.configDir, 'logs')
+    let newLog = false
+    try { newLog = fs.readdirSync(logs).some((f) => fresh(path.join(logs, f))) } catch { /* no logs folder yet */ }
+    return { usesOwnSettings: newLog || fresh(path.join(i.configDir, 'global.ini')) }
+  })
+
+  ipcMain.handle('instances:support', (_e, baseId: string, name?: string) => instancePaths(findInstall(baseId), host, name || 'new'))
+  ipcMain.handle('instances:create', async (_e, r: { baseId: string; name: string; copySettings: boolean }) => {
+    const name = r.name.trim()
+    if (!name) return { ok: false, error: 'Give it a name.' }
+    const base = findInstall(r.baseId)
+    const sup = instancePaths(base, host, name)
+    if (!sup.ok) return { ok: false, error: sup.reason }
+    const inst = buildInstance(base, host, name, sup.paths)
+    if (allInstalls().some((x) => x.id === inst.id)) return { ok: false, error: 'There is already a separate OBS with that name.' }
+    try {
+      fs.mkdirSync(sup.paths.pluginsDir, { recursive: true })
+      fs.mkdirSync(sup.paths.dataHome, { recursive: true })
+      if (r.copySettings) seedInstance(base.configDir, sup.paths.configDir)
+    } catch (e) { return { ok: false, error: `Could not create its folders: ${(e as Error).message}` } }
+    const s = loadSettings()
+    s.customInstalls.push({ ...inst, configExists: fs.existsSync(inst.configDir) })
+    saveSettings(s)
+    return { ok: true, install: await describe(inst, false) }
+  })
+  ipcMain.handle('instances:remove', (_e, id: string, deleteFiles: boolean) => {
+    const s = loadSettings()
+    const hit = s.customInstalls.find((c) => c.id === id)
+    s.customInstalls = s.customInstalls.filter((c) => c.id !== id)
+    saveSettings(s)
+    // only ever delete inside the folders the app itself made for the instance
+    if (deleteFiles && hit?.instance && hit.instance.configHome.includes(`${path.sep}instances${path.sep}`)) {
+      fs.rmSync(hit.instance.configHome, { recursive: true, force: true })
+      fs.rmSync(hit.instance.dataHome, { recursive: true, force: true })
+    }
+  })
+  ipcMain.handle('instances:openPlugins', async (_e, id: string) => {
+    const i = findInstall(id)
+    const dir = i.pluginDirs[0]
+    if (dir) { fs.mkdirSync(dir, { recursive: true }); await shell.openPath(dir) }
+  })
 
   ipcMain.handle('bundle:open', async () => {
     const r = await dialog.showOpenDialog({
@@ -194,7 +279,7 @@ function registerIpc() {
     return {
       bundle: b, install: findInstall(r.installId), host,
       collections: r.collections, profiles: r.profiles, variables: r.variables, assetFiles: r.assetFiles,
-      conflict: r.conflict, activate: r.activate, preferPipewire: r.preferPipewire, obsRunning: await obsRunning(),
+      conflict: r.conflict, activate: r.activate, preferPipewire: r.preferPipewire, obsRunning: await obsRunningFor(findInstall(r.installId)),
     }
   }
   ipcMain.handle('import:plan', async (_e, r: ImportRequest) => planImport(await importOpts(r)).report)
