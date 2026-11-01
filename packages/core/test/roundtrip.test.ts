@@ -90,7 +90,8 @@ describe('import', () => {
     const svc = JSON.parse(fs.readFileSync(nodePath.join(cfg2, 'basic/profiles/Main/service.json'), 'utf8'))
     expect(svc.settings.key).toBe('live_NEW')
     const ini = fs.readFileSync(nodePath.join(cfg2, 'basic/profiles/Main/basic.ini'), 'utf8')
-    expect(ini).toContain(`FilePath=${nodePath.join(home2, 'Videos')}`)
+    const slash = (x: string) => x.replace(/\\/g, '/') // a fake-Linux import on a Windows runner mixes separators
+    expect(slash(ini)).toContain(slash(`FilePath=${nodePath.join(home2, 'Videos')}`))
     expect(ini).toContain('StreamEncoder=x264') // untouched lines survive
     const g = fs.readFileSync(nodePath.join(cfg2, 'global.ini'), 'utf8')
     expect(g).toContain('SceneCollectionFile=Main')
