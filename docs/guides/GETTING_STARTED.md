@@ -34,3 +34,14 @@ Open **Git repositories**. Everything is done in the app; you never need a termi
 
 ## Using git (the plain way)
 Export as **A folder for git**. Scenes and profiles are plain files you can commit; big media are recorded as placeholders with checksums. Open that folder on another machine with **Open a folder** on the import page.
+
+## One setup, several operating systems
+Capture sources (a window, a screen, a game, an audio device) only exist on some systems and never carry over. A setup keeps **one version of each per system**: set up your Windows game capture on Windows and your PipeWire capture on Linux, and saving on one never overwrites the other. When you load the setup on a system, it uses that system's own version. If a system has none yet, the report says which sources got a stand-in that you need to set up again.
+
+## A separate OBS (light one for everyday, heavy one for plugins)
+Under **OBS installs**, *Make a separate OBS* creates a second OBS that uses the same program but has its **own scenes, settings and plugins**. Put a heavy plugin (a multistream add-on, say) only in the separate one and your everyday OBS starts as fast as before. Both can run at the same time.
+
+- Works for the Linux system package and for Flatpak. Windows and macOS give OBS no way to be pointed at another settings folder; use a portable copy of OBS there (each portable folder is its own OBS, add it with *Add a portable install*).
+- After *Start OBS* the app checks that the separate OBS really made its own settings. If it did not (for example Flatpak ignored the setting), it tells you not to import into it.
+- Its plugin folder is shown on its card (*Open plugins folder*). Plugins installed as Flatpak extensions are shared by every Flatpak OBS; put plugins you want separate in its folder instead.
+- An import only waits for the OBS that uses the same settings folder, so a running separate OBS never blocks the main one.

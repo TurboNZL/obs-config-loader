@@ -157,6 +157,37 @@ future OBS keys survive. On import the tokens are substituted for the target mac
 5. **Looks only fill gaps** is *not* used here: a bundle is a full setup. To protect local edits use
    the git workflow below.
 
+## Per-platform variants
+
+A capture source only exists on some operating systems, and what it points at (a window, a screen, an audio device)
+never carries over. So a setup keeps one version of each such source per platform, in a file next to the collection:
+
+```
+collections/main.json             the OBS collection as OBS wrote it
+collections/main.platforms.json   { "<source name>": { "win32": {...}, "linux": {...}, "darwin": {...} } }
+```
+
+```json
+{ "Game": {
+    "linux": { "id": "pipewire-window-capture-source", "settings": { "...": "..." } },
+    "win32": { "id": "game_capture", "settings": { "window": "Fortnite:UnrealWindow:FortniteClient.exe" } } } }
+```
+
+- Only sources whose `id` is platform-specific appear (the list is in the reference implementation, `sources.ts`).
+  Each entry is `{ id, versioned_id?, settings }`; everything else about the source (name, volume, filters, position
+  in scenes) is shared and stays in the collection.
+- **Saving** on a platform replaces that platform's entries with what OBS has, keeps every other platform's, and drops
+  names that are no longer platform-specific sources in the collection. A stand-in that an import put there and the
+  user never set up is not recorded.
+- **Importing** on a platform uses its entry when there is one. With none, the source is replaced by the default
+  stand-in for that platform (settings cleared, and listed in the report) or, if there is none, kept and hidden.
+- The collection file keeps the first saver's version of the source, so a save from another OS never rewrites it.
+- The file is optional: a setup without it behaves as in version 1 without variants. Writers sort names and use the
+  platform order `darwin, linux, win32` so saving twice gives identical bytes.
+- Fields derived from the setup (`plugins`, `platformMap`) are computed from the collection files and the variants,
+  never from one machine's live state. `source` and `generator` in a repository's manifest are frozen after the
+  first save.
+
 ## Directory form (for git)
 
 The same content unzipped, plus an `assets.lock.json`:
@@ -183,9 +214,8 @@ my-setup/
 - **Uncommitted edits in the repository** are never overwritten: saving refuses until they are committed.
 - `revision` and `exportedAt` in `manifest.json` are left alone in the directory form (git history is the revision list),
   so two machines never conflict on them.
-- **Platform-specific sources** (for example a Windows `window_capture`) are owned by the platform that first saved
-  them. When another OS saves, its stand-in for that source is ignored and the original stays. (Per-platform variants
-  of one source are a planned extension.)
+- **Platform-specific sources** (for example a Windows `window_capture`, a Linux `pipewire-window-capture-source`) are
+  kept **per platform**, see "Per-platform variants" below. Saving on one OS only ever changes that OS's entries.
 
 ## Versioning and compatibility
 

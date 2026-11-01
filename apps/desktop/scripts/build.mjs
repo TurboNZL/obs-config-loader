@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import * as path from 'node:path'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const common = { bundle: true, platform: 'node', format: 'cjs', target: 'node22', external: ['electron'], sourcemap: true, logLevel: 'info' }
+const common = { bundle: true, platform: 'node', format: 'cjs', target: 'node22', external: ['electron', 'electron-updater'], sourcemap: true, logLevel: 'info' }
 
 await esbuild({ ...common, entryPoints: [path.join(root, 'electron/main.ts')], outfile: path.join(root, 'out/main/main.cjs') })
 await esbuild({ ...common, entryPoints: [path.join(root, 'electron/preload.ts')], outfile: path.join(root, 'out/preload/preload.cjs') })

@@ -1,0 +1,15 @@
+{
+  "name": "OBS Config Loader",
+  "emblem": "load",
+  "emblemColor": "#2fd27a",
+  "out": {
+    "svg": "branding/icon.svg",
+    "mono": "branding/icon-mono.svg",
+    "png": [
+      ["apps/desktop/build/icon.png", 512],
+      ["apps/desktop/build/icon-256.png", 256]
+    ],
+    "symbolSvg": "apps/desktop/src/renderer/public/favicon.svg",
+    "symbolPng": [["apps/desktop/src/renderer/public/favicon-32.png", 32]]
+  }
+}

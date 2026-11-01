@@ -6,6 +6,7 @@ import type { Host, ObsInstall } from './detect.js'
 import { BUILTIN_TOKENS, pathModule, resolveJson, resolveString, type BuiltinToken, type TokenResolver } from './tokens.js'
 import { getIni, mapIniValues, setIni } from './ini.js'
 import { DEFAULT_PLATFORM_MAP, availableOn, isPlatformSpecific } from './sources.js'
+import { applyVariants, parseVariants, variantsPathFor } from './variants.js'
 import { checkPlugins, installedModules, type PluginFinding } from './plugins.js'
 import { unversioned } from './plugins.js'
 
@@ -52,7 +53,7 @@ export interface Substitution {
   from: string
   to?: string
   /** `substituted` replaced the id; `disabled` kept the id and hid the scene items. */
-  result: 'substituted' | 'disabled'
+  result: 'substituted' | 'disabled' | 'variant'
   note?: string
 }
 
@@ -242,6 +243,11 @@ export function planImport(o: ImportOptions): ImportPlan {
     let json: any
     try { json = JSON.parse(raw.toString('utf8')) } catch { warnings.push(`Collection ${c.name}: file is not valid JSON.`); continue }
     json = resolveJson(json, resolver, target)
+    // this platform's own saved version of each capture source, where the setup has one
+    const variants = resolveJson(parseVariants(bundle.files.get(variantsPathFor(c.file))), resolver, target)
+    for (const u of applyVariants(json, variants, target)) {
+      subs.push({ source: u.source, from: u.id, to: u.id, result: 'variant', note: `Using the ${target === 'win32' ? 'Windows' : target === 'darwin' ? 'macOS' : 'Linux'} version saved in this setup.` })
+    }
     adaptSources(json, m, target, o.preferPipewire ?? true, subs)
     usedCollections.push(json)
     let name = c.name

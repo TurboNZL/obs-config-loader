@@ -5,10 +5,11 @@ import * as os from 'node:os'
 import { execFile } from 'node:child_process'
 import type { Bundle, Manifest } from './types.js'
 import type { Host, ObsInstall } from './detect.js'
-import { exportBundle } from './export.js'
+import { exportBundle, deriveManifestFields } from './export.js'
 import { readBundleDir, serializeManifest, writeBundleDir, BundleError } from './bundleIO.js'
 import { availableOn, isPlatformSpecific, DEFAULT_PLATFORM_MAP } from './sources.js'
 import { unversioned } from './plugins.js'
+import { extractVariants, parseVariants, serializeVariants, variantsPathFor } from './variants.js'
 
 // ── git runner ───────────────────────────────────────────────────────────────
 
@@ -285,7 +286,12 @@ function writeLiveInto(o: CaptureOptions, target: string): void {
       if (!oldRaw || !raw) continue
       try {
         const next = JSON.parse(raw.toString('utf8'))
-        if (preservePlatformSources(next, JSON.parse(oldRaw.toString('utf8')), o.host.platform)) {
+        const oldJson = JSON.parse(oldRaw.toString('utf8'))
+        // this OS's version of each capture source goes into the variants file; the other OSes' entries stay as they are
+        const vf = variantsPathFor(c.file)
+        const variants = extractVariants(next, o.host.platform, parseVariants(prev.files.get(vf)), oldJson)
+        if (Object.keys(variants).length) bundle.files.set(vf, Buffer.from(serializeVariants(variants))); else bundle.files.delete(vf)
+        if (preservePlatformSources(next, oldJson, o.host.platform)) {
           bundle.files.set(c.file, Buffer.from(JSON.stringify(next, null, 4) + '\n'))
         }
       } catch { /* leave as exported */ }
@@ -299,9 +305,14 @@ function writeLiveInto(o: CaptureOptions, target: string): void {
     for (const k of Object.keys(merged)) if (!(k in ordered)) ordered[k] = (merged as Record<string, unknown>)[k]
     bundle.manifest = ordered as Manifest
     if (prev.manifest.revision === undefined) delete (bundle.manifest as Partial<Manifest>).revision
+    // who first saved it and with which app version are history, not state: freezing them keeps every machine's save identical
+    if (prev.manifest.source) bundle.manifest.source = prev.manifest.source
+    if (prev.manifest.generator) bundle.manifest.generator = prev.manifest.generator
   } else {
     delete (bundle.manifest as Partial<Manifest>).revision
   }
+  deriveManifestFields(bundle) // from the final files (canonical + every platform's variants), not from this machine alone
+
   // A repo never holds the media themselves, so every asset is a placeholder there (writeBundleDir records it so).
   bundle.manifest.assets = bundle.manifest.assets.map((a) => (a.mode === 'bundled' ? { ...a, mode: 'external' as const } : a))
   writeBundleDir(bundle, target, { withMedia: false })

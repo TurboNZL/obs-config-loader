@@ -1,8 +1,10 @@
-import type { ImportReport, ObsInstall, Manifest, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed, GithubRepo, GitInstallHelp } from '@obs-config-loader/core'
+import type { ImportReport, ObsInstall, Manifest, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed, GithubRepo, GitInstallHelp, InstanceSupport } from '@obs-config-loader/core'
 
 /** What the renderer may ask of the main process. One place, so both sides agree. */
 export interface InstallInfo extends ObsInstall {
   running: boolean
+  /** For a separate OBS: what it is made from. */
+  baseLabel?: string
   collections: string[]
   profiles: string[]
 }
@@ -57,6 +59,13 @@ export interface RepoInfo {
   status: RepoStatus
 }
 
+export type UpdateState = {
+  status: 'idle' | 'disabled' | 'checking' | 'none' | 'downloading' | 'ready' | 'error'
+  version?: string; percent?: number; message?: string; installing?: boolean
+  /** What to run in a terminal when the app could not install the update itself. */
+  command?: string
+}
+
 export interface GitState { available: boolean; help: GitInstallHelp; platform: string }
 export interface GithubState { connected: boolean; login?: string; /** Token is kept for this session only (no system keychain). */ sessionOnly?: boolean }
 export type Done<T> = ({ ok: true } & T) | { ok: false; error: string; cancelled?: boolean }
@@ -79,9 +88,20 @@ export interface Api {
   platform: 'win32' | 'darwin' | 'linux'
   installs: {
     list(): Promise<InstallInfo[]>
+    /** Start this OBS (any install that has a known way to start it). */
+    launch(id: string): Promise<{ ok: boolean; message: string; command?: string }>
+    /** After a start (at time `since`, ms): has this OBS written to its own settings folder since? (A separate OBS that has not is using the main settings.) */
+    verify(id: string, since: number): Promise<{ usesOwnSettings: boolean }>
     addPortable(): Promise<{ added?: InstallInfo; error?: string; cancelled?: boolean }>
     remove(id: string): Promise<void>
     openFolder(id: string): Promise<void>
+  }
+  instances: {
+    /** Whether a separate OBS can be made from this install, and if not, why. */
+    support(baseId: string, name?: string): Promise<InstanceSupport>
+    create(r: { baseId: string; name: string; copySettings: boolean }): Promise<Done<{ install: InstallInfo }>>
+    remove(id: string, deleteFiles: boolean): Promise<void>
+    openPlugins(id: string): Promise<void>
   }
   bundle: {
     open(): Promise<BundleSummary | { error: string } | null>
@@ -139,6 +159,12 @@ export interface Api {
   secrets: {
     load(bundleId: string): Promise<Record<string, string>>
     save(bundleId: string, values: Record<string, string>): Promise<boolean>
+  }
+  updates: {
+    state(): Promise<UpdateState>
+    check(): Promise<UpdateState>
+    install(): Promise<void>
+    onState(cb: (s: UpdateState) => void): () => void
   }
   app: { version(): Promise<string>; openExternal(url: string): Promise<void> }
   /** Real path of a dropped file (the renderer has no other way to get it). */

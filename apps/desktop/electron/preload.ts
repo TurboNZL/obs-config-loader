@@ -9,7 +9,15 @@ const api: Api = {
     list: () => call('installs:list'),
     addPortable: () => call('installs:addPortable'),
     remove: (id) => call('installs:remove', id),
+    launch: (id) => call('installs:launch', id),
+    verify: (id, since) => call('installs:verify', id, since),
     openFolder: (id) => call('installs:openFolder', id),
+  },
+  instances: {
+    support: (b, n) => call('instances:support', b, n),
+    create: (r) => call('instances:create', r),
+    remove: (id, del) => call('instances:remove', id, del),
+    openPlugins: (id) => call('instances:openPlugins', id),
   },
   bundle: {
     open: () => call('bundle:open'),
@@ -60,6 +68,16 @@ const api: Api = {
   secrets: {
     load: (id) => call('secrets:load', id),
     save: (id, v) => call('secrets:save', id, v),
+  },
+  updates: {
+    state: () => call('updates:state'),
+    check: () => call('updates:check'),
+    install: () => call('updates:install'),
+    onState: (cb) => {
+      const h = (_e: unknown, s: Parameters<typeof cb>[0]) => cb(s)
+      ipcRenderer.on('updates:state', h)
+      return () => { ipcRenderer.removeListener('updates:state', h) }
+    },
   },
   app: {
     version: () => call('app:version'),

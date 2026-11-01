@@ -51,5 +51,5 @@ export function Field({ label, hint, children }: { label: string; hint?: ReactNo
 
 export const KIND_LABEL: Record<string, string> = {
   windows: 'Windows install', 'windows-portable': 'Windows portable', macos: 'macOS app',
-  'linux-native': 'System package', flatpak: 'Flatpak', snap: 'Snap', 'linux-portable': 'Portable build',
+  'linux-native': 'System package', flatpak: 'Flatpak', snap: 'Snap', 'linux-portable': 'Portable build', instance: 'Separate OBS',
 }

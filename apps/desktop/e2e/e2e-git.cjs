@@ -52,8 +52,8 @@ const server = http.createServer((req, res) => {
 
 const launch = async (extraEnv = {}) => {
   const app = await electron.launch({
-    executablePath: APP + '/node_modules/electron/dist/electron',
-    args: [APP, '--no-sandbox', '--user-data-dir=' + path.join(root, 'ud')],
+    executablePath: process.env.OBSCL_PACKAGED || APP + '/node_modules/electron/dist/electron',
+    args: [...(process.env.OBSCL_PACKAGED ? [] : [APP]), '--no-sandbox', '--user-data-dir=' + path.join(root, 'ud')],
     env: { ...process.env, HOME: home, XDG_CONFIG_HOME: '', XDG_DOCUMENTS_DIR: path.join(home, 'Documents'), OBSCL_GITHUB_API: `http://127.0.0.1:${server.address().port}`, ...extraEnv },
   })
   const page = await app.firstWindow()
