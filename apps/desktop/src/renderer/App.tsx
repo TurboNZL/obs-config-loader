@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { InstallInfo } from '../../electron/api'
+import { HomePage } from './pages/Home'
 import { InstallsPage } from './pages/Installs'
 import { ImportPage } from './pages/Import'
 import { ExportPage } from './pages/Export'
@@ -9,14 +10,14 @@ import { AboutPage } from './pages/About'
 import { GuidesPage } from './pages/Guides'
 import { WindowFrame } from './components/WindowFrame'
 
-type Tab = 'installs' | 'import' | 'export' | 'repos' | 'guides' | 'appearance' | 'about'
+type Tab = 'home' | 'installs' | 'import' | 'export' | 'repos' | 'guides' | 'appearance' | 'about'
 const TABS: [Tab, string][] = [
-  ['installs', 'OBS installs'], ['import', 'Import a setup'], ['export', 'Export a setup'], ['repos', 'Git repositories'], ['guides', 'Guides'],
-  ['appearance', 'Appearance'], ['about', 'About'],
+  ['home', 'Home'], ['export', 'Save my setup'], ['import', 'Load a setup'], ['repos', 'Online backup'],
+  ['installs', 'OBS on this computer'], ['guides', 'Help'], ['appearance', 'Look'], ['about', 'About'],
 ]
 
 export function App() {
-  const [tab, setTab] = useState<Tab>('installs')
+  const [tab, setTab] = useState<Tab>('home')
   const [installs, setInstalls] = useState<InstallInfo[] | null>(null)
   const [preselect, setPreselect] = useState<string | undefined>()
   const [openPath, setOpenPath] = useState<string | undefined>()
@@ -40,6 +41,7 @@ export function App() {
         ))}
       </nav>
       <main className="flex-1 overflow-y-auto">
+        {tab === 'home' && <HomePage installs={installs} go={(t) => go(t)} />}
         {tab === 'installs' && <InstallsPage installs={installs} refresh={refresh} go={go} />}
         {tab === 'import' && <ImportPage installs={installs} preselect={preselect} openPath={openPath} refresh={refresh} />}
         {tab === 'export' && <ExportPage installs={installs} preselect={preselect} />}

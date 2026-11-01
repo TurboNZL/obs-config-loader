@@ -36,11 +36,14 @@ export function parseManifest(raw: unknown): Manifest {
   }
   if (typeof m.id !== 'string' || !m.id) throw new BundleError('Bundle has no id.', 'invalid')
   if (typeof m.name !== 'string') throw new BundleError('Bundle has no name.', 'invalid')
+  // A secret's value is only honoured in a file that says it carries secrets: a stray `value` elsewhere is ignored, not used.
+  const variables = (Array.isArray(m.variables) ? m.variables : []).map((v: any) =>
+    m.containsSecrets === true || !v || typeof v !== 'object' || !('value' in v) ? v : (({ value: _v, ...rest }) => rest)(v))
   return {
     ...m,
+    variables,
     collections: Array.isArray(m.collections) ? m.collections : [],
     profiles: Array.isArray(m.profiles) ? m.profiles : [],
-    variables: Array.isArray(m.variables) ? m.variables : [],
     assets: Array.isArray(m.assets) ? m.assets : [],
     plugins: Array.isArray(m.plugins) ? m.plugins : [],
     platformMap: Array.isArray(m.platformMap) ? m.platformMap : [],
@@ -114,6 +117,10 @@ export function readBundleDir(dir: string): Bundle {
  * Existing files that are not part of the bundle are left alone (the folder may be a git checkout).
  */
 export function writeBundleDir(b: Bundle, dir: string, opts: { withMedia: boolean } = { withMedia: false }): void {
+  // A folder is meant for git, and git keeps history forever: stream keys must never be written there.
+  if (b.manifest.containsSecrets || b.manifest.variables.some((v) => v.value !== undefined)) {
+    throw new BundleError('A setup that has stream keys inside can only be saved as a single file, never into a folder for git.', 'invalid')
+  }
   fs.mkdirSync(dir, { recursive: true })
   // Without the media in the folder, a "bundled" asset is a placeholder: record it as external (hash kept)
   // so a later pull asks for the file instead of failing to find it.

@@ -22,6 +22,11 @@ export interface ExportOptions {
   profiles?: string[]
   /** Media up to this size travel inside the bundle; bigger ones are external. Default 5 MB. 0 = none, Infinity = all. */
   bundleBelowBytes?: number
+  /**
+   * Put the stream keys and other secrets INTO the file. Off by default, and the file is then labelled everywhere
+   * (`containsSecrets`, a warning in the manifest, a README in the zip). Never allowed for the git folder form.
+   */
+  includeSecrets?: boolean
   revision?: number
   appVersion?: string
   now?: Date
@@ -144,6 +149,17 @@ function activeFromGlobal(configDir: string): { collection?: string; profile?: s
   } catch { return {} }
 }
 
+export const SECRETS_WARNING =
+  'This file contains your stream keys. Anyone who has it can stream as you. Keep it private, never post it or put it in a git repository, and delete it once you have loaded it.'
+export const SECRETS_README_NAME = 'READ-ME-FIRST-CONTAINS-STREAM-KEYS.txt'
+export const SECRETS_README = `WARNING: THIS FILE CONTAINS STREAM KEYS
+
+${SECRETS_WARNING}
+
+It is an OBS Config Loader setup file (.obsbundle). Open it with OBS Config Loader (Load a setup file).
+If you only want to share your scenes and settings, export again and leave "Include my stream keys" unticked.
+`
+
 /**
  * The manifest fields that are worked out from the setup itself (which plugins it needs, which capture sources have
  * stand-ins). Computed from the collection files, their per-platform variants and the profile files, never from one
@@ -169,7 +185,7 @@ export function exportBundle(opts: ExportOptions): Bundle {
   const { host, install } = opts
   const cfg = install.configDir
   const col = new Collector(host, opts.bundleBelowBytes ?? 5 * 1024 * 1024)
-  const scrub = new SecretScrubber()
+  const scrub = new SecretScrubber(opts.includeSecrets === true)
   const files = col.files
 
   // scene collections
@@ -253,5 +269,10 @@ export function exportBundle(opts: ExportOptions): Bundle {
   }
   const bundle: Bundle = { manifest, files }
   deriveManifestFields(bundle)
+  if (opts.includeSecrets && manifest.variables.some((v) => v.kind === 'secret' && v.value)) {
+    manifest.containsSecrets = true
+    manifest.warning = SECRETS_WARNING
+    files.set(SECRETS_README_NAME, Buffer.from(SECRETS_README))
+  }
   return bundle
 }

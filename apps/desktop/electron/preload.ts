@@ -64,7 +64,7 @@ const api: Api = {
     load: (id) => call('locations:load', id),
     save: (id, l) => call('locations:save', id, l),
   },
-  files: { pick: (title, folder) => call('files:pick', title, folder) },
+  files: { pick: (title, folder) => call('files:pick', title, folder), reveal: (p) => call('files:reveal', p) },
   secrets: {
     load: (id) => call('secrets:load', id),
     save: (id, v) => call('secrets:save', id, v),
