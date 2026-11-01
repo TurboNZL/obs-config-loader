@@ -51,3 +51,20 @@ jobs:
       - name: What was built
         shell: bash
         run: ls -la apps/desktop/dist
+
+  # The real app, started under a virtual display and driven through its screens (apps/desktop/e2e): sign in, git, separate OBS,
+  # guides, window frame, export and import. Catches what unit tests cannot.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --ignore-scripts
+      - run: pnpm --filter @obs-config-loader/desktop build
+      - name: Download the Electron binary (skipped by --ignore-scripts)
+        run: node apps/desktop/node_modules/electron/install.js
+      - run: sudo apt-get update && sudo apt-get install -y xvfb libgbm1 libasound2t64 || sudo apt-get install -y xvfb libgbm1 libasound2
+      - name: End-to-end
+        run: xvfb-run -a pnpm --filter @obs-config-loader/desktop e2e

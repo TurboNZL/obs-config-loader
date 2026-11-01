@@ -79,6 +79,17 @@ const api: Api = {
       return () => { ipcRenderer.removeListener('updates:state', h) }
     },
   },
+  window: {
+    frame: () => call('window:frame'),
+    setCustomFrame: (on) => call('window:setCustomFrame', on),
+    control: (a) => call('window:control', a),
+    onState: (cb) => {
+      const h = (_e: unknown, m: boolean) => cb(m)
+      ipcRenderer.on('window:state', h)
+      return () => { ipcRenderer.removeListener('window:state', h) }
+    },
+    restart: () => call('window:restart'),
+  },
   app: {
     version: () => call('app:version'),
     openExternal: (u) => call('app:openExternal', u),

@@ -166,6 +166,14 @@ export interface Api {
     install(): Promise<void>
     onState(cb: (s: UpdateState) => void): () => void
   }
+  window: {
+    /** Draw the title bar with the theme instead of the system's (takes effect after a restart). */
+    frame(): Promise<{ custom: boolean; platform: string }>
+    setCustomFrame(on: boolean): Promise<void>
+    control(action: 'minimize' | 'maximize' | 'close'): Promise<void>
+    onState(cb: (maximized: boolean) => void): () => void
+    restart(): Promise<void>
+  }
   app: { version(): Promise<string>; openExternal(url: string): Promise<void> }
   /** Real path of a dropped file (the renderer has no other way to get it). */
   pathForFile(f: File): string

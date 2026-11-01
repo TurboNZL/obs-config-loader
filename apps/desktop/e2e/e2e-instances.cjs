@@ -25,9 +25,9 @@ fs.writeFileSync(path.join(cfg, 'global.ini'), '[Basic]\nProfile=Main\nProfileDi
 
 // fake flatpak: `flatpak run --env=K=V ... com.obsproject.Studio --multi` -> a process named "obs" that has those variables and made its settings folder
 const bin = path.join(root, 'bin'); fs.mkdirSync(bin)
-const sleepBin = execFileSyncWhich('sleep')
-function execFileSyncWhich(n) { return require('child_process').execFileSync('which', [n], { encoding: 'utf8' }).trim() }
-fs.copyFileSync(sleepBin, path.join(bin, 'obs')); fs.chmodSync(path.join(bin, 'obs'), 0o755)
+// a process whose name (comm) is "obs": a symlink called obs that points at node (a copy of `sleep` would not do: on distributions with
+// Rust coreutils, sleep is a multi-call binary that only works under its own name)
+fs.symlinkSync(process.execPath, path.join(bin, 'obs'))
 fs.writeFileSync(path.join(bin, 'flatpak'), `#!/bin/sh
 echo "$@" >> "${root}/flatpak-calls.log"
 [ "$1" = run ] || exit 0
@@ -37,7 +37,7 @@ for a in "$@"; do case "$a" in --env=*) export "\${a#--env=}";; esac; done
 mkdir -p "$XDG_CONFIG_HOME/obs-studio"
 printf '[Basic]\\n' > "$XDG_CONFIG_HOME/obs-studio/global.ini"
 mkdir -p "$XDG_CONFIG_HOME/obs-studio/logs"; echo started > "$XDG_CONFIG_HOME/obs-studio/logs/2026-11-01 10-00-00.txt"
-exec "${bin}/obs" 25
+exec "${bin}/obs" -e "setTimeout(function(){},25000)"
 `)
 fs.chmodSync(path.join(bin, 'flatpak'), 0o755)
 
@@ -86,7 +86,7 @@ fs.chmodSync(path.join(bin, 'flatpak'), 0o755)
   fs.writeFileSync(path.join(bin, 'flatpak'), `#!/bin/sh
 echo "$@" >> "${root}/flatpak-calls.log"
 mkdir -p "$HOME/.var/app/com.obsproject.Studio/config/obs-studio"
-exec "${bin}/obs" 1
+exec "${bin}/obs" -e "setTimeout(function(){},1500)"
 `)
   fs.chmodSync(path.join(bin, 'flatpak'), 0o755)
   await heavy.locator('button:has-text("Start OBS")').click()

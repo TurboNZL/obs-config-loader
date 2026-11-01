@@ -23,10 +23,19 @@ Anyone running OBS Studio on more than one machine, OS or install type who wants
 - `apps/desktop`: Electron main/preload + React renderer (turbothemes).
 
 ## Roadmap (with done-criteria)
-1. Spec + core: round-trip test (export a sample OBS dir, import to a fresh dir, compare) passes on Linux paths; Windows/macOS paths unit-tested with injected env.
-2. Desktop UI shell: install list, import/export wizard with dry-run report.
-3. Git repositories: init/commit/pull flow with asset placeholders.
-4. Instances (Flatpak spike), release pipeline, auto-update.
+Done (each has automated tests, and the UI paths a real-Electron run):
+1. Spec + core: detect, export, import, platform remap, round trips.
+2. Desktop app: installs, import wizard with dry-run report, export, appearance, guides, optional themed title bar.
+3. Git: save live edits (3-way merge with repo changes), pull/push, conflict choices, GitHub sign-in/create/publish/clone, install-git helper, bundle-to-repo.
+4. Per-platform variants of capture sources; secrets never blanked on import.
+5. Separate OBS instances (Linux system package, Flatpak with a post-start check).
+6. Release pipeline: every merge to main publishes installers (deb, AppImage, Windows installer, macOS dmg/zip) and installed apps update themselves.
+
+Open (needs a real machine or a decision):
+- Run on real Windows and macOS; macOS code signing (auto-update needs it), Windows signing (SmartScreen).
+- Real Flatpak: does `--env=XDG_CONFIG_HOME` take effect (the app checks and says so).
+- Real GitHub sign-in and the install-git button on each OS.
+- Plugin settings beyond Multi RTMP (e.g. Aitum) once their config locations are verified.
 
 ## Glossary
 Bundle, collection (OBS scene collection), profile, asset, variable, platform map: see `docs/FORMAT.md`.

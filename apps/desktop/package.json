@@ -17,7 +17,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "dist": "node scripts/build.mjs && electron-builder",
-    "dist:publish": "node scripts/build.mjs && electron-builder --publish always"
+    "dist:publish": "node scripts/build.mjs && electron-builder --publish always",
+    "e2e": "node e2e/run-all.cjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.11"
@@ -32,6 +33,7 @@
     "electron": "38",
     "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
+    "playwright": "^1.64.1",
     "postcss": "^8.5.32",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
