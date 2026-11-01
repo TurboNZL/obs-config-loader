@@ -82,7 +82,8 @@ describe('import', () => {
     const col = JSON.parse(fs.readFileSync(nodePath.join(cfg2, 'basic/scenes/Main.json'), 'utf8'))
     const img = col.sources.find((s: any) => s.name === 'Overlay')
     expect(fs.readFileSync(img.settings.file, 'utf8')).toBe('PNGDATA')
-    expect(col.sources.find((s: any) => s.name === 'Music').settings.local_file).toBe(big)
+    // a Linux-style import on a Windows runner rewrites separators; the file is the same one
+    expect(col.sources.find((s: any) => s.name === 'Music').settings.local_file.replace(/\\/g, '/')).toBe(big.replace(/\\/g, '/'))
     expect(col.sources.find((s: any) => s.name === 'Chat').settings.url).toBe('https://example.com/chat?x={{y}}')
     expect(col.sources.find((s: any) => s.name === 'T').settings.text).toBe('/me waves')
     expect(col.sources.find((s: any) => s.name === 'Window').id).toBe('xcomposite_input') // same platform: untouched
@@ -94,6 +95,30 @@ describe('import', () => {
     const g = fs.readFileSync(nodePath.join(cfg2, 'global.ini'), 'utf8')
     expect(g).toContain('SceneCollectionFile=Main')
     expect(g).toContain('ProfileDir=Main')
+  })
+
+  it('a secret you do not type in never wipes the one already in OBS', async () => {
+    const { bundle, big } = await exported()
+    const home2 = nodePath.join(tmp, 'home2')
+    const cfg2 = nodePath.join(home2, '.config', 'obs-studio')
+    const prof = nodePath.join(cfg2, 'basic/profiles/Main')
+    fs.mkdirSync(prof, { recursive: true })
+    fs.writeFileSync(nodePath.join(prof, 'service.json'), JSON.stringify({ type: 'rtmp_common', settings: { service: 'Twitch', key: 'live_ALREADY_THERE' } }))
+    fs.writeFileSync(nodePath.join(prof, 'obs-multi-rtmp.json'), JSON.stringify({ targets: [{ 'service-param': { key: 'yt_ALREADY' } }] }))
+    const plan = planImport({ bundle, install: install(cfg2), host: host('linux', home2), assetFiles: { mix: big } })
+    expect(plan.report.keptSecrets.sort()).toEqual(bundle.manifest.variables.filter((v) => v.kind === 'secret').map((v) => v.name).sort())
+    expect(plan.report.missingVariables.filter((v) => v.kind === 'secret')).toEqual([]) // nothing to ask: they are kept
+    applyImport(plan)
+    expect(JSON.parse(fs.readFileSync(nodePath.join(prof, 'service.json'), 'utf8')).settings.key).toBe('live_ALREADY_THERE')
+    expect(JSON.parse(fs.readFileSync(nodePath.join(prof, 'obs-multi-rtmp.json'), 'utf8')).targets[0]['service-param'].key).toBe('yt_ALREADY')
+    // typing a new one still wins
+    const plan2 = planImport({ bundle, install: install(cfg2), host: host('linux', home2), assetFiles: { mix: big }, variables: { STREAM_KEY: 'live_NEW' } })
+    applyImport(plan2)
+    expect(JSON.parse(fs.readFileSync(nodePath.join(prof, 'service.json'), 'utf8')).settings.key).toBe('live_NEW')
+    // and a first import on a machine with nothing there stays empty and is asked for
+    const fresh = planImport({ bundle, install: install(nodePath.join(tmp, 'h3/c')), host: host('linux', tmp), assetFiles: { mix: big } })
+    expect(fresh.report.keptSecrets).toEqual([])
+    expect(fresh.report.missingVariables.map((v) => v.name)).toContain('STREAM_KEY')
   })
 
   it('importing twice changes nothing the second time', async () => {

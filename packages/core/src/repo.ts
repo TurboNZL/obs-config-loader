@@ -56,12 +56,26 @@ export interface RepoStatus {
   commits: number
 }
 
+/**
+ * Two spellings of one folder: git prints `C:/Users/RUNNER~1/x` where Node has `C:\\Users\\runneradmin\\x`
+ * (forward slashes, 8.3 short names, different case). Resolve both the way the OS does, then compare.
+ */
+export function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => {
+    let r = nodePath.resolve(p)
+    try { r = fs.realpathSync.native(r) } catch { /* not there: compare as written */ }
+    r = r.replace(/\\/g, '/').replace(/\/+$/, '')
+    return process.platform === 'win32' || process.platform === 'darwin' ? r.toLowerCase() : r
+  }
+  return norm(a) === norm(b)
+}
+
 export async function repoStatus(dir: string, git: GitRunner = defaultGit): Promise<RepoStatus> {
   const empty: RepoStatus = { isRepo: false, ahead: 0, behind: 0, dirtyFiles: [], hasManifest: false, commits: 0 }
   if (!fs.existsSync(dir)) return empty
   const top = await git(['rev-parse', '--show-toplevel'], dir)
   // A folder inside some other repo is not "its own repo": require the folder to be the top level.
-  if (top.code !== 0 || fs.realpathSync(top.stdout.trim()) !== fs.realpathSync(nodePath.resolve(dir))) return empty
+  if (top.code !== 0 || !samePath(top.stdout.trim(), dir)) return empty
   const st = await git(['status', '--porcelain=v1', '-b', '--untracked-files=all'], dir)
   const lines = st.stdout.split('\n').filter(Boolean)
   const head = lines.shift() ?? ''
@@ -134,14 +148,18 @@ export type PullResult =
   | { status: 'error'; message: string }
 
 /** Merge what the remote has. A conflict is aborted cleanly (nothing half-merged is left) and reported. */
-export async function pullRepo(dir: string, git: GitRunner = defaultGit): Promise<PullResult> {
+export type PullConflictChoice = 'abort' | 'keep-mine' | 'keep-theirs'
+
+export async function pullRepo(dir: string, git: GitRunner = defaultGit, onConflict: PullConflictChoice = 'abort'): Promise<PullResult> {
   const st = await repoStatus(dir, git)
   if (!st.isRepo) return { status: 'error', message: 'This folder is not a git repository.' }
   if (!st.remote) return { status: 'no-remote' }
   if (st.dirtyFiles.length) return { status: 'dirty', files: st.dirtyFiles }
   const before = (await git(['rev-parse', 'HEAD'], dir)).stdout.trim()
   const id = await identity(dir, git)
-  const r = await git([...id, 'pull', '--no-rebase', '--no-edit'], dir)
+  // keep-mine / keep-theirs only decide the clashing lines; everything that merges cleanly merges either way
+  const strategy = onConflict === 'keep-mine' ? ['-X', 'ours'] : onConflict === 'keep-theirs' ? ['-X', 'theirs'] : []
+  const r = await git([...id, 'pull', '--no-rebase', '--no-edit', ...strategy], dir)
   if (r.code !== 0) {
     const unmerged = (await git(['diff', '--name-only', '--diff-filter=U'], dir)).stdout.split('\n').filter(Boolean)
     if (unmerged.length) {
@@ -206,6 +224,8 @@ export interface CaptureOptions {
   dryRun?: boolean
   bundleBelowBytes?: number
   appVersion?: string
+  /** When the repo and OBS changed the same lines: stop (default), or settle just those lines in favour of one side. */
+  onConflict?: 'abort' | 'keep-repo' | 'keep-obs'
   git?: GitRunner
 }
 
@@ -330,8 +350,9 @@ export async function captureLive(o: CaptureOptions): Promise<CaptureResult> {
       const live = (await git(['rev-parse', 'HEAD'], wt)).stdout.trim()
 
       const merged = head !== base
+      const strategy = o.onConflict === 'keep-repo' ? ['-X', 'ours'] : o.onConflict === 'keep-obs' ? ['-X', 'theirs'] : []
       const m = merged
-        ? await git([...id, 'merge', '--no-edit', '-m', `Merge live OBS edits from ${o.install.label}`, live], o.dir)
+        ? await git([...id, 'merge', '--no-edit', ...strategy, '-m', `Merge live OBS edits from ${o.install.label}`, live], o.dir)
         : await git([...id, 'merge', '--ff-only', live], o.dir)
       if (m.code !== 0) {
         const conflicts = (await git(['diff', '--name-only', '--diff-filter=U'], o.dir)).stdout.split('\n').filter(Boolean)
