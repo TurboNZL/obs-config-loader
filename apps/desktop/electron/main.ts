@@ -18,7 +18,7 @@ let nextHandle = 1
 // ── settings (user-added installs) ───────────────────────────────────────────
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json')
 interface RepoEntry { path: string; installId?: string }
-interface Settings { customInstalls: ObsInstall[]; repos: RepoEntry[] }
+interface Settings { customInstalls: ObsInstall[]; repos: RepoEntry[]; customFrame?: boolean }
 function loadSettings(): Settings {
   try { return { customInstalls: [], repos: [], ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) } } catch { return { customInstalls: [], repos: [] } }
 }
@@ -488,6 +488,17 @@ function registerIpc() {
   ipcMain.handle('updates:state', () => updates.state)
   ipcMain.handle('updates:check', () => updates.check())
   ipcMain.handle('updates:install', () => { updates.install() })
+  // the theme-drawn title bar (the engine's window-frame module): off by default, applies after a restart
+  ipcMain.handle('window:frame', () => ({ custom: !!loadSettings().customFrame, platform: process.platform }))
+  ipcMain.handle('window:setCustomFrame', (_e, on: boolean) => { const s = loadSettings(); s.customFrame = on === true; saveSettings(s) })
+  ipcMain.handle('window:control', (e, action: 'minimize' | 'maximize' | 'close') => {
+    const w = BrowserWindow.fromWebContents(e.sender)
+    if (!w) return
+    if (action === 'minimize') w.minimize()
+    else if (action === 'close') w.close()
+    else if (w.isMaximized()) w.unmaximize(); else w.maximize()
+  })
+  ipcMain.handle('window:restart', () => { app.relaunch(); app.exit(0) })
   ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('app:openExternal', (_e, url: string) => {
     if (/^https:\/\//.test(url)) return shell.openExternal(url) // only web links, never file: or custom schemes
@@ -495,13 +506,17 @@ function registerIpc() {
 }
 
 function createWindow() {
+  const custom = loadSettings().customFrame === true
   const win = new BrowserWindow({
     width: 1100, height: 760, minWidth: 820, minHeight: 560, title: 'OBS Config Loader',
+    frame: !custom, autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.cjs'),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
     },
   })
+  const tell = () => { if (!win.isDestroyed()) win.webContents.send('window:state', win.isMaximized()) }
+  win.on('maximize', tell); win.on('unmaximize', tell)
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https:\/\//.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
