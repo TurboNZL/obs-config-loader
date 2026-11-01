@@ -28,8 +28,9 @@ const launch = () => electron.launch({
   const items = await page.locator('nav[aria-label="Guides"] button').allInnerTexts()
   check('lists getting started and the readme', items.includes('Getting started') && items.includes('About OBS Config Loader'))
   await page.click('nav[aria-label="Guides"] >> text=About OBS Config Loader')
-  await page.waitForSelector('article.guide >> text=Install')
-  check('the readme renders its install table', (await page.locator('article.guide table').count()) > 0)
+  // the guide loads asynchronously: wait for the thing we are about to check, not for text the previous guide may also have
+  const gotTable = await page.waitForSelector('article.guide table', { timeout: 15000 }).then(() => true, () => false)
+  check('the readme renders its install table', gotTable)
   check('no script or raw HTML got through', (await page.locator('article.guide script').count()) === 0)
   await page.screenshot({ path: OUT + '/u1-guides.png', fullPage: true })
 
