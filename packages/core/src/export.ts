@@ -7,6 +7,7 @@ import { escapeLiteral, looksLikeAbsolutePath, mapStrings, splitPath } from './t
 import { getIni, mapIniValues } from './ini.js'
 import { SecretScrubber } from './secrets.js'
 import { DEFAULT_PLATFORM_MAP, isPlatformSpecific } from './sources.js'
+import { extractVariants, parseVariants, serializeVariants, variantsPathFor } from './variants.js'
 import { FILE_HINTS, installedModules, manifestPlugins, pluginReport, usedIds } from './plugins.js'
 
 export interface ExportOptions {
@@ -143,6 +144,27 @@ function activeFromGlobal(configDir: string): { collection?: string; profile?: s
   } catch { return {} }
 }
 
+/**
+ * The manifest fields that are worked out from the setup itself (which plugins it needs, which capture sources have
+ * stand-ins). Computed from the collection files, their per-platform variants and the profile files, never from one
+ * machine's live state, so every machine that saves the same setup writes the same thing.
+ */
+export function deriveManifestFields(b: Bundle): void {
+  const used = { sources: new Set<string>(), filters: new Set<string>(), transitions: new Set<string>() }
+  const add = (u: ReturnType<typeof usedIds>) => { u.sources.forEach((x) => used.sources.add(x)); u.filters.forEach((x) => used.filters.add(x)); u.transitions.forEach((x) => used.transitions.add(x)) }
+  for (const c of b.manifest.collections) {
+    const raw = b.files.get(c.file)
+    try { if (raw) add(usedIds(JSON.parse(raw.toString('utf8')))) } catch { /* not JSON: nothing to learn */ }
+    for (const plats of Object.values(parseVariants(b.files.get(variantsPathFor(c.file))))) {
+      for (const v of Object.values(plats)) if (v?.id) used.sources.add(v.id)
+    }
+  }
+  const hinted = new Set<string>()
+  for (const name of b.files.keys()) { const hit = FILE_HINTS[name.split('/').pop() ?? '']; if (hit) hinted.add(hit) }
+  b.manifest.plugins = manifestPlugins(pluginReport(used, undefined, hinted))
+  b.manifest.platformMap = DEFAULT_PLATFORM_MAP.filter((e) => used.sources.has(e.from) && isPlatformSpecific(e.from))
+}
+
 export function exportBundle(opts: ExportOptions): Bundle {
   const { host, install } = opts
   const cfg = install.configDir
@@ -166,6 +188,8 @@ export function exportBundle(opts: ExportOptions): Bundle {
     const out = mapStrings(json, (s, k) => col.tokenise(s, k))
     const id = slug(name) + (collections.some((c) => c.id === slug(name)) ? `-${collections.length + 1}` : '')
     files.set(`collections/${id}.json`, Buffer.from(JSON.stringify(out, null, 4) + '\n'))
+    const variants = extractVariants(out, host.platform)
+    if (Object.keys(variants).length) files.set(variantsPathFor(`collections/${id}.json`), Buffer.from(serializeVariants(variants)))
     collections.push({ id, name: (json.name as string) || name, file: `collections/${id}.json` })
   }
 
@@ -204,8 +228,6 @@ export function exportBundle(opts: ExportOptions): Bundle {
     profiles.push({ id, name: display, dir: base })
   }
 
-  const report = pluginReport(used, installedModules(host, install), hinted)
-  const platformMap = DEFAULT_PLATFORM_MAP.filter((e) => used.sources.has(e.from) && isPlatformSpecific(e.from))
   const active = activeFromGlobal(cfg)
   const activeCol = collections.find((c) => c.file === `collections/${slug(active.collection ?? '')}.json`) ?? collections[0]
   const activeProf = profiles.find((p) => p.dir.endsWith('/' + slug(active.profile ?? ''))) ?? profiles[0]
@@ -226,8 +248,10 @@ export function exportBundle(opts: ExportOptions): Bundle {
     ...(activeProf ? { activeProfile: activeProf.id } : {}),
     variables: [...[...scrub.variables].sort((a, b) => Number(b.name === 'STREAM_KEY') - Number(a.name === 'STREAM_KEY')), ...col.variables],
     assets: col.assets,
-    plugins: manifestPlugins(report),
-    platformMap,
+    plugins: [],
+    platformMap: [],
   }
-  return { manifest, files }
+  const bundle: Bundle = { manifest, files }
+  deriveManifestFields(bundle)
+  return bundle
 }

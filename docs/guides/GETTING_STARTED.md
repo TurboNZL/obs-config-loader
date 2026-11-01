@@ -34,3 +34,6 @@ Open **Git repositories**. Everything is done in the app; you never need a termi
 
 ## Using git (the plain way)
 Export as **A folder for git**. Scenes and profiles are plain files you can commit; big media are recorded as placeholders with checksums. Open that folder on another machine with **Open a folder** on the import page.
+
+## One setup, several operating systems
+Capture sources (a window, a screen, a game, an audio device) only exist on some systems and never carry over. A setup keeps **one version of each per system**: set up your Windows game capture on Windows and your PipeWire capture on Linux, and saving on one never overwrites the other. When you load the setup on a system, it uses that system's own version. If a system has none yet, the report says which sources got a stand-in that you need to set up again.

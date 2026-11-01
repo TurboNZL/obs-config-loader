@@ -249,10 +249,10 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
 
               {report.substitutions.length > 0 && (
                 <div className="space-y-1">
-                  <h3 className="font-semibold text-sm">Sources that had to change for this computer</h3>
+                  <h3 className="font-semibold text-sm">How capture sources were set up for this computer</h3>
                   {report.substitutions.map((s) => (
                     <div key={s.source + s.from} className="text-sm bt-row py-1">
-                      <strong>{s.source}</strong>: {s.result === 'substituted' ? <>now <span className="mono">{s.to}</span> (was <span className="mono">{s.from}</span>)</> : <>no equivalent for <span className="mono">{s.from}</span>, kept but hidden</>}
+                      <strong>{s.source}</strong>: {s.result === 'variant' ? <>using your saved version (<span className="mono">{s.to}</span>)</> : s.result === 'substituted' ? <>now <span className="mono">{s.to}</span> (was <span className="mono">{s.from}</span>), set it up again</> : <>no equivalent for <span className="mono">{s.from}</span>, kept but hidden</>}
                       {s.note && <span className="text-muted"> {s.note}</span>}
                     </div>
                   ))}
