@@ -3,11 +3,12 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { execFile } from 'node:child_process'
 import {
-  applyImport, assetNeeds, captureLive, cloneRepo, detectInstalls, exportBundle, gitAvailable, initRepo, planImport, portableInstall,
-  markSynced, pullRepo, pushRepo, readBundle, readBundleDir, realHost, repoLog, repoStatus, writeBundleDir, writeBundleZip,
-  type Bundle, type ObsInstall,
+  applyImport, assetNeeds, captureLive, cloneRepo, createRepoFromBundle, detectInstalls, detectLinuxPackageManager, exportBundle, getRemoteUrl,
+  gitAvailable, gitInstallHelp, githubAuthGit, githubListRepos, githubWhoAmI, initRepo, markSynced, planImport, portableInstall, publishToGithub,
+  pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
+  writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
 } from '@obs-config-loader/core'
-import type { BundleSummary, ExportRequest, ExportResult, ImportRequest, InstallInfo, Locations, RepoInfo } from './api'
+import type { BundleSummary, ExportRequest, ExportResult, GithubState, ImportRequest, InstallInfo, Locations, RepoInfo } from './api'
 
 const host = realHost()
 const bundles = new Map<string, Bundle & { source: string }>()
@@ -88,8 +89,9 @@ function writeLocations(all: Record<string, Locations>) {
 
 // ── config repositories ──────────────────────────────────────────────────────
 async function repoInfo(e: RepoEntry): Promise<RepoInfo> {
-  const status = await repoStatus(e.path)
-  return { path: e.path, name: status.manifest?.name ?? path.basename(e.path), installId: e.installId, status }
+  const git = gitRunner()
+  const status = await repoStatus(e.path, git)
+  return { path: e.path, name: status.manifest?.name ?? path.basename(e.path), installId: e.installId, status, remoteUrl: status.remote ? await getRemoteUrl(e.path, git) : undefined }
 }
 function rememberRepo(p: string, installId?: string) {
   const s = loadSettings()
@@ -97,7 +99,39 @@ function rememberRepo(p: string, installId?: string) {
   if (hit) { if (installId) hit.installId = installId } else s.repos.push({ path: p, installId })
   saveSettings(s)
 }
-const gitMissing = 'Git was not found. Install git (https://git-scm.com) and try again.'
+
+async function cloneRepoWith(url: string, folder: string) { await cloneRepo(url, folder, gitRunner()) }
+
+// ── git itself, and the GitHub sign-in ───────────────────────────────────────
+// A token is kept encrypted with the OS keychain when there is one; otherwise only in memory for this session.
+let githubTokenMem: string | undefined
+let githubLogin: string | undefined
+let githubSessionOnly = false
+const githubPath = () => path.join(app.getPath('userData'), 'github.bin')
+function loadGithubToken(): string | undefined {
+  if (githubTokenMem) return githubTokenMem
+  try { githubTokenMem = safeStorage.decryptString(fs.readFileSync(githubPath())) } catch { /* none saved */ }
+  return githubTokenMem
+}
+/** The git every repository operation runs through: the user's own git, signed in to github.com when connected. */
+function gitRunner(): GitRunner { return githubAuthGit(loadGithubToken(), defaultGit) }
+const noGit = () => !!process.env.OBSCL_FAKE_NO_GIT // lets tests show the "install git" screen
+const hasGit = async () => !noGit() && (await gitAvailable())
+const gitMissing = 'Git is not installed. Open the Git repositories page: it can install it for you.'
+const errText = (e: unknown) => redact((e as Error).message, loadGithubToken())
+
+/** A folder name for a new repository under Documents, never one that already has something in it. */
+function suggestFolder(name: string): string {
+  // Some systems report the home folder itself as "Documents" (no desktop folder settings): use ~/Documents then.
+  let docs = app.getPath('documents')
+  if (path.resolve(docs) === path.resolve(app.getPath('home'))) docs = path.join(docs, 'Documents')
+  const root = path.join(docs, 'OBS Config Loader')
+  const base = name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'obs-setup'
+  let p = path.join(root, base)
+  for (let n = 2; fs.existsSync(p) && fs.readdirSync(p).length; n++) p = path.join(root, `${base}-${n}`)
+  return p
+}
+const emptyOrMissing = (p: string) => !fs.existsSync(p) || fs.readdirSync(p).length === 0
 
 async function openBundlePath(p: string): Promise<BundleSummary | { error: string }> {
   try { return summarise(await readBundle(p), p) } catch (e) { return { error: (e as Error).message } }
@@ -199,58 +233,136 @@ function registerIpc() {
     } catch (e) { return { error: (e as Error).message } }
   })
 
+  ipcMain.handle('git:state', async () => ({
+    available: await hasGit(), platform: process.platform,
+    help: gitInstallHelp(host.platform, host.platform === 'linux' ? detectLinuxPackageManager() : undefined),
+  }))
+  ipcMain.handle('git:install', async () => {
+    const help = gitInstallHelp(host.platform, host.platform === 'linux' ? detectLinuxPackageManager() : undefined)
+    if (!help.auto) return { ok: false, message: help.manual }
+    const { command, args } = help.auto
+    return new Promise((resolve) => {
+      execFile(command, args, { timeout: 15 * 60 * 1000 }, (err, _out, stderr) => {
+        if (err) resolve({ ok: false, message: `The installer did not finish (${(stderr || err.message).toString().trim().split('\n').slice(-2).join(' ')}). ${help.manual}` })
+        else resolve({ ok: true, message: 'Installer finished.' })
+      })
+    })
+  })
+
+  ipcMain.handle('github:state', (): GithubState => ({ connected: !!loadGithubToken(), login: githubLogin, sessionOnly: githubSessionOnly || undefined }))
+  ipcMain.handle('github:connect', async (_e, token: string) => {
+    const t = token.trim()
+    if (!t) return { ok: false, error: 'Paste the token first.' }
+    try {
+      const who = await githubWhoAmI(t)
+      githubTokenMem = t; githubLogin = who.login
+      if (safeStorage.isEncryptionAvailable()) { fs.writeFileSync(githubPath(), safeStorage.encryptString(t)); githubSessionOnly = false }
+      else githubSessionOnly = true // no keychain: never write it in the clear
+      return { ok: true, login: who.login, sessionOnly: githubSessionOnly }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
+  ipcMain.handle('github:disconnect', () => {
+    githubTokenMem = undefined; githubLogin = undefined; githubSessionOnly = false
+    try { fs.rmSync(githubPath()) } catch { /* nothing saved */ }
+  })
+  ipcMain.handle('github:repos', async () => {
+    const t = loadGithubToken()
+    if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
+    try { return { ok: true, repos: await githubListRepos(t) } } catch (e) { return { ok: false, error: errText(e) } }
+  })
+
   ipcMain.handle('repos:list', async () => Promise.all(loadSettings().repos.filter((r) => fs.existsSync(r.path)).map(repoInfo)))
+  ipcMain.handle('repos:suggestFolder', (_e, name: string) => suggestFolder(name))
   ipcMain.handle('repos:remove', (_e, p: string) => {
     const s = loadSettings(); s.repos = s.repos.filter((r) => r.path !== p); saveSettings(s)
   })
+  ipcMain.handle('repos:openFolder', async (_e, p: string) => { await shell.openPath(p) })
   ipcMain.handle('repos:setInstall', (_e, p: string, installId: string) => rememberRepo(p, installId))
+
   ipcMain.handle('repos:addExisting', async () => {
-    if (!(await gitAvailable())) return { error: gitMissing }
+    if (!(await hasGit())) return { ok: false, error: gitMissing }
     const r = await dialog.showOpenDialog({ title: 'Choose a config repository folder', properties: ['openDirectory'] })
-    if (r.canceled || !r.filePaths[0]) return { cancelled: true }
-    const st = await repoStatus(r.filePaths[0])
-    if (!st.isRepo) return { error: 'That folder is not a git repository (it must be the top folder of one).' }
-    if (!st.hasManifest) return { error: 'That repository has no manifest.json, so it is not an OBS config bundle.' }
+    if (r.canceled || !r.filePaths[0]) return { ok: false, cancelled: true, error: '' }
+    const st = await repoStatus(r.filePaths[0], gitRunner())
+    if (!st.isRepo) return { ok: false, error: 'That folder is not a git repository (it must be the top folder of one).' }
+    if (!st.hasManifest) return { ok: false, error: 'That repository has no manifest.json, so it is not an OBS config bundle.' }
     rememberRepo(r.filePaths[0])
-    return { added: await repoInfo({ path: r.filePaths[0] }) }
+    return { ok: true, repo: await repoInfo({ path: r.filePaths[0] }) }
   })
-  ipcMain.handle('repos:clone', async (_e, url: string) => {
-    if (!(await gitAvailable())) return { error: gitMissing }
-    const r = await dialog.showOpenDialog({ title: 'Choose an empty folder to clone into', properties: ['openDirectory', 'createDirectory'] })
-    if (r.canceled || !r.filePaths[0]) return { cancelled: true }
-    try { await cloneRepo(url.trim(), r.filePaths[0]) } catch (e) { return { error: (e as Error).message } }
-    if (!fs.existsSync(path.join(r.filePaths[0], 'manifest.json'))) return { error: 'Cloned, but it has no manifest.json: it is not an OBS config bundle.' }
-    rememberRepo(r.filePaths[0])
-    return { added: await repoInfo({ path: r.filePaths[0] }) }
+
+  ipcMain.handle('repos:clone', async (_e, url: string, folder: string) => {
+    if (!(await hasGit())) return { ok: false, error: gitMissing }
+    const v = validateRemoteUrl(url)
+    if (!v.ok) return { ok: false, error: v.message }
+    if (!emptyOrMissing(folder)) return { ok: false, error: 'That folder is not empty. Choose another one.' }
+    try { await cloneRepoWith(v.url, folder) } catch (e) { return { ok: false, error: errText(e) } }
+    if (!fs.existsSync(path.join(folder, 'manifest.json'))) return { ok: false, error: 'It was downloaded, but it has no manifest.json: it is not an OBS config repository.' }
+    rememberRepo(folder)
+    return { ok: true, repo: await repoInfo({ path: folder }) }
   })
-  ipcMain.handle('repos:create', async (_e, installId: string, name: string) => {
-    if (!(await gitAvailable())) return { error: gitMissing }
-    const r = await dialog.showOpenDialog({ title: 'Choose an empty folder for the new repository', properties: ['openDirectory', 'createDirectory'] })
-    if (r.canceled || !r.filePaths[0]) return { cancelled: true }
-    if (fs.readdirSync(r.filePaths[0]).length) return { error: 'That folder is not empty.' }
+
+  ipcMain.handle('repos:create', async (_e, r: { installId: string; name: string; folder: string; github?: { private: boolean } }) => {
+    if (!(await hasGit())) return { ok: false, error: gitMissing }
+    if (!emptyOrMissing(r.folder)) return { ok: false, error: 'That folder is not empty. Choose another one.' }
     try {
-      await initRepo(r.filePaths[0])
-      const res = await captureLive({ host, install: findInstall(installId), dir: r.filePaths[0], name, appVersion: app.getVersion() })
-      if (res.status === 'error') return { error: res.message }
-    } catch (e) { return { error: (e as Error).message } }
-    rememberRepo(r.filePaths[0], installId)
-    return { added: await repoInfo({ path: r.filePaths[0], installId }) }
+      const git = gitRunner()
+      await initRepo(r.folder, git)
+      const res = await captureLive({ host, install: findInstall(r.installId), dir: r.folder, name: r.name, appVersion: app.getVersion(), git })
+      if (res.status === 'error') return { ok: false, error: res.message }
+      rememberRepo(r.folder, r.installId)
+      let published: string | undefined
+      if (r.github) {
+        const t = loadGithubToken()
+        if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
+        try {
+          const out = await publishToGithub(r.folder, t, r.name, { private: r.github.private })
+          published = out.repo.htmlUrl
+          if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but pushing failed: ${out.push.message}` }
+        } catch (e) { return { ok: false, error: `The repository was created on this computer, but not on GitHub: ${errText(e)}` } }
+      }
+      return { ok: true, repo: await repoInfo({ path: r.folder, installId: r.installId }), published }
+    } catch (e) { return { ok: false, error: errText(e) } }
   })
+
+  ipcMain.handle('repos:fromBundle', async (_e, handle: string, folder: string) => {
+    if (!(await hasGit())) return { ok: false, error: gitMissing }
+    const b = bundles.get(handle)
+    if (!b) return { ok: false, error: 'That bundle is no longer open. Open it again.' }
+    try { await createRepoFromBundle(folder, b, gitRunner()) } catch (e) { return { ok: false, error: errText(e) } }
+    rememberRepo(folder)
+    return { ok: true, repo: await repoInfo({ path: folder }) }
+  })
+
+  ipcMain.handle('repos:setRemote', async (_e, p: string, url: string) => {
+    const r = await setRemote(p, url, gitRunner())
+    return r.ok ? { ok: true } : { ok: false, error: r.message }
+  })
+  ipcMain.handle('repos:publish', async (_e, p: string, name: string, priv: boolean) => {
+    const t = loadGithubToken()
+    if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
+    try {
+      const out = await publishToGithub(p, t, name, { private: priv })
+      if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but pushing failed: ${out.push.message}` }
+      return { ok: true, url: out.repo.htmlUrl, pushed: out.push.status === 'pushed' }
+    } catch (e) { return { ok: false, error: e instanceof GithubError ? errText(e) : errText(e) } }
+  })
+
   ipcMain.handle('repos:live', async (_e, p: string, installId: string) => {
-    const r = await captureLive({ host, install: findInstall(installId), dir: p, dryRun: true })
+    const r = await captureLive({ host, install: findInstall(installId), dir: p, dryRun: true, git: gitRunner() })
     if (r.status === 'error') return { error: r.message }
     return { changed: r.status === 'changes' ? r.files : [] }
   })
-  ipcMain.handle('repos:save', async (_e, p: string, installId: string, commitDirtyFirst: boolean) => {
+  ipcMain.handle('repos:save', async (_e, p: string, installId: string, commitDirtyFirst: boolean, onConflict?: 'abort' | 'keep-repo' | 'keep-obs') => {
     const r = await captureLive({
-      host, install: findInstall(installId), dir: p, onDirty: commitDirtyFirst ? 'commit-first' : 'refuse', appVersion: app.getVersion(),
+      host, install: findInstall(installId), dir: p, onDirty: commitDirtyFirst ? 'commit-first' : 'refuse', onConflict,
+      appVersion: app.getVersion(), git: gitRunner(),
     })
     if (r.status === 'changes') return { status: 'unchanged' }
     return r
   })
-  ipcMain.handle('repos:pull', (_e, p: string) => pullRepo(p))
-  ipcMain.handle('repos:push', (_e, p: string) => pushRepo(p))
-  ipcMain.handle('repos:log', (_e, p: string) => repoLog(p, 15))
+  ipcMain.handle('repos:pull', (_e, p: string, onConflict?: 'abort' | 'keep-mine' | 'keep-theirs') => pullRepo(p, gitRunner(), onConflict))
+  ipcMain.handle('repos:push', (_e, p: string) => pushRepo(p, gitRunner()))
+  ipcMain.handle('repos:log', (_e, p: string) => repoLog(p, 15, gitRunner()))
   ipcMain.handle('repos:needs', async (_e, p: string) => {
     const m = readBundleDir(p).manifest
     return assetNeeds(m, readLocations()[m.id]?.assets ?? {})

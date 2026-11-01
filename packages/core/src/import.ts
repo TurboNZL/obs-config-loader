@@ -59,6 +59,8 @@ export interface Substitution {
 export interface ImportReport {
   willWrite: { path: string; action: WriteAction }[]
   missingVariables: { name: string; kind: string; required: boolean }[]
+  /** Secrets you did not type in, whose value already in OBS was left as it was (never blanked). */
+  keptSecrets: string[]
   usedDefaults: string[]
   missingAssets: { id: string; filename: string; hint?: string }[]
   plugins: PluginFinding[]
@@ -72,6 +74,14 @@ export interface ImportReport {
 export interface ImportPlan {
   writes: PlannedWrite[]
   report: ImportReport
+}
+
+const getAt = (o: unknown, path: string[]): unknown => path.reduce<unknown>((a, k) => (a && typeof a === 'object' ? (a as Record<string, unknown>)[k] : undefined), o)
+function setAt(o: unknown, path: string[], v: unknown): boolean {
+  const parent = getAt(o, path.slice(0, -1))
+  if (!parent || typeof parent !== 'object') return false
+  ;(parent as Record<string, unknown>)[path[path.length - 1]] = v
+  return true
 }
 
 function sanitizeFileName(name: string): string {
@@ -210,6 +220,7 @@ export function planImport(o: ImportOptions): ImportPlan {
   }
 
   const colIds = new Set(o.collections ?? m.collections.map((c) => c.id))
+  const keptSecrets = new Set<string>()
   const profIds = new Set(o.profiles ?? m.profiles.map((c) => c.id))
   const usedCollections: any[] = []
   const takenNames = (dir: string, ext: string): Set<string> => {
@@ -277,14 +288,26 @@ export function planImport(o: ImportOptions): ImportPlan {
     for (const [key, data] of entries) {
       const fname = key.slice(prefix.length)
       let out: Buffer = data
+      const dest = p.join(profRoot, dirName, fname)
       if (fname.endsWith('.json')) {
-        try { out = Buffer.from(JSON.stringify(resolveJson(JSON.parse(data.toString('utf8')), resolver, target), null, 4) + '\n') } catch { /* keep raw */ }
+        try {
+          const json = resolveJson(JSON.parse(data.toString('utf8')), resolver, target)
+          // A secret you did not type in must not wipe the one OBS already has: keep what is in the file being replaced.
+          let existing: unknown
+          try { existing = JSON.parse(fs.readFileSync(dest, 'utf8')) } catch { /* nothing there yet */ }
+          for (const v of m.variables) {
+            if (v.kind !== 'secret' || answers[v.name] !== undefined || !v.target?.startsWith(`${key}#`)) continue
+            const at = v.target.slice(key.length + 1).split('.')
+            const old = getAt(existing, at)
+            if (typeof old === 'string' && old !== '' && setAt(json, at, old)) keptSecrets.add(v.name)
+          }
+          out = Buffer.from(JSON.stringify(json, null, 4) + '\n')
+        } catch { /* keep raw */ }
       } else if (fname === 'basic.ini') {
         let t = mapIniValues(data.toString('utf8'), (_s, _k, v) => resolveString(v, resolver, target))
         t = setIni(t, 'General', 'Name', name)
         out = Buffer.from(t)
       }
-      const dest = p.join(profRoot, dirName, fname)
       // Replacing a profile replaces its files one by one; each one is backed up.
       planFile(dest, out, 'profile-file', fs.existsSync(dest) ? 'replace' : action === 'keep-both' ? 'keep-both' : 'create')
     }
@@ -320,7 +343,7 @@ export function planImport(o: ImportOptions): ImportPlan {
     writes,
     report: {
       willWrite: writes.map((w) => ({ path: w.path, action: w.action })),
-      missingVariables, usedDefaults, missingAssets, plugins, substitutions: subs, warnings, blockers, backupDir,
+      missingVariables: missingVariables.filter((v) => !keptSecrets.has(v.name)), keptSecrets: [...keptSecrets], usedDefaults, missingAssets, plugins, substitutions: subs, warnings, blockers, backupDir,
     },
   }
 }

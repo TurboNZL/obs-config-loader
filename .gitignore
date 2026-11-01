@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# the vendored theme package ships its built files on purpose (scripts/sync-themes.mjs)
+!vendor/turbothemes/dist/
 out/
 *.log
 .DS_Store

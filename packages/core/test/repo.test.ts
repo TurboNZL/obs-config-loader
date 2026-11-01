@@ -275,3 +275,16 @@ describe('preservePlatformSources', () => {
     expect(preservePlatformSources(next, prev, 'win32')).toBe(0)
   })
 })
+
+describe('samePath', () => {
+  it('treats the spellings of one folder as equal, and different folders as different', async () => {
+    const { samePath } = await import('../src/index.js')
+    const d = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'obscl-sp-'))
+    try {
+      expect(samePath(d, d)).toBe(true)
+      expect(samePath(d, d + nodePath.sep)).toBe(true)
+      expect(samePath(d, d.replace(/\\/g, '/'))).toBe(true) // git prints forward slashes on Windows
+      expect(samePath(d, nodePath.join(d, 'sub'))).toBe(false)
+    } finally { fs.rmSync(d, { recursive: true, force: true }) }
+  })
+})

@@ -119,6 +119,18 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
               <Chip>{m.assets.length} media file{m.assets.length === 1 ? '' : 's'}</Chip>
               {m.source?.platform && <Chip>made on {m.source.platform}</Chip>}
             </div>
+            {!bundle?.repoDir && (
+              <div className="pt-1">
+                <button className="btn px-3 py-1" disabled={saving} onClick={async () => {
+                  setSaving(true); setError(null)
+                  const folder = await window.obsLoader.repos.suggestFolder(m.name)
+                  const r = await window.obsLoader.repos.fromBundle(bundle!.handle, folder)
+                  setSaving(false)
+                  if (r.ok) setDone(`Created a git repository for this setup at ${r.repo.path}. Find it under Git repositories to keep it in sync and put it online.`)
+                  else setError(r.error)
+                }}>Keep this setup in a git repository…</button>
+              </div>
+            )}
           </div>
         )}
       </Card>
@@ -174,6 +186,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
                     <input
                       className="input flex-1 px-2 py-1.5"
                       type={v.kind === 'secret' ? 'password' : 'text'}
+                      placeholder={v.kind === 'secret' ? 'Leave empty to keep what OBS already has' : undefined}
                       autoComplete="off"
                       value={variables[v.name] ?? ''}
                       onChange={(e) => setVariables({ ...variables, [v.name]: e.target.value })}
@@ -210,6 +223,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
           {report && (
             <Card title="Report: what Import will do">
               {report.blockers.map((b) => <Message key={b} tone="bad">{b}</Message>)}
+              {report.keptSecrets.length > 0 && <Message tone="good">Your existing stream key and other secrets in OBS are kept ({report.keptSecrets.length}). Type a new one above only to change it.</Message>}
               {report.warnings.map((w) => <Message key={w} tone="warn">{w}</Message>)}
 
               {report.plugins.length > 0 && (
