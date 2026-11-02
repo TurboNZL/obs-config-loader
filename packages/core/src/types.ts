@@ -13,6 +13,8 @@ export interface Variable {
   required?: boolean
   /** Where the value goes, e.g. "profiles/main/service.json#settings.key" (informational). */
   target?: string
+  /** The secret itself. Present ONLY when the manifest says `containsSecrets` (the person exporting chose to include keys). */
+  value?: string
 }
 
 export type AssetMode = 'bundled' | 'external'
@@ -62,6 +64,10 @@ export interface Manifest {
   generator?: { name: string; version: string }
   source?: { platform?: Platform; obsVersion?: string }
   obsMinVersion?: string
+  /** True when this file carries stream keys / secrets inside (`variables[].value`). Such a file must be treated like a password. */
+  containsSecrets?: boolean
+  /** Plain-words warning shown wherever the file is opened; set together with `containsSecrets`. */
+  warning?: string
   collections: CollectionRef[]
   profiles: ProfileRef[]
   activeCollection?: string

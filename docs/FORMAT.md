@@ -62,13 +62,27 @@ Referenced from collection and profile files as `{{var:NAME}}`.
 
 | `kind`   | Meaning |
 |----------|---------|
-| `secret` | Never exported with a value. Asked for on import, kept in the OS credential store, never committed to git. |
+| `secret` | Not exported with a value by default. Asked for on import, kept in the OS credential store, never committed to git. See "Files that carry secrets" for the one opt-in exception. |
 | `path`   | A folder or file on this machine. Asked for on import; default may use the built-in tokens below. |
 | `url`, `text`, `number`, `bool` | Plain values. A value in the bundle is used as the default. |
 
 Built-in tokens (always available, never declared): `{{home}}`, `{{documents}}`, `{{videos}}`,
 `{{music}}`, `{{pictures}}`, `{{desktop}}`, `{{bundle}}` (folder holding the imported media).
 Path separators in values are normalised to the target OS on import.
+
+### Files that carry secrets (opt-in)
+
+A person may choose to put their stream keys inside the file (to move a setup to their own other computer in one step).
+That is the **only** way a secret value is ever written, and such a file is marked so nobody opens it unaware:
+
+- `manifest.json` has `"containsSecrets": true` and a plain-words `"warning"`;
+- each secret variable then carries its `value` (a reader MUST ignore `value` in a file that does not say
+  `containsSecrets: true`);
+- the zip has a `READ-ME-FIRST-CONTAINS-STREAM-KEYS.txt` at its root, visible to anyone who unzips it;
+- tools should add a marker to the file name (for example `(CONTAINS STREAM KEYS)`) and show a warning when opening it;
+- it MUST NOT be written in the directory form (which is for git, where history is forever): writers refuse.
+
+On import, a value typed by the user beats the one in the file, and the one in the file beats what is already in OBS.
 
 ### `assets`: media files that scenes point at
 

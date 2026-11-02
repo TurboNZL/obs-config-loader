@@ -8,8 +8,9 @@ the list of plugins it needs. The same setup works on Linux, Windows and macOS, 
 
 ## Features
 - Detect OBS installs per platform and add portable ones by folder.
-- Import/export `.obsbundle` (zip) or the unzipped directory form.
-- Missing media and plugins are reported (plugins with install instructions, never bundled).
+- Save your whole setup to one `.obsbundle` file and load it into any OBS, on any system.
+- Stream keys are left out by default; you can choose to include them, and the file is then clearly marked.
+- Missing media and plugins are reported in plain words (plugins with install instructions, never bundled).
 - Git-backed config repositories with large files kept outside git as placeholders.
 - Make a separate OBS with its own settings and plugins (Linux system package and Flatpak), so a heavy plugin only loads where it is needed.
 - One setup for several operating systems: capture sources are kept per OS.

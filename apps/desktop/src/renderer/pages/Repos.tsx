@@ -17,12 +17,12 @@ export function ReposPage({ installs, applyRepo }: { installs: InstallInfo[] | n
 
   return (
     <Page
-      title="Config repositories"
-      intro="Keep a setup in git. Scenes and profiles are saved as plain files, big media as placeholders, and secrets never. Edits you make in OBS are saved into the repo before anything else changes it, so they are never reverted."
+      title="Online backup"
+      intro="Keep your OBS setup in git (for example on GitHub). Every change is kept as a version, you can use the same setup on all your computers, and edits you make in OBS are never lost when the setup changes somewhere else. Your stream keys are never stored in it."
     >
       {git && !git.available && <GitMissing git={git} recheck={refreshGit} />}
       {notice && <Message tone={notice.tone}>{notice.text}</Message>}
-      {repos?.length === 0 && git?.available && <Message tone="warn">No repositories yet. Start one from an OBS install below, or get one that already exists.</Message>}
+      {repos?.length === 0 && git?.available && <Message tone="warn">No backups yet. Start one from your OBS below, or use one you already have.</Message>}
       {repos?.map((r) => <RepoCard key={r.path} repo={r} installs={installs ?? []} gh={gh} refresh={refresh} apply={applyRepo} />)}
 
       {git?.available && (
@@ -42,8 +42,8 @@ function GitMissing({ git, recheck }: { git: GitState; recheck: () => Promise<vo
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   return (
-    <Card title="Git is needed">
-      <p className="text-sm">Repositories use git, which is not installed on this computer yet.</p>
+    <Card title="One more thing is needed: Git">
+      <p className="text-sm">Online backup uses a free tool called Git, which is not installed on this computer yet.</p>
       {msg && <Message tone="warn">{msg}</Message>}
       <div className="flex gap-2 flex-wrap">
         {git.help.auto && (
@@ -135,7 +135,7 @@ function NewRepo({ installs, gh, onDone }: { installs: InstallInfo[]; gh: Github
   if (usable.length === 0) return null
 
   return (
-    <Card title="Start a new repository from an OBS install">
+    <Card title="Start a new backup from my OBS">
       {error && <Message tone="bad">{error}</Message>}
       <Field label="Name"><input className="input w-full px-2 py-1.5" value={name} onChange={(e) => setName(e.target.value)} /></Field>
       <Field label="Save the setup of">
@@ -184,7 +184,7 @@ function GetRepo({ gh, repoCount, onDone }: { gh: GithubState; repoCount: number
   }, [url])
 
   return (
-    <Card title="Get a repository that already exists">
+    <Card title="Use a backup you already have">
       {error && <Message tone="bad">{error}</Message>}
       {mine && mine.length > 0 && (
         <Field label="From your GitHub" hint={<button className="btn btn-ghost px-2 py-0.5 text-xs" onClick={loadMine}>Refresh the list</button>}>
@@ -203,7 +203,7 @@ function GetRepo({ gh, repoCount, onDone }: { gh: GithubState; repoCount: number
           setBusy(true); setError(null)
           const r = await window.obsLoader.repos.clone(url, folder)
           setBusy(false)
-          if (r.ok) { setUrl(''); await onDone({ tone: 'good', text: `Downloaded “${r.repo.name}”. Use “Apply to OBS” to load it.` }) } else setError(r.error)
+          if (r.ok) { setUrl(''); await onDone({ tone: 'good', text: `Downloaded “${r.repo.name}”. Use “Load into OBS” to put it into OBS.` }) } else setError(r.error)
         }}>{busy ? 'Downloading…' : 'Download'}</button>
         <button className="btn px-3 py-2" onClick={async () => {
           setError(null)
@@ -251,7 +251,7 @@ function RepoCard({ repo, installs, gh, refresh, apply }: { repo: RepoInfo; inst
     if (r.status === 'error') setMsg({ tone: 'bad', text: r.message })
     else if (r.status === 'conflict') { setConflict({ kind: 'save', files: r.conflicts }); setMsg(null) }
     else if (r.status === 'unchanged') setMsg({ tone: 'good', text: 'Already up to date: OBS has nothing new.' })
-    else setMsg({ tone: 'good', text: `Saved (${r.files.length} file${r.files.length === 1 ? '' : 's'} changed)${r.merged ? ', and merged with newer changes that were already in the repository' : ''}.` })
+    else setMsg({ tone: 'good', text: `Saved (${r.files.length} file${r.files.length === 1 ? '' : 's'} changed)${r.merged ? ', and combined with newer changes that were already in the backup' : ''}.` })
   }
   const save = (commitDirty: boolean, onConflict?: 'abort' | 'keep-repo' | 'keep-obs') => run(async () => {
     showSave(await window.obsLoader.repos.save(repo.path, installId, commitDirty, onConflict))
@@ -260,26 +260,26 @@ function RepoCard({ repo, installs, gh, refresh, apply }: { repo: RepoInfo; inst
 
   const showPull = (r: PullResult) => {
     setConflict(null)
-    if (r.status === 'updated') setMsg({ tone: 'good', text: `Pulled ${r.files.length} changed file${r.files.length === 1 ? '' : 's'}. Use “Apply to OBS” to load them.` })
+    if (r.status === 'updated') setMsg({ tone: 'good', text: `Pulled ${r.files.length} changed file${r.files.length === 1 ? '' : 's'}. Use “Load into OBS” to put them into OBS.` })
     else if (r.status === 'conflict') { setConflict({ kind: 'pull', files: r.conflicts }); setMsg(null) }
-    else if (r.status === 'dirty') setMsg({ tone: 'warn', text: `Save your changes first (${r.files.length} file${r.files.length === 1 ? ' has' : 's have'} uncommitted edits). Use “Save OBS changes to the repo”.` })
+    else if (r.status === 'dirty') setMsg({ tone: 'warn', text: `Save your changes first (${r.files.length} file${r.files.length === 1 ? ' was' : 's were'} changed by hand). Use “Save my OBS changes to the backup”.` })
     else if (r.status === 'error') setMsg({ tone: 'bad', text: r.message })
-    else if (r.status === 'no-remote') setMsg({ tone: 'warn', text: 'This repository has no online address yet. Add one below.' })
+    else if (r.status === 'no-remote') setMsg({ tone: 'warn', text: 'This backup is not stored online yet. Add an address below.' })
     else setMsg({ tone: 'good', text: 'Already up to date.' })
   }
   const pull = (onConflict?: 'abort' | 'keep-mine' | 'keep-theirs') => run(async () => showPull(await window.obsLoader.repos.pull(repo.path, onConflict)))
 
   const push = () => run(async () => {
     const r = await window.obsLoader.repos.push(repo.path)
-    setMsg(r.status === 'pushed' ? { tone: 'good', text: 'Pushed.' }
-      : r.status === 'nothing' ? { tone: 'good', text: 'Nothing to push.' }
-      : r.status === 'no-remote' ? { tone: 'warn', text: 'This repository has no online address yet. Add one below.' }
+    setMsg(r.status === 'pushed' ? { tone: 'good', text: 'Uploaded.' }
+      : r.status === 'nothing' ? { tone: 'good', text: 'Nothing new to upload.' }
+      : r.status === 'no-remote' ? { tone: 'warn', text: 'This backup is not stored online yet. Add an address below.' }
       : { tone: 'bad', text: r.message })
   })
 
   const saveRemote = () => run(async () => {
     const r = await window.obsLoader.repos.setRemote(repo.path, remoteUrl)
-    if (r.ok) { setEditRemote(false); setRemoteUrl(''); setMsg({ tone: 'good', text: 'Address saved. Use Push to upload.' }) } else setMsg({ tone: 'bad', text: r.error })
+    if (r.ok) { setEditRemote(false); setRemoteUrl(''); setMsg({ tone: 'good', text: 'Address saved. Use Upload to send it.' }) } else setMsg({ tone: 'bad', text: r.error })
   })
   const publish = () => run(async () => {
     const r = await window.obsLoader.repos.publish(repo.path, pubName, pubPriv)
@@ -292,9 +292,9 @@ function RepoCard({ repo, installs, gh, refresh, apply }: { repo: RepoInfo; inst
       right={<div className="flex gap-2 flex-wrap justify-end">
         {st.commits > 0 && <Chip>{st.commits} save{st.commits === 1 ? '' : 's'}</Chip>}
         {st.branch && <Chip>{st.branch}</Chip>}
-        {st.ahead > 0 && <Chip tone="warn">{st.ahead} to push</Chip>}
-        {st.behind > 0 && <Chip tone="warn">{st.behind} to pull</Chip>}
-        {st.dirtyFiles.length > 0 && <Chip tone="warn">{st.dirtyFiles.length} edited outside the app</Chip>}
+        {st.ahead > 0 && <Chip tone="warn">{st.ahead} to upload</Chip>}
+        {st.behind > 0 && <Chip tone="warn">{st.behind} to download</Chip>}
+        {st.dirtyFiles.length > 0 && <Chip tone="warn">{st.dirtyFiles.length} changed by hand</Chip>}
         {!st.remote && <Chip>not online yet</Chip>}
       </div>}
     >
@@ -302,19 +302,19 @@ function RepoCard({ repo, installs, gh, refresh, apply }: { repo: RepoInfo; inst
       {msg && <Message tone={msg.tone}>{msg.text}</Message>}
 
       {usable.length > 0 && (
-        <Field label="Saved from and applied to">
+        <Field label="This backup is for">
           <select className="input w-full px-2 py-1.5" value={installId} onChange={(e) => { setInstallId(e.target.value); void window.obsLoader.repos.setInstall(repo.path, e.target.value) }}>
             {usable.map((i) => <option key={i.id} value={i.id}>{i.label}: {KIND_LABEL[i.kind] ?? i.kind}</option>)}
           </select>
         </Field>
       )}
 
-      {live && live.length > 0 && <Message tone="warn">OBS has changes that are not in the repository yet: {live.join(', ')}.</Message>}
-      {live && live.length === 0 && installId && <p className="text-sm text-muted">The repository matches OBS.</p>}
+      {live && live.length > 0 && <Message tone="warn">OBS has changes that are not in the backup yet: {live.join(', ')}.</Message>}
+      {live && live.length === 0 && installId && <p className="text-sm text-muted">The backup matches OBS.</p>}
 
       {dirtyAsk && (
         <Message tone="warn">
-          Files in the repository were edited outside this app ({dirtyAsk.join(', ')}). Saving OBS would overwrite them, so they must be committed first.
+          Some files in the backup were changed by hand ({dirtyAsk.join(', ')}). Saving OBS would overwrite them, so they need to be kept first.
           <div className="mt-2 flex gap-2">
             <button className="btn btn-accent px-3 py-1" onClick={() => save(true)}>Keep those edits, then save OBS</button>
             <button className="btn btn-ghost px-3 py-1" onClick={() => setDirtyAsk(null)}>Cancel</button>
@@ -325,12 +325,12 @@ function RepoCard({ repo, installs, gh, refresh, apply }: { repo: RepoInfo; inst
       {conflict && (
         <Message tone="bad">
           {conflict.kind === 'save'
-            ? <>The repository and OBS both changed the same lines of {conflict.files.join(', ')}. Everything else merges fine; choose whose version wins for just those lines.</>
-            : <>You and the online copy both changed the same lines of {conflict.files.join(', ')}. Everything else merges fine; choose whose version wins for just those lines.</>}
+            ? <>The backup and OBS both changed the same part of {conflict.files.join(', ')}. Everything else combines fine; choose whose version to keep for just that part.</>
+            : <>You and the online copy both changed the same part of {conflict.files.join(', ')}. Everything else combines fine; choose whose version to keep for just that part.</>}
           <div className="mt-2 flex gap-2 flex-wrap">
             {conflict.kind === 'save' ? (
               <>
-                <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => save(false, 'keep-repo')}>Keep the repository's version</button>
+                <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => save(false, 'keep-repo')}>Keep the backup's version</button>
                 <button className="btn px-3 py-1" disabled={busy} onClick={() => save(false, 'keep-obs')}>Keep OBS's version</button>
               </>
             ) : (
@@ -364,10 +364,10 @@ function RepoCard({ repo, installs, gh, refresh, apply }: { repo: RepoInfo; inst
       )}
 
       <div className="flex gap-2 flex-wrap">
-        <button className="btn btn-accent px-3 py-1.5" disabled={busy || !installId} onClick={() => save(false)}>Save OBS changes to the repo</button>
-        <button className="btn px-3 py-1.5" disabled={busy || !st.remote} onClick={() => pull()}>Pull</button>
-        <button className="btn px-3 py-1.5" disabled={busy || !st.remote} onClick={push}>Push</button>
-        <button className="btn px-3 py-1.5" disabled={busy} onClick={() => apply(repo.path, installId)}>Apply to OBS…</button>
+        <button className="btn btn-accent px-3 py-1.5" disabled={busy || !installId} onClick={() => save(false)}>Save my OBS changes to the backup</button>
+        <button className="btn px-3 py-1.5" disabled={busy || !st.remote} onClick={() => pull()}>Get updates</button>
+        <button className="btn px-3 py-1.5" disabled={busy || !st.remote} onClick={push}>Upload</button>
+        <button className="btn px-3 py-1.5" disabled={busy} onClick={() => apply(repo.path, installId)}>Load into OBS…</button>
         <button className="btn btn-ghost px-3 py-1.5" onClick={async () => setLog(log ? null : await window.obsLoader.repos.log(repo.path))}>{log ? 'Hide history' : 'History'}</button>
         <button className="btn btn-ghost px-3 py-1.5" onClick={() => window.obsLoader.repos.openFolder(repo.path)}>Open folder</button>
         <button className="btn btn-ghost px-3 py-1.5" onClick={async () => { await window.obsLoader.repos.remove(repo.path); await refresh() }}>Remove from list</button>
@@ -375,7 +375,7 @@ function RepoCard({ repo, installs, gh, refresh, apply }: { repo: RepoInfo; inst
 
       {/* where it lives online */}
       <div className="border-t border-line pt-3 space-y-2">
-        <h3 className="font-semibold text-sm">Online copy</h3>
+        <h3 className="font-semibold text-sm">Stored online</h3>
         {repo.remoteUrl && !editRemote ? (
           <div className="flex items-center gap-2 flex-wrap">
             <span className="mono">{repo.remoteUrl}</span>
@@ -383,7 +383,7 @@ function RepoCard({ repo, installs, gh, refresh, apply }: { repo: RepoInfo; inst
           </div>
         ) : (
           <>
-            {!repo.remoteUrl && <p className="text-sm text-muted">This repository only exists on this computer. Put a copy online to back it up and use it on other machines.</p>}
+            {!repo.remoteUrl && <p className="text-sm text-muted">This backup only exists on this computer. Put a copy online so it is safe and you can use it on your other computers.</p>}
             {gh.connected && !repo.remoteUrl && (
               <div className="flex gap-2 flex-wrap items-center">
                 <input className="input px-2 py-1.5 flex-1 min-w-40" value={pubName} onChange={(e) => setPubName(e.target.value)} aria-label="Name on GitHub" />
@@ -392,7 +392,7 @@ function RepoCard({ repo, installs, gh, refresh, apply }: { repo: RepoInfo; inst
               </div>
             )}
             <div className="flex gap-2">
-              <input className="input flex-1 px-2 py-1.5" placeholder="Or paste an address: https://…/my-setup.git" value={remoteUrl} onChange={(e) => setRemoteUrl(e.target.value)} aria-label="Repository address" />
+              <input className="input flex-1 px-2 py-1.5" placeholder="Or paste an address: https://github.com/you/my-setup.git" value={remoteUrl} onChange={(e) => setRemoteUrl(e.target.value)} aria-label="Online address" />
               <button className="btn px-3" disabled={busy || !remoteUrl.trim()} onClick={saveRemote}>Save address</button>
               {editRemote && <button className="btn btn-ghost px-3" onClick={() => setEditRemote(false)}>Cancel</button>}
             </div>

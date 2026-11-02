@@ -17,19 +17,19 @@ export function InstallsPage({ installs, refresh, go }: {
 
   return (
     <Page
-      title="OBS installs"
-      intro="Every OBS Studio this app can find on this computer. A portable install is a folder, so add those by hand. You can also make a separate OBS with its own settings and plugins."
+      title="OBS on this computer"
+      intro="Every copy of OBS this app can find. If you keep OBS in its own folder, add it by hand below."
     >
       {msg && <Message tone="bad">{msg}</Message>}
       {installs === null && <p className="text-muted">Looking for OBS…</p>}
       {installs?.length === 0 && (
         <Message tone="warn">
-          No OBS install found in the usual places. Install OBS Studio, or add a portable one below.
+          No OBS found in the usual places. Install OBS Studio, or add one that lives in its own folder below.
         </Message>
       )}
       {installs?.map((i) => <InstallCard key={i.id} i={i} refresh={refresh} go={go} />)}
       <div className="flex gap-2">
-        <button className="btn px-3 py-1.5" onClick={addPortable}>Add a portable install…</button>
+        <button className="btn px-3 py-1.5" onClick={addPortable}>Add OBS from a folder…</button>
         <button className="btn btn-ghost px-3 py-1.5" onClick={() => void refresh()}>Refresh</button>
       </div>
       {installs && installs.length > 0 && <NewInstance installs={installs} refresh={refresh} />}
@@ -64,24 +64,24 @@ function InstallCard({ i, refresh, go }: { i: InstallInfo; refresh: () => Promis
     <Card
       title={<span>{i.label}</span>}
       right={<div className="flex gap-2 flex-wrap justify-end">
-        <Chip>{isInstance ? `separate OBS · from ${i.baseLabel ?? '?'}` : KIND_LABEL[i.kind] ?? i.kind}</Chip>
-        {i.running && <Chip tone="warn">running</Chip>}
-        {!i.configExists && <Chip tone="warn">never started</Chip>}
+        <Chip>{isInstance ? `second OBS · made from ${i.baseLabel ?? '?'}` : KIND_LABEL[i.kind] ?? i.kind}</Chip>
+        {i.running && <Chip tone="warn">open now</Chip>}
+        {!i.configExists && <Chip tone="warn">never opened</Chip>}
         {i.custom && !isInstance && <Chip>added by you</Chip>}
       </div>}
     >
       <p className="mono text-muted">{i.configDir}</p>
       {i.configExists && (
         <p className="text-sm text-muted">
-          {i.collections.length} scene collection{i.collections.length === 1 ? '' : 's'}, {i.profiles.length} profile{i.profiles.length === 1 ? '' : 's'}
+          {i.collections.length} scene layout{i.collections.length === 1 ? '' : 's'}, {i.profiles.length} output setting{i.profiles.length === 1 ? '' : 's'}
           {i.collections.length > 0 && <>: {i.collections.slice(0, 4).join(', ')}{i.collections.length > 4 ? '…' : ''}</>}
         </p>
       )}
-      {isInstance && <p className="text-sm text-muted">Its own plugins go in <span className="mono">{i.pluginDirs[0]}</span> and are never loaded by your other OBS.</p>}
+      {isInstance && <p className="text-sm text-muted">Plugins you put in <span className="mono">{i.pluginDirs[0]}</span> only load in this OBS.</p>}
 
       {start.phase === 'starting' && <p className="text-sm text-muted">Starting…</p>}
-      {start.phase === 'checking' && <p className="text-sm text-muted">Started. Checking that it is using its own settings…</p>}
-      {start.phase === 'own' && <Message tone="good">It is running with its own settings folder.</Message>}
+      {start.phase === 'checking' && <p className="text-sm text-muted">Started. Checking that it is using its own settings (about 30 seconds)…</p>}
+      {start.phase === 'own' && <Message tone="good">It is open and using its own settings.</Message>}
       {start.phase === 'notown' && (
         <Message tone="warn">
           OBS did not create its own settings folder within 30 seconds. Either it is still starting, or {i.instance?.baseKind === 'flatpak'
@@ -98,11 +98,11 @@ function InstallCard({ i, refresh, go }: { i: InstallInfo; refresh: () => Promis
 
       <div className="flex gap-2 flex-wrap">
         {i.launch && <button className="btn px-3 py-1.5" disabled={start.phase === 'starting' || start.phase === 'checking'} onClick={launch}>Start OBS</button>}
-        <button className="btn btn-accent px-3 py-1.5" onClick={() => go('import', i.id)}>Import a setup here</button>
-        <button className="btn px-3 py-1.5" disabled={!i.configExists} onClick={() => go('export', i.id)}>Export this setup</button>
-        <button className="btn btn-ghost px-3 py-1.5" disabled={!i.configExists} onClick={() => window.obsLoader.installs.openFolder(i.id)}>Open folder</button>
-        {isInstance && <button className="btn btn-ghost px-3 py-1.5" onClick={() => window.obsLoader.instances.openPlugins(i.id)}>Open plugins folder</button>}
-        {i.custom && <button className="btn btn-ghost px-3 py-1.5" onClick={() => setConfirmRemove(true)}>Remove from list…</button>}
+        <button className="btn btn-accent px-3 py-1.5" onClick={() => go('import', i.id)}>Load a setup here</button>
+        <button className="btn px-3 py-1.5" disabled={!i.configExists} onClick={() => go('export', i.id)}>Save this setup to a file</button>
+        <button className="btn btn-ghost px-3 py-1.5" disabled={!i.configExists} onClick={() => window.obsLoader.installs.openFolder(i.id)}>Show its folder</button>
+        {isInstance && <button className="btn btn-ghost px-3 py-1.5" onClick={() => window.obsLoader.instances.openPlugins(i.id)}>Show plugins folder</button>}
+        {i.custom && <button className="btn btn-ghost px-3 py-1.5" onClick={() => setConfirmRemove(true)}>Remove from this list…</button>}
       </div>
 
       {confirmRemove && (
@@ -142,12 +142,12 @@ function NewInstance({ installs, refresh }: { installs: InstallInfo[]; refresh: 
 
   const base = bases.find((b) => b.id === baseId)
   return (
-    <Card title="Make a separate OBS">
+    <Card title="Make a second OBS (with its own plugins)">
       <p className="text-sm text-muted">
-        A second OBS that uses the same program but keeps its own scenes, settings and plugins, so a heavy plugin (like a multistream add-on) only ever loads in the one that needs it, and your everyday OBS stays quick to start. Both can run at the same time.
+        A second copy of OBS that keeps its own scenes, settings and plugins. Put a heavy plugin (like a multistream add-on) only in this one, and your everyday OBS stays quick to start. Both can be open at the same time.
       </p>
       {error && <Message tone="bad">{error}</Message>}
-      <Field label="Made from">
+      <Field label="Make it from which OBS?">
         <select className="input w-full px-2 py-1.5" value={baseId} onChange={(e) => setBaseId(e.target.value)}>
           {bases.map((b) => <option key={b.id} value={b.id}>{b.label}: {KIND_LABEL[b.kind] ?? b.kind}</option>)}
         </select>
@@ -157,7 +157,7 @@ function NewInstance({ installs, refresh }: { installs: InstallInfo[]; refresh: 
         <Message tone="warn">Flatpak is new ground for this: the app starts it and then checks that it really got its own settings folder, and tells you if it did not.</Message>
       )}
       <Field label="Name"><input className="input w-full px-2 py-1.5" value={name} onChange={(e) => setName(e.target.value)} /></Field>
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={copy} onChange={(e) => setCopy(e.target.checked)} /> Start from a copy of that OBS's scenes and settings (plugins are never copied)</label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={copy} onChange={(e) => setCopy(e.target.checked)} /> Start with a copy of that OBS's scenes and settings (plugins are never copied)</label>
       <button className="btn btn-accent px-4 py-2" disabled={busy || !!reason || !name.trim() || !baseId} onClick={async () => {
         setBusy(true); setError(null)
         const r = await window.obsLoader.instances.create({ baseId, name: name.trim(), copySettings: copy })

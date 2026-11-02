@@ -295,13 +295,15 @@ function registerIpc() {
     try {
       const install = findInstall(r.installId)
       const bundle = exportBundle({
-        host, install, name: r.name, collections: r.collections, profiles: r.profiles, appVersion: app.getVersion(),
+        host, install, name: r.name, collections: r.collections, profiles: r.profiles, appVersion: app.getVersion(), includeSecrets: r.includeKeys === true && (r.format ?? 'file') === 'file',
         bundleBelowBytes: r.media === 'all' ? Infinity : r.media === 'none' ? 0 : undefined,
       })
       let out: string
-      if (r.format === 'file') {
+      if ((r.format ?? 'file') === 'file') {
+        // a file that carries keys says so in its name, so it is obvious in a downloads folder or an email
+        const mark = bundle.manifest.containsSecrets ? ' (CONTAINS STREAM KEYS)' : ''
         const d = await dialog.showSaveDialog({
-          title: 'Save the bundle', defaultPath: `${r.name.replace(/[\\/:*?"<>|]/g, '_')}.obsbundle`,
+          title: 'Save your setup', defaultPath: `${r.name.replace(/[\\/:*?"<>|]/g, '_')}${mark}.obsbundle`,
           filters: [{ name: 'OBS config bundle', extensions: ['obsbundle'] }],
         })
         if (d.canceled || !d.filePath) return null
@@ -316,8 +318,10 @@ function registerIpc() {
       const m = bundle.manifest
       return {
         path: out, collections: m.collections.length, profiles: m.profiles.length,
+        sizeBytes: (() => { try { return fs.statSync(out).isFile() ? fs.statSync(out).size : 0 } catch { return 0 } })(),
         assets: { bundled: m.assets.filter((a) => a.mode === 'bundled').length, external: m.assets.filter((a) => a.mode === 'external').length },
-        secrets: m.variables.filter((v) => v.kind === 'secret').map((v) => v.name),
+        containsSecrets: m.containsSecrets === true,
+        secrets: m.containsSecrets ? [] : m.variables.filter((v) => v.kind === 'secret').map((v) => v.label ?? v.name),
         plugins: m.plugins.map((p) => p.name),
         warnings: [],
       }
@@ -475,6 +479,8 @@ function registerIpc() {
     const r = await dialog.showOpenDialog({ title, properties: [folder ? 'openDirectory' : 'openFile'] })
     return r.canceled ? null : r.filePaths[0] ?? null
   })
+
+  ipcMain.handle('files:reveal', (_e, p: string) => { shell.showItemInFolder(p) })
 
   ipcMain.handle('secrets:load', (_e, id: string) => readSecrets()[id] ?? {})
   ipcMain.handle('secrets:save', (_e, id: string, values: Record<string, string>) => {

@@ -36,14 +36,20 @@ export interface ExportRequest {
   collections: string[]
   profiles: string[]
   media: 'small' | 'all' | 'none'
-  format: 'file' | 'folder'
+  /** Put the stream keys inside the file (clearly labelled). Off unless the person asks. */
+  includeKeys?: boolean
+  format?: 'file' | 'folder'
 }
 
 export interface ExportResult {
   path: string
+  sizeBytes: number
   collections: number
   profiles: number
   assets: { bundled: number; external: number }
+  /** True when the file carries stream keys inside. */
+  containsSecrets: boolean
+  /** What the person will be asked to type again when loading, in words they recognise (empty when keys are inside). */
   secrets: string[]
   plugins: string[]
   warnings: string[]
@@ -155,6 +161,8 @@ export interface Api {
   }
   files: {
     pick(title: string, folder?: boolean): Promise<string | null>
+    /** Show a file in the system's file manager. */
+    reveal(path: string): Promise<void>
   }
   secrets: {
     load(bundleId: string): Promise<Record<string, string>>

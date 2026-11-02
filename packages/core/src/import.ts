@@ -62,6 +62,10 @@ export interface ImportReport {
   missingVariables: { name: string; kind: string; required: boolean }[]
   /** Secrets you did not type in, whose value already in OBS was left as it was (never blanked). */
   keptSecrets: string[]
+  /** The file carries stream keys inside (so it must be handled like a password). */
+  containsSecrets: boolean
+  /** Secrets that were taken from the file itself (not typed in): their names. */
+  includedSecrets: string[]
   usedDefaults: string[]
   missingAssets: { id: string; filename: string; hint?: string }[]
   plugins: PluginFinding[]
@@ -164,7 +168,10 @@ export function planImport(o: ImportOptions): ImportPlan {
   if (m.obsMinVersion) warnings.push(`This setup was made for OBS ${m.obsMinVersion} or newer.`)
 
   // variables
-  const answers = o.variables ?? {}
+  // Secrets that travel inside the file (only when it says so). What the person typed beats them; both beat what is already in OBS.
+  const included: Record<string, string> = {}
+  if (m.containsSecrets === true) for (const v of m.variables) if (v.kind === 'secret' && v.value) included[v.name] = v.value
+  const answers = { ...included, ...(o.variables ?? {}) }
   const folders = { ...defaultFolders(host), ...o.folders, bundle: mediaDir }
   const usedDefaults: string[] = []
   const missingVariables: ImportReport['missingVariables'] = []
@@ -349,7 +356,8 @@ export function planImport(o: ImportOptions): ImportPlan {
     writes,
     report: {
       willWrite: writes.map((w) => ({ path: w.path, action: w.action })),
-      missingVariables: missingVariables.filter((v) => !keptSecrets.has(v.name)), keptSecrets: [...keptSecrets], usedDefaults, missingAssets, plugins, substitutions: subs, warnings, blockers, backupDir,
+      missingVariables: missingVariables.filter((v) => !keptSecrets.has(v.name)), keptSecrets: [...keptSecrets], containsSecrets: m.containsSecrets === true,
+      includedSecrets: Object.keys(included).filter((n) => (o.variables ?? {})[n] === undefined), usedDefaults, missingAssets, plugins, substitutions: subs, warnings, blockers, backupDir,
     },
   }
 }
