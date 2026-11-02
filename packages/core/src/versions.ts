@@ -33,7 +33,7 @@ export function parseObsVersion(globalIni: string): string | undefined {
   return `${major}.${minor}.${patch}`
 }
 
-export interface PluginManagerEntry { module_name: string; display_name?: string; version?: string; enabled?: boolean; sources?: string[] }
+export interface PluginManagerEntry { module_name: string; display_name?: string; version?: string; enabled?: boolean; sources?: string[]; encoders?: string[] }
 
 /**
  * OBS 31 and newer keep a list of every plugin module they have seen, with the version the plugin reports and whether it

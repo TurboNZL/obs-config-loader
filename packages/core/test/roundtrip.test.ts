@@ -93,7 +93,7 @@ describe('import', () => {
     const slash = (x: string) => x.replace(/\\/g, '/') // a fake-Linux import on a Windows runner mixes separators
     expect(slash(ini)).toContain(slash(`FilePath=${nodePath.join(home2, 'Videos')}`))
     expect(ini).toContain('StreamEncoder=x264') // untouched lines survive
-    const g = fs.readFileSync(nodePath.join(cfg2, 'global.ini'), 'utf8')
+    const g = fs.readFileSync(nodePath.join(cfg2, 'user.ini'), 'utf8')
     expect(g).toContain('SceneCollectionFile=Main')
     expect(g).toContain('ProfileDir=Main')
   })

@@ -19,6 +19,7 @@ collections/<id>.json         OBS scene collections, with tokens instead of mach
 profiles/<id>/basic.ini       OBS profile files (output, video, audio settings)
 profiles/<id>/streamEncoder.json, recordEncoder.json, service.json, ...
 media/<assetId>/<filename>    bundled assets (only those with "mode": "bundled")
+profiles/<id>/platforms.json   this profile's encoders and audio devices, one copy per system (see "Per-platform variants")
 scripts/<assetId>/<filename>  OBS scripts (.py, .lua): small, so kept even in the directory form
 global/obs-websocket.json     OBS's remote-control (WebSocket) settings; the password is a secret variable
 ```
@@ -37,6 +38,7 @@ global/obs-websocket.json     OBS's remote-control (WebSocket) settings; the pas
   "generator": { "name": "obs-config-loader", "version": "2026.10.1" },
   "source": { "platform": "linux", "obsVersion": "31.0.0" },
   "obsMinVersion": "28.0.0",
+  "repository": { "url": "https://github.com/me/my-setup.git" },   // only in files: where the preset is kept online (never a password)
   "platformOverrides": { "xcomposite_input": { "win32": "monitor_capture", "linux": null } },  // the person's own translation choices; null = hide it
   "exclude": { "collections": ["Old"], "scripts": true },   // what a save from OBS leaves out
   "savedWithObs": "31.0.2",             // newest OBS version any computer saved this with; only ever goes up
@@ -240,6 +242,23 @@ collections/main.platforms.json   { "<source name>": { "win32": {...}, "linux": 
 - Fields derived from the setup (`plugins`, `platformMap`) are computed from the collection files and the variants,
   never from one machine's live state. `source` and `generator` in a repository's manifest are frozen after the
   first save.
+
+### Profile settings per system
+
+`profiles/<id>/platforms.json` is `{ "<win32|darwin|linux>": { "ini": { "<section>": { "<key>": "<value>" } }, "files": { "streamEncoder.json": "<text>", "recordEncoder.json": "<text>" } } }`:
+the lines of `basic.ini` that only make sense on one system (`[AdvOut]` and `[SimpleOutput]` encoders, `[Audio]` `*Device*` ids)
+and the two encoder settings files. A save replaces only its own system's entry and leaves every other system's as it was,
+even if the computer saving never uses them; the profile's own `basic.ini` and encoder files keep the lines they already had,
+so two systems saving never fight over them. Loading uses the entry for its system when there is one, then checks the
+encoders against what that OBS has (OBS's `plugin_manager/modules.json` lists each module's `encoders`) and swaps any it does
+not have for `obs_x264` / `ffmpeg_aac` (dropping the old encoder's settings file), telling the person. The file is the setup's
+own bookkeeping and is never written into OBS's folders.
+
+## Which profile OBS opens with
+
+OBS 31 and newer keep `Basic/Profile`, `ProfileDir`, `SceneCollection` and `SceneCollectionFile` in `user.ini` (the old
+`global.ini` is only copied from once, on upgrade). Readers prefer `user.ini`; writers update every one of the two that
+exists, and only `user.ini` for an OBS that has never run (a `global.ini` without a version makes a new OBS try to migrate it).
 
 ## Directory form (for git)
 

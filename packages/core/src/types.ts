@@ -68,6 +68,11 @@ export interface Manifest {
   generator?: { name: string; version: string }
   source?: { platform?: Platform; obsVersion?: string }
   obsMinVersion?: string
+  /**
+   * Where this setup is kept online (a git address, never with a password in it). Written into files saved from a preset that is
+   * backed up online, so opening the file anywhere can fetch the latest version. Never written in the preset folder itself.
+   */
+  repository?: { url: string }
   /** Newest OBS version any computer saved this setup with. Only ever goes up. */
   savedWithObs?: string
   /** True when this file carries stream keys / secrets inside (`variables[].value`). Such a file must be treated like a password. */

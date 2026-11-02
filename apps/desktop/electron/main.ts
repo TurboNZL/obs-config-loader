@@ -7,7 +7,7 @@ import {
   gitAvailable, gitInstallHelp, githubAuthGit, githubListRepos, githubWhoAmI, initRepo, markSynced, planImport, portableInstall, publishToGithub,
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
-  assetBundlePath, attachSecrets, commitAll, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
+  assetBundlePath, attachSecrets, commitAll, fetchRepo, publicRemoteUrl, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
   renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, renameSourceInObs, RenameError,
 } from '@obs-config-loader/core'
 import { Updates } from './updater'
@@ -345,7 +345,7 @@ function registerIpc() {
       const bundle = exportBundle({
         host, install, name: r.name, collections: r.collections, profiles: r.profiles, appVersion: app.getVersion(), versions: detectVersions(install, host), includeSecrets: r.includeKeys === true && (r.format ?? 'file') === 'file',
         bundleBelowBytes: r.media === 'all' ? Infinity : r.media === 'none' ? 0 : undefined,
-        alsoBundle: r.alsoBundle, exclude: r.exclude,
+        alsoBundle: r.alsoBundle, exclude: r.exclude, repository: r.repository,
       })
       let out: string
       if ((r.format ?? 'file') === 'file') {
@@ -466,17 +466,71 @@ function registerIpc() {
           if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but pushing failed: ${out.push.message}` }
         } catch (e) { return { ok: false, error: `The repository was created on this computer, but not on GitHub: ${errText(e)}` } }
       }
-      return { ok: true, repo: await repoInfo({ path: r.folder, installId: r.installId }), published }
+      const info = await repoInfo({ path: r.folder, installId: r.installId })
+      return { ok: true, repo: info, published, remoteUrl: info.remoteUrl ? publicRemoteUrl(info.remoteUrl) : undefined }
     } catch (e) { return { ok: false, error: errText(e) } }
   })
 
-  ipcMain.handle('repos:fromBundle', async (_e, handle: string, folder: string) => {
+  ipcMain.handle('repos:fromBundle', async (_e, handle: string, folder: string, installId?: string) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     const b = bundles.get(handle)
     if (!b) return { ok: false, error: 'That bundle is no longer open. Open it again.' }
-    try { await createRepoFromBundle(folder, b, gitRunner()) } catch (e) { return { ok: false, error: errText(e) } }
-    rememberRepo(folder)
-    return { ok: true, repo: await repoInfo({ path: folder }) }
+    // the address is how the file finds its preset; inside the preset folder it is the remote instead
+    const url = b.manifest.repository?.url
+    const { repository: _r, ...manifest } = b.manifest
+    void _r
+    try { await createRepoFromBundle(folder, { ...b, manifest: manifest as typeof b.manifest }, gitRunner()) } catch (e) { return { ok: false, error: errText(e) } }
+    if (url) { try { await setRemote(folder, url, gitRunner()) } catch { /* the preset still works without it */ } }
+    rememberRepo(folder, installId)
+    // the folder holds exactly what was just loaded into OBS: later changes are measured from here
+    if (installId) { try { await markSynced(folder, findInstall(installId), gitRunner()) } catch { /* not worth failing for */ } }
+    return { ok: true, repo: await repoInfo({ path: folder, installId }) }
+  })
+
+  /** A preset this computer already has for the same setup (same id), if any. */
+  const presetFor = (id: string): RepoEntry | undefined => loadSettings().repos.find((r) => {
+    try { return fs.existsSync(r.path) && readBundleDir(r.path).manifest.id === id } catch { return false }
+  })
+  ipcMain.handle('bundle:existing', async (_e, handle: string) => {
+    const b = bundles.get(handle)
+    const hit = b && presetFor(b.manifest.id)
+    return hit ? repoInfo(hit) : null
+  })
+  /** A file that knows its online address: the latest version from there (get updates if we have the preset, else download it). */
+  ipcMain.handle('bundle:latest', async (_e, handle: string) => {
+    if (!(await hasGit())) return { ok: false, error: gitMissing }
+    const b = bundles.get(handle)
+    if (!b) return { ok: false, error: 'That file is no longer open. Open it again.' }
+    const have = presetFor(b.manifest.id)
+    const git = gitRunner()
+    try {
+      if (have) {
+        const r = await pullRepo(have.path, git)
+        if (r.status === 'conflict') return { ok: false, error: 'Your preset and the online copy changed the same part. Open Presets to choose which to keep.' }
+        if (r.status === 'dirty') return { ok: false, error: 'Your preset has changes that are not saved yet. Open Presets and save them first.' }
+        if (r.status === 'error') return { ok: false, error: r.message }
+        return { ok: true, path: have.path, how: r.status === 'updated' ? 'updated' : 'up-to-date' }
+      }
+      const url = b.manifest.repository?.url
+      if (!url) return { ok: false, error: 'This file does not say where it is kept online.' }
+      const v = validateRemoteUrl(url)
+      if (!v.ok) return { ok: false, error: v.message }
+      const folder = suggestFolder(b.manifest.name)
+      try { await cloneRepoWith(v.url, folder) } catch (e) {
+        const t = errText(e)
+        return { ok: false, error: /auth|denied|403|404|not found|could not read|Invalid username/i.test(t) ? 'Could not download it. If it is private, sign in to GitHub in Settings first, then try again.' : t }
+      }
+      if (!fs.existsSync(path.join(folder, 'manifest.json'))) return { ok: false, error: 'It was downloaded, but it is not an OBS setup.' }
+      if (readBundleDir(folder).manifest.id !== b.manifest.id) { fs.rmSync(folder, { recursive: true, force: true }); return { ok: false, error: 'The online copy is a different setup from this file, so it was not used.' } }
+      rememberRepo(folder)
+      return { ok: true, path: folder, how: 'downloaded' }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
+  /** Ask the online copy what is new, so "N to download" is true. */
+  ipcMain.handle('repos:check', async (_e, p: string) => {
+    const git = gitRunner()
+    const r = await fetchRepo(p, git)
+    return { ok: r.ok, message: r.message, repo: await repoInfo({ path: p, installId: loadSettings().repos.find((x) => x.path === p)?.installId }) }
   })
 
   ipcMain.handle('repos:setRemote', async (_e, p: string, url: string) => {
@@ -681,6 +735,9 @@ function registerIpc() {
           a.mode = 'bundled'; b.files.set(assetBundlePath(a), fs.readFileSync(f))
         }
       }
+      // a file made from a preset that is backed up online knows where: opening it anywhere can fetch the latest version
+      const remote = (await repoStatus(p, gitRunner())).remote ? await getRemoteUrl(p, gitRunner()) : undefined
+      if (remote) b.manifest.repository = { url: publicRemoteUrl(remote) }
       const kept = includeKeys ? attachSecrets(b, readSecrets()[b.manifest.id] ?? {}) : 0
       const mark = b.manifest.containsSecrets ? ' (CONTAINS STREAM KEYS)' : ''
       const d = await dialog.showSaveDialog({

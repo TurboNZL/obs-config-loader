@@ -10,6 +10,7 @@ import { readBundleDir, serializeManifest, writeBundleDir, BundleError } from '.
 import { availableOn, isPlatformSpecific, DEFAULT_PLATFORM_MAP } from './sources.js'
 import { unversioned } from './plugins.js'
 import { applyVersions, type DetectedVersions } from './versions.js'
+import { mergeProfileVariants } from './profilevariants.js'
 import { extractVariants, parseVariants, serializeVariants, variantsPathFor } from './variants.js'
 
 // ── git runner ───────────────────────────────────────────────────────────────
@@ -176,6 +177,14 @@ export async function pullRepo(dir: string, git: GitRunner = defaultGit, onConfl
   return { status: 'updated', files }
 }
 
+/** Ask the online copy what is new (so "N to download" is true, not a guess from the last time). Never changes any file. */
+export async function fetchRepo(dir: string, git: GitRunner = defaultGit): Promise<{ ok: boolean; message?: string }> {
+  const st = await repoStatus(dir, git)
+  if (!st.isRepo || !st.remote) return { ok: true }
+  const r = await git(['fetch', '--quiet', st.remote], dir)
+  return r.code === 0 ? { ok: true } : { ok: false, message: (r.stderr.trim() || r.stdout.trim() || 'Could not reach the online copy.').split('\n').slice(-2).join('\n') }
+}
+
 export type PushResult = { status: 'pushed' } | { status: 'nothing' } | { status: 'no-remote' } | { status: 'error'; message: string }
 
 export async function pushRepo(dir: string, git: GitRunner = defaultGit): Promise<PushResult> {
@@ -290,6 +299,7 @@ function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest[
     throw new Error('OBS shows no scene layouts or no output settings to save, so nothing was changed. Open OBS once and try again.')
   }
   if (prev) {
+    mergeProfileVariants(bundle, prev, o.host.platform)
     for (const c of bundle.manifest.collections) {
       const old = prev.manifest.collections.find((x) => x.id === c.id)
       const oldRaw = old && prev.files.get(old.file)

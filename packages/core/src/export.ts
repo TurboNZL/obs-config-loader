@@ -5,11 +5,13 @@ import { FORMAT, FORMAT_VERSION, type Asset, type AssetRole, type Bundle, type M
 import type { Host, ObsInstall } from './detect.js'
 import { escapeLiteral, looksLikeAbsolutePath, mapStrings, splitPath } from './tokens.js'
 import { getIni, mapIniValues } from './ini.js'
+import { readActive } from './userconfig.js'
 import { SecretScrubber } from './secrets.js'
 import { DEFAULT_PLATFORM_MAP, isPlatformSpecific } from './sources.js'
 import { extractVariants, parseVariants, serializeVariants, variantsPathFor } from './variants.js'
 import { FILE_HINTS, installedModules, manifestPlugins, pluginReport, usedIds } from './plugins.js'
 import { applyVersions, type DetectedVersions } from './versions.js'
+import { addProfileVariants } from './profilevariants.js'
 
 export interface ExportOptions {
   host: Host
@@ -27,6 +29,8 @@ export interface ExportOptions {
   alsoBundle?: string[]
   /** Things left out of this setup (names as OBS has them). Everything else in OBS is kept. */
   exclude?: Manifest['exclude']
+  /** Where this setup is kept online, to write into a file made from it. */
+  repository?: string
   /**
    * Put the stream keys and other secrets INTO the file. Off by default, and the file is then labelled everywhere
    * (`containsSecrets`, a warning in the manifest, a README in the zip). Never allowed for the git folder form.
@@ -163,12 +167,10 @@ function readJson(p: string): any | undefined {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return undefined }
 }
 
-/** Active names from global.ini, used as defaults. */
+/** Active names (user.ini on OBS 31+, global.ini before), used as defaults. */
 function activeFromGlobal(configDir: string): { collection?: string; profile?: string } {
-  try {
-    const t = fs.readFileSync(nodePath.join(configDir, 'global.ini'), 'utf8')
-    return { collection: getIni(t, 'Basic', 'SceneCollectionFile'), profile: getIni(t, 'Basic', 'ProfileDir') }
-  } catch { return {} }
+  const a = readActive(configDir)
+  return { collection: a.collectionFile, profile: a.profileDir }
 }
 
 export const SECRETS_WARNING =
@@ -316,7 +318,9 @@ export function exportBundle(opts: ExportOptions): Bundle {
     plugins: [],
     platformMap: [],
   }
+  if (opts.repository) manifest.repository = { url: opts.repository }
   const bundle: Bundle = { manifest, files }
+  addProfileVariants(bundle, host.platform) // this system's own encoders and audio devices, kept apart from other systems'
   deriveManifestFields(bundle)
   applyVersions(manifest, undefined, opts.versions)
   if (opts.includeSecrets && manifest.variables.some((v) => v.kind === 'secret' && v.value)) {
