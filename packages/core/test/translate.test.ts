@@ -205,3 +205,55 @@ describe('changing what a preset leaves out', () => {
     expect(readBundleDir(dir).manifest.exclude).toBeUndefined()
   })
 })
+
+describe('what a person sees when loading', () => {
+  it('a Linux-only plugin is "not needed" on Windows, and nothing blocks the load', () => {
+    const b: Bundle = {
+      manifest: parseManifest({
+        format: 'obs-config-bundle', version: 1, id: 'i', name: 'n', source: { platform: 'linux' },
+        collections: [{ id: 'c', name: 'C', file: 'collections/c.json' }],
+        plugins: [{ id: 'obs-pipewire-audio-capture', name: 'PipeWire Audio Capture', provides: [{ kind: 'module', id: 'linux-pipewire-audio' }] }],
+      }),
+      files: new Map([['collections/c.json', Buffer.from(JSON.stringify({ name: 'C', sources: [{ id: 'pipewire_audio_output_capture', name: 'Desktop', settings: {} }] }))]]),
+    }
+    const plan = planImport({ bundle: b, install: { ...install('C:\\cfg'), platform: 'win32' }, host: host('win32', 'C:\\Users\\u') })
+    expect(plan.report.plugins).toEqual([expect.objectContaining({ status: 'not-needed' })])
+    expect(plan.report.blockers).toEqual([])
+    expect(plan.writes.length).toBeGreaterThan(0)
+    const col = JSON.parse(plan.writes.find((w) => w.kind === 'collection')!.data.toString())
+    expect(col.sources[0].id).toBe('wasapi_output_capture')
+    // on Linux it is still checked
+    const lin = planImport({ bundle: b, install: install(nodePath.join(tmp, 'c')), host: host('linux', tmp) })
+    expect(lin.report.plugins[0].status).not.toBe('not-needed')
+  })
+
+  it('Aitum Stream Suite is recognised from its own files and source, and its stream keys are kept out', () => {
+    const home = nodePath.join(tmp, 'home'); const { cfg } = makeSource(home)
+    fs.writeFileSync(nodePath.join(cfg, 'basic/profiles/Main/aitum.json'), JSON.stringify({ outputs: [{ name: 'Vertical Stream', type: 'stream', server: 'rtmp://a', key: 'AITUM-SECRET-1' }], canvas: { name: 'Vertical' } }))
+    const b = exportBundle({ host: host('linux', home), install: install(cfg), name: 'x' })
+    const p = b.manifest.plugins.find((x) => x.id === 'aitum-stream-suite')!
+    expect(p.name).toBe('Aitum Stream Suite')
+    expect([...b.files.values()].map((x) => x.toString()).join('\n')).not.toContain('AITUM-SECRET-1')
+    expect(b.manifest.variables.find((v) => v.target?.includes('aitum.json'))!.label).toBe('Aitum Stream Suite: “Vertical Stream”')
+    // not installed here: said plainly, with how to get it
+    const plan = planImport({ bundle: b, install: install(nodePath.join(tmp, 'o')), host: host('linux', tmp) })
+    expect(plan.report.plugins.find((f) => f.plugin.id === 'aitum-stream-suite')!.status).toBe('missing')
+    // a setup that uses only its source (no profile file) is recognised too
+    fs.rmSync(nodePath.join(cfg, 'basic/profiles/Main/aitum.json'))
+    const sc = nodePath.join(cfg, 'basic/scenes/Main.json'); const j = JSON.parse(fs.readFileSync(sc, 'utf8')); j.sources.push({ id: 'component_source', name: 'Comp', uuid: 'u-c', settings: {} }); fs.writeFileSync(sc, JSON.stringify(j))
+    expect(exportBundle({ host: host('linux', home), install: install(cfg), name: 'x' }).manifest.plugins.map((x) => x.id)).toContain('aitum-stream-suite')
+  })
+
+  it('the person can choose, for this load, what a source becomes or that it is hidden', () => {
+    const b = windowsSetup()
+    const { byName, plan } = toLinux(b, { installed: { obs: '33.0.0' }, sourceChoices: { window_capture: 'xcomposite_input', wasapi_input_capture: null } })
+    expect(byName('Game window').id).toBe('xcomposite_input')
+    expect(byName('Mic').id).toBe('wasapi_input_capture')
+    const row = plan.report.substitutions.find((s) => s.source === 'Mic')!
+    expect(row).toMatchObject({ result: 'disabled', fromName: 'Audio Input Capture (Windows)' })
+    expect(row.options!.map((o) => o.id)).toContain('pulse_input_capture')
+    const win = plan.report.substitutions.find((s) => s.source === 'Game window')!
+    expect(win.options!.map((o) => o.name)).toContain('Screen Capture (PipeWire)')
+    expect(win.toName).toBe('Window Capture (X11)')
+  })
+})

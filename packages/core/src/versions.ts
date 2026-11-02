@@ -88,6 +88,8 @@ export function detectPluginVersions(install: ObsInstall, host: Host): Record<st
   const out: Record<string, string> = {}
   for (const e of readPluginManager(install)) if (e.version?.trim()) out[moduleKey(e.module_name)] = e.version.trim()
   const have = (k: string) => k in out
+  // On Windows the only other way is starting PowerShell, which is slow: OBS's own list is complete, so only fall back when it does not exist (older OBS)
+  if (host.platform === 'win32' && (Object.keys(out).length || readPluginManager(install).length)) return out
   try {
     if (host.platform === 'darwin') {
       for (const dir of install.pluginDirs) {
@@ -101,8 +103,9 @@ export function detectPluginVersions(install: ObsInstall, host: Host): Record<st
       }
     } else if (host.platform === 'win32') {
       for (const dir of install.pluginDirs.filter((d) => host.isDir(d))) {
-        const script = `Get-ChildItem -LiteralPath $args[0] -Recurse -Filter *.dll | ForEach-Object { $_.BaseName + '|' + $_.VersionInfo.FileVersion }`
-        const text = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script, dir], { encoding: 'utf8', timeout: 8000 })
+        // the folder goes in through the environment: arguments after -Command are glued onto the command, not passed as $args
+        const script = `Get-ChildItem -LiteralPath $env:OBSCL_DIR -Recurse -Filter *.dll | ForEach-Object { $_.BaseName + '|' + $_.VersionInfo.FileVersion }`
+        const text = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 8000, env: { ...process.env, OBSCL_DIR: dir } })
         for (const line of text.split(/\r?\n/)) {
           const [n, v] = line.split('|')
           if (n && v?.trim() && !have(moduleKey(n))) out[moduleKey(n)] = v.trim().replace(/(\.0)+$/, '')

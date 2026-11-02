@@ -14,6 +14,15 @@ import { Updates } from './updater'
 import type { BundleSummary, ExportRequest, ExportResult, GithubState, ImportRequest, InstallInfo, Locations, RepoInfo } from './api'
 
 const host = realHost()
+/** Versions are asked for on every refresh of a summary; reading them once a minute per OBS is plenty. */
+const versionsCache = new Map<string, { at: number; v: ReturnType<typeof detectVersions> }>()
+function versionsOf(i: ObsInstall) {
+  const hit = versionsCache.get(i.id)
+  if (hit && Date.now() - hit.at < 60_000) return hit.v
+  const v = detectVersions(i, host)
+  versionsCache.set(i.id, { at: Date.now(), v })
+  return v
+}
 /** Pictures, sounds and videos up to this size travel inside a file by themselves; bigger ones only when chosen. */
 const SMALL_FILE = 5 * 1024 * 1024
 const bundles = new Map<string, Bundle & { source: string }>()
@@ -318,7 +327,7 @@ function registerIpc() {
       bundle: b, install: findInstall(r.installId), host,
       collections: r.collections, profiles: r.profiles, variables: r.variables, assetFiles: r.assetFiles,
       conflict: r.conflict, activate: r.activate, preferPipewire: r.preferPipewire, obsRunning: await obsRunningFor(findInstall(r.installId)),
-      installed: detectVersions(findInstall(r.installId), host), websocket: r.websocket,
+      installed: versionsOf(findInstall(r.installId)), websocket: r.websocket, sourceChoices: r.sourceChoices,
     }
   }
   ipcMain.handle('import:plan', async (_e, r: ImportRequest) => planImport(await importOpts(r)).report)
