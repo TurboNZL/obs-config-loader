@@ -5,11 +5,21 @@ OBS Config Loader moves your whole OBS setup between computers, and can keep it 
 ## Presets
 A **preset** is a saved copy of your OBS setup: your scenes, output settings, plugin list, scripts and OBS's remote-control settings. Everything lives under **Presets**.
 
-- **New preset from my OBS** saves what is in OBS now. Each preset gets its own folder inside the app's presets folder (change it under **Settings**).
+- **Save my OBS setup** is the one place to save. Pick what to include, then where it goes: **as a preset** on this computer (the default), **backed up online**, **also as one file**, or just a file. A preset is optional. Each preset gets its own folder inside the app's presets folder.
 - **Save OBS to this preset** updates it after you change things in OBS.
 - **Load into OBS…** puts a preset into the OBS on this computer. Close OBS first: it saves over its own files when it closes and would undo the change. Before you load, the app shows **what will happen** in plain words: what will be replaced (a backup copy is always kept first), which plugins you still need, and anything you need to set up again.
-- **Save to a file…** makes one file you can copy to another computer (USB stick, cloud drive, anything). On that computer press **Open a setup file…** on the Presets page.
+- **Save to a file…** on a preset makes one file you can copy to another computer (USB stick, cloud drive, anything). On that computer press **Open a setup file…** on the Presets page.
+- **Big files.** Before a file is made the app lists the pictures, music and videos your scenes use, with their sizes. Small ones (under 5 MB) go in by themselves; big ones only when you tick them, so you can see what makes the file big. Presets never keep big files, and neither does GitHub: the other computer asks for them.
 - **Back up online** keeps a copy on GitHub that is updated every time you save. Switch it on per preset; you can use the same preset on all your computers.
+
+## Choosing what a preset saves
+Under **Show details**, **What this preset saves** lets you untick scene layouts, output settings, scripts or OBS's remote-control settings. Anything new you add in OBS is kept unless you leave it out. Stream keys and big files are never in a preset, so they never reach GitHub. (GitHub's own "secrets" feature cannot be used for stream keys: it can only hand a secret to GitHub's own automation, never read it back to your computer.)
+
+## Moving a preset
+**Show details**, then **Move to another folder…** moves a preset (its history comes with it). Under **Settings** you can change where new presets go, and move your existing ones there too.
+
+## When a setup moves between Windows, Linux and Mac
+Sources that only exist on one system are swapped for the closest one. Examples: Windows window capture becomes PipeWire screen capture on Linux; Windows application audio capture and PipeWire application audio swap with each other; a Windows window capture with **capture audio** switched on becomes a PipeWire capture plus its own application audio source. You pick the window or program again either way. If the app guessed wrong, open **Show details** on the preset and change **How sources change on other computers**. PipeWire audio needs the PipeWire Audio Capture plugin; the app says so when it is missing.
 
 ## Renaming
 Open **Show details** on a preset to rename the preset, a scene layout, output settings, a scene, or any source. The new name is used everywhere it appears, and if your OBS has the same thing, it is renamed there too (close OBS first). Nothing is left behind under the old name.
@@ -38,7 +48,7 @@ Presets use Git (a free tool) and, optionally, GitHub. Everything is done in the
 Capture sources (a window, a screen, a game, an audio device) only exist on some systems and never carry over. A setup keeps **one version of each per system**: set up your Windows game capture on Windows and your PipeWire capture on Linux, and saving on one never overwrites the other. When you load the setup, it uses that system's own version. If a system has none yet, the app says which captures need setting up again.
 
 ## A second OBS (a light one for everyday, a heavy one for plugins)
-Under **OBS on this computer**, *Make a second OBS* creates another copy of OBS with its **own scenes, settings and plugins**. Put a heavy plugin (a multistream add-on, say) only in the second one and your everyday OBS starts as fast as before. Both can be open at the same time.
+Under **OBS on this computer**, *Make a second OBS* runs the same OBS program with its **own scenes, settings and plugins**. It starts completely fresh, as if OBS had just been installed: nothing from your other OBS is copied unless you tick the option to start from a copy (that copies stream keys too). It never copies a portable OBS folder. Put a heavy plugin (a multistream add-on, say) only in the second one and your everyday OBS starts as fast as before. Both can be open at the same time.
 
 - Works for the Linux system package and for Flatpak. Windows and Mac give OBS no way to use another settings folder; use OBS in its own folder there (add it with *Add OBS from a folder*).
 - After *Start OBS* the app checks that the second OBS really uses its own settings. If it did not (for example Flatpak ignored the setting), it tells you not to load anything into it.

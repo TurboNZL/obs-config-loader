@@ -3,7 +3,6 @@ import type { InstallInfo } from '../../electron/api'
 import { HomePage } from './pages/Home'
 import { InstallsPage } from './pages/Installs'
 import { ImportPage } from './pages/Import'
-import { ExportPage } from './pages/Export'
 import { PresetsPage } from './pages/Presets'
 import { SettingsPage } from './pages/Settings'
 import { AppearancePage } from './pages/Appearance'
@@ -11,7 +10,7 @@ import { AboutPage } from './pages/About'
 import { GuidesPage } from './pages/Guides'
 import { WindowFrame } from './components/WindowFrame'
 
-type Tab = 'home' | 'presets' | 'installs' | 'import' | 'export' | 'settings' | 'guides' | 'appearance' | 'about'
+type Tab = 'home' | 'presets' | 'installs' | 'import' | 'settings' | 'guides' | 'appearance' | 'about'
 const TABS: [Tab, string][] = [
   ['home', 'Home'], ['presets', 'Presets'], ['installs', 'OBS on this computer'], ['settings', 'Settings'],
   ['guides', 'Help'], ['appearance', 'Look'], ['about', 'About'],
@@ -26,7 +25,7 @@ export function App() {
   const refresh = () => window.obsLoader.installs.list().then(setInstalls)
   useEffect(() => { void refresh() }, [])
 
-  const go = (t: Tab, installId?: string) => { setPreselect(installId); setOpenPath(undefined); setTab(t) }
+  const go = (t: Tab, installId?: string) => { setPreselect(installId); setOpenPath(undefined); setTab(t); void refresh() }
   const applyRepo = (dir: string, installId?: string) => { setPreselect(installId); setOpenPath(dir); setTab('import') }
 
   return (
@@ -45,8 +44,7 @@ export function App() {
         {tab === 'home' && <HomePage installs={installs} go={(t) => go(t)} />}
         {tab === 'installs' && <InstallsPage installs={installs} refresh={refresh} go={go} />}
         {tab === 'import' && <ImportPage installs={installs} preselect={preselect} openPath={openPath} refresh={refresh} />}
-        {tab === 'export' && <ExportPage installs={installs} preselect={preselect} />}
-        {tab === 'presets' && <PresetsPage installs={installs} applyRepo={applyRepo} go={(t) => go(t)} />}
+        {tab === 'presets' && <PresetsPage installs={installs} applyRepo={applyRepo} go={(t) => go(t)} startWith={preselect} refreshInstalls={refresh} />}
         {tab === 'settings' && <SettingsPage />}
         {tab === 'appearance' && <AppearancePage />}
         {tab === 'guides' && <GuidesPage />}

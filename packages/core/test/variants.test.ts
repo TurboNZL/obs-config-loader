@@ -115,7 +115,7 @@ describe('a setup shared between a Linux and a Windows machine', () => {
     const forLinux = planImport({ bundle: b, install: install(nodePath.join(homeC, 'cfg')), host: host('linux', homeC), assetFiles: { mix: A.big } })
     const winL = JSON.parse(forLinux.writes.find((w) => w.kind === 'collection')!.data.toString()).sources.find((s: any) => s.name === 'Window')
     expect(winL).toMatchObject({ id: 'xcomposite_input', settings: { capture_window: '0x999' } })
-    expect(forLinux.report.substitutions).toEqual([expect.objectContaining({ source: 'Window', result: 'variant' })])
+    expect(forLinux.report.substitutions).toEqual([expect.objectContaining({ source: 'Window', result: 'variant' }), expect.objectContaining({ source: 'Game audio', result: 'variant' })])
 
     const forWin = planImport({ bundle: b, install: { ...install('C:\\cfg'), platform: 'win32' }, host: host('win32', 'C:\\Users\\u'), assetFiles: { mix: 'D:\\mix.mp3' } })
     const winW = JSON.parse(forWin.writes.find((w) => w.kind === 'collection')!.data.toString()).sources.find((s: any) => s.name === 'Window')
@@ -123,7 +123,7 @@ describe('a setup shared between a Linux and a Windows machine', () => {
 
     const forMac = planImport({ bundle: b, install: install(nodePath.join(homeC, 'm')), host: host('darwin', homeC), assetFiles: { mix: A.big } })
     expect(JSON.parse(forMac.writes.find((w) => w.kind === 'collection')!.data.toString()).sources.find((s: any) => s.name === 'Window').id).toBe('screen_capture')
-    expect(forMac.report.substitutions).toEqual([expect.objectContaining({ result: 'substituted' })])
+    expect(forMac.report.substitutions).toContainEqual(expect.objectContaining({ source: 'Window', result: 'substituted' }))
   })
 
   it('a zip export carries the variants too', () => {

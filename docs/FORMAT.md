@@ -37,6 +37,8 @@ global/obs-websocket.json     OBS's remote-control (WebSocket) settings; the pas
   "generator": { "name": "obs-config-loader", "version": "2026.10.1" },
   "source": { "platform": "linux", "obsVersion": "31.0.0" },
   "obsMinVersion": "28.0.0",
+  "platformOverrides": { "xcomposite_input": { "win32": "monitor_capture", "linux": null } },  // the person's own translation choices; null = hide it
+  "exclude": { "collections": ["Old"], "scripts": true },   // what a save from OBS leaves out
   "savedWithObs": "31.0.2",             // newest OBS version any computer saved this with; only ever goes up
 
   "collections": [{ "id": "main", "name": "Main", "file": "collections/main.json" }],
@@ -145,7 +147,24 @@ looked for in OBS's own module list (`<settings folder>/plugin_manager/modules.j
 module name). The importer detects missing plugins by checking every `id` used in the collection
 against what the target OBS has (module files present, or built-in ids).
 
+### `platformOverrides` and `exclude`
+
+`platformOverrides` is `{ "<source id>": { "<win32|darwin|linux|linux-pipewire>": "<id>" | null } }`: how the person wants a
+source translated on another system. It wins over `platformMap` and over the built-in table, and a save never rewrites it
+(unlike `platformMap`, which is derived).
+
+`exclude` is `{ collections?: string[], profiles?: string[], remoteControl?: boolean, scripts?: boolean }`: what saving from
+OBS into this setup leaves out (names as OBS has them). Everything else in OBS is kept, including things added later. A save
+reads it from the setup's *current* files, not from the commit OBS last matched.
+
 ### `platformMap`: sources that exist only on some platforms
+
+Audio and capture sources translate in both directions (application audio: `wasapi_process_output_capture` ↔
+`pipewire_audio_application_capture`, input and output audio likewise). On Linux `to["linux-pipewire"]` is used when the person
+prefers PipeWire; PipeWire audio ids are only used when the plugin is installed (application audio always, as it has no other
+stand-in). Before OBS 30.2 the unified `pipewire-screen-capture-source` is replaced by the two older PipeWire sources.
+A Windows `window_capture` / `game_capture` with `capture_audio: true` becomes the stand-in plus a separate application audio
+source placed after it in each scene that has it.
 
 Capture sources are platform-specific. A collection records the original; this table says what
 may stand in for it elsewhere.

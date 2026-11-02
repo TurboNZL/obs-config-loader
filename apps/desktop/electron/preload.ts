@@ -60,6 +60,7 @@ const api: Api = {
     setAsset: (p, a, f) => call('repos:setAsset', p, a, f),
     openFolder: (p) => call('repos:openFolder', p),
   },
+  obs: { scan: (id) => call('obs:scan', id) },
   settings: {
     get: () => call('settings:get'),
     setPresetsRoot: (p) => call('settings:setPresetsRoot', p),
@@ -68,7 +69,11 @@ const api: Api = {
   presets: {
     details: (p) => call('presets:details', p),
     keys: (p) => call('presets:keys', p),
-    exportFile: (p, k) => call('presets:exportFile', p, k),
+    exportFile: (p, k, a) => call('presets:exportFile', p, k, a),
+    scanFile: (p) => call('presets:scanFile', p),
+    setExclude: (p, e) => call('presets:setExclude', p, e),
+    setOverrides: (p, o) => call('presets:setOverrides', p, o),
+    move: (p, parent) => call('presets:move', p, parent),
     rename: (r) => call('presets:rename', r),
     setOnline: (p, on, n, priv) => call('presets:setOnline', p, on, n, priv),
   },

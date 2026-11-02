@@ -41,7 +41,14 @@ export interface ExportRequest {
   /** Put the stream keys inside the file (clearly labelled). Off unless the person asks. */
   includeKeys?: boolean
   format?: 'file' | 'folder'
+  /** Big files the person chose to put inside the file (by id, from `obs.scan`). */
+  alsoBundle?: string[]
+  /** Things left out (names as OBS has them). */
+  exclude?: { collections?: string[]; profiles?: string[]; remoteControl?: boolean; scripts?: boolean }
 }
+
+export interface FileChoice { id: string; filename: string; size: number; available: boolean; auto: boolean }
+export interface ObsScan { files: FileChoice[]; scripts: string[]; remoteControl: boolean; keys: string[] }
 
 export interface ExportResult {
   path: string
@@ -91,7 +98,14 @@ export type SaveConflictChoice = 'abort' | 'keep-repo' | 'keep-obs'
 export type PullConflictChoice = 'abort' | 'keep-mine' | 'keep-theirs'
 
 export interface AppSettings { presetsRoot: string; defaultPresetsRoot: string; isDefault: boolean; rememberKeys: boolean; canStoreKeys: boolean }
+export interface TranslationRow {
+  from: string
+  name: string
+  targets: { platform: 'win32' | 'darwin' | 'linux'; label: string; default: string | null; defaultName: string | null; chosen: string | null | undefined; options: { id: string; name: string }[] }[]
+}
 export interface PresetDetails {
+  exclude: { collections?: string[]; profiles?: string[]; remoteControl?: boolean; scripts?: boolean }
+  translations: TranslationRow[]
   savedWithObs?: string
   plugins: { name: string; version?: string; known: boolean }[]
   scripts: string[]
@@ -154,7 +168,7 @@ export interface Api {
     suggestFolder(name: string): Promise<string>
     addExisting(): Promise<Done<{ repo: RepoInfo }>>
     clone(url: string, folder: string): Promise<Done<{ repo: RepoInfo }>>
-    create(r: { installId: string; name: string; folder: string; github?: { private: boolean } }): Promise<Done<{ repo: RepoInfo; published?: string }>>
+    create(r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude'] }): Promise<Done<{ repo: RepoInfo; published?: string }>>
     fromBundle(handle: string, folder: string): Promise<Done<{ repo: RepoInfo }>>
     remove(path: string): Promise<void>
     setInstall(path: string, installId: string): Promise<void>
@@ -170,6 +184,7 @@ export interface Api {
     setAsset(path: string, assetId: string, file: string): Promise<void>
     openFolder(path: string): Promise<void>
   }
+  obs: { scan(installId: string): Promise<ObsScan> }
   settings: {
     get(): Promise<AppSettings>
     setPresetsRoot(path: string | null): Promise<void>
@@ -178,7 +193,11 @@ export interface Api {
   presets: {
     details(path: string): Promise<PresetDetails>
     keys(path: string): Promise<{ count: number; canStore: boolean }>
-    exportFile(path: string, includeKeys: boolean): Promise<Done<{ path: string; keys: number; missingMedia: string[] }>>
+    exportFile(path: string, includeKeys: boolean, alsoBundle?: string[]): Promise<Done<{ path: string; keys: number; missingMedia: string[] }>>
+    scanFile(path: string): Promise<FileChoice[]>
+    setExclude(path: string, exclude: NonNullable<ExportRequest['exclude']>): Promise<Done<object>>
+    setOverrides(path: string, overrides: Record<string, Record<string, string | null>>): Promise<Done<object>>
+    move(path: string, parentFolder: string): Promise<Done<{ repo: RepoInfo }>>
     rename(r: RenameRequest): Promise<Done<{ alsoInObs: boolean }>>
     setOnline(path: string, on: boolean, name: string, priv: boolean): Promise<Done<{ url?: string; needsAccount?: boolean }>>
   }

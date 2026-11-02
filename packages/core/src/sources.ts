@@ -20,6 +20,10 @@ export const SOURCE_PLATFORMS: Record<string, Platform[]> = {
   'pipewire-window-capture-source': ['linux'],
   'pipewire-screen-capture-source': ['linux'],
   'pipewire-camera-source': ['linux'],
+  // the PipeWire audio plugin (obs-pipewire-audio-capture, module linux-pipewire-audio): Linux only
+  pipewire_audio_application_capture: ['linux'],
+  pipewire_audio_input_capture: ['linux'],
+  pipewire_audio_output_capture: ['linux'],
   display_capture: ['darwin'],
   screen_capture: ['darwin'],
   'macos-avcapture': ['darwin'],
@@ -39,36 +43,60 @@ export const SOURCE_PLATFORMS: Record<string, Platform[]> = {
 }
 
 /** What may stand in for each platform-specific source on another platform (first available wins). */
+/**
+ * The newest PipeWire capture ids (OBS 30.2 and later) are one "Screen Capture" source that picks a window or a display
+ * through the system's own dialog. Older OBS has two. `to['linux-pipewire']` is the newer id; see `legacyPipewireId`.
+ */
+export const PIPEWIRE_SCREEN = 'pipewire-screen-capture-source'
+export const PIPEWIRE_UNIFIED_SINCE = '30.2.0'
+/** Before OBS 30.2: which of the two older PipeWire sources stands in. */
+export function legacyPipewireId(from: string): string {
+  return /window|xcomposite|game/.test(from) ? 'pipewire-window-capture-source' : 'pipewire-desktop-capture-source'
+}
+/** Ids from the PipeWire audio plugin (not built into OBS). */
+export const PIPEWIRE_AUDIO_MODULE = 'linux-pipewire-audio'
+export const isPipewireAudioId = (id: string) => id.startsWith('pipewire_audio_')
+
 export const DEFAULT_PLATFORM_MAP: PlatformMapEntry[] = [
   {
     from: 'window_capture',
-    to: { darwin: 'screen_capture', linux: 'xcomposite_input', 'linux-pipewire': 'pipewire-window-capture-source' },
+    to: { darwin: 'screen_capture', linux: 'xcomposite_input', 'linux-pipewire': PIPEWIRE_SCREEN },
     note: 'The window choice cannot be translated; pick the window again.',
   },
   {
+    from: 'game_capture',
+    to: { darwin: 'screen_capture', linux: 'xcomposite_input', 'linux-pipewire': PIPEWIRE_SCREEN },
+    note: 'Game capture only exists on Windows. This captures a window or screen instead; pick it again.',
+  },
+  {
     from: 'monitor_capture',
-    to: { darwin: 'display_capture', linux: 'xshm_input_v2', 'linux-pipewire': 'pipewire-desktop-capture-source' },
+    to: { darwin: 'display_capture', linux: 'xshm_input_v2', 'linux-pipewire': PIPEWIRE_SCREEN },
     note: 'Pick the display again.',
   },
   {
     from: 'display_capture',
-    to: { win32: 'monitor_capture', linux: 'xshm_input_v2', 'linux-pipewire': 'pipewire-desktop-capture-source' },
+    to: { win32: 'monitor_capture', linux: 'xshm_input_v2', 'linux-pipewire': PIPEWIRE_SCREEN },
     note: 'Pick the display again.',
   },
   {
     from: 'xcomposite_input',
-    to: { win32: 'window_capture', darwin: 'screen_capture', 'linux-pipewire': 'pipewire-window-capture-source' },
+    to: { win32: 'window_capture', darwin: 'screen_capture', 'linux-pipewire': PIPEWIRE_SCREEN },
     note: 'Pick the window again.',
   },
   {
     from: 'xshm_input',
-    to: { win32: 'monitor_capture', darwin: 'display_capture', 'linux-pipewire': 'pipewire-desktop-capture-source' },
+    to: { win32: 'monitor_capture', darwin: 'display_capture', 'linux-pipewire': PIPEWIRE_SCREEN },
     note: 'Pick the display again.',
   },
   {
     from: 'xshm_input_v2',
-    to: { win32: 'monitor_capture', darwin: 'display_capture', 'linux-pipewire': 'pipewire-desktop-capture-source' },
+    to: { win32: 'monitor_capture', darwin: 'display_capture', 'linux-pipewire': PIPEWIRE_SCREEN },
     note: 'Pick the display again.',
+  },
+  {
+    from: PIPEWIRE_SCREEN,
+    to: { win32: 'monitor_capture', darwin: 'display_capture', linux: 'xshm_input_v2' },
+    note: 'This one source can be a window or a display, so which it was is not known: it becomes a display capture. Change that in the preset settings if it was a window.',
   },
   {
     from: 'pipewire-window-capture-source',
@@ -81,24 +109,25 @@ export const DEFAULT_PLATFORM_MAP: PlatformMapEntry[] = [
     note: 'Pick the display again.',
   },
   {
-    from: 'pipewire-screen-capture-source',
-    to: { win32: 'monitor_capture', darwin: 'display_capture', linux: 'xshm_input_v2' },
-    note: 'Pick the display again.',
-  },
-  {
     from: 'text_gdiplus',
     to: { darwin: 'text_ft2_source', linux: 'text_ft2_source' },
     note: 'Text appearance settings differ between the two text sources; check the font and colour.',
   },
+  // ── audio ──
   {
     from: 'wasapi_input_capture',
-    to: { darwin: 'coreaudio_input_capture', linux: 'pulse_input_capture' },
+    to: { darwin: 'coreaudio_input_capture', linux: 'pulse_input_capture', 'linux-pipewire': 'pipewire_audio_input_capture' },
     note: 'Pick the audio device again.',
   },
   {
     from: 'wasapi_output_capture',
-    to: { darwin: 'coreaudio_output_capture', linux: 'pulse_output_capture' },
+    to: { darwin: 'coreaudio_output_capture', linux: 'pulse_output_capture', 'linux-pipewire': 'pipewire_audio_output_capture' },
     note: 'Pick the audio device again.',
+  },
+  {
+    from: 'wasapi_process_output_capture',
+    to: { darwin: 'sck_audio_capture', 'linux-pipewire': 'pipewire_audio_application_capture' },
+    note: 'Pick the application again.',
   },
   {
     from: 'pulse_input_capture',
@@ -111,14 +140,34 @@ export const DEFAULT_PLATFORM_MAP: PlatformMapEntry[] = [
     note: 'Pick the audio device again.',
   },
   {
+    from: 'pipewire_audio_input_capture',
+    to: { win32: 'wasapi_input_capture', darwin: 'coreaudio_input_capture' },
+    note: 'Pick the audio device again.',
+  },
+  {
+    from: 'pipewire_audio_output_capture',
+    to: { win32: 'wasapi_output_capture', darwin: 'coreaudio_output_capture' },
+    note: 'Pick the audio device again.',
+  },
+  {
+    from: 'pipewire_audio_application_capture',
+    to: { win32: 'wasapi_process_output_capture', darwin: 'sck_audio_capture' },
+    note: 'Pick the application again.',
+  },
+  {
     from: 'coreaudio_input_capture',
-    to: { win32: 'wasapi_input_capture', linux: 'pulse_input_capture' },
+    to: { win32: 'wasapi_input_capture', linux: 'pulse_input_capture', 'linux-pipewire': 'pipewire_audio_input_capture' },
     note: 'Pick the audio device again.',
   },
   {
     from: 'coreaudio_output_capture',
-    to: { win32: 'wasapi_output_capture', linux: 'pulse_output_capture' },
+    to: { win32: 'wasapi_output_capture', linux: 'pulse_output_capture', 'linux-pipewire': 'pipewire_audio_output_capture' },
     note: 'Pick the audio device again.',
+  },
+  {
+    from: 'sck_audio_capture',
+    to: { win32: 'wasapi_output_capture', linux: 'pulse_output_capture', 'linux-pipewire': 'pipewire_audio_output_capture' },
+    note: 'macOS audio capture can be one application or the whole computer; it becomes the whole computer here. Change that in the preset settings if needed.',
   },
 ]
 
@@ -136,4 +185,37 @@ export function isPlatformSpecific(id: string): boolean {
 export function availableOn(id: string, platform: Platform): boolean {
   const p = SOURCE_PLATFORMS[id]
   return !p || p.includes(platform)
+}
+
+/** Names a person knows these sources by, for the translation editor. */
+export const SOURCE_NAMES: Record<string, string> = {
+  window_capture: 'Window Capture', monitor_capture: 'Display Capture', game_capture: 'Game Capture', dshow_input: 'Video Capture Device',
+  xcomposite_input: 'Window Capture (X11)', xshm_input: 'Screen Capture (X11)', xshm_input_v2: 'Display Capture (X11)', v4l2_input: 'Video Capture Device (V4L2)',
+  'pipewire-desktop-capture-source': 'Screen Capture (PipeWire, older)', 'pipewire-window-capture-source': 'Window Capture (PipeWire, older)',
+  'pipewire-screen-capture-source': 'Screen Capture (PipeWire)', 'pipewire-camera-source': 'Camera (PipeWire)',
+  display_capture: 'Display Capture (macOS)', screen_capture: 'Screen Capture (macOS)', 'macos-avcapture': 'Video Capture Device (macOS)',
+  'macos-avcapture-fast': 'Video Capture Device (macOS)', 'syphon-input': 'Syphon Client', text_gdiplus: 'Text (GDI+)', text_ft2_source: 'Text (FreeType 2)',
+  wasapi_input_capture: 'Audio Input Capture (Windows)', wasapi_output_capture: 'Audio Output Capture (Windows)', wasapi_process_output_capture: 'Application Audio Capture (Windows)',
+  pulse_input_capture: 'Audio Input Capture (PulseAudio)', pulse_output_capture: 'Audio Output Capture (PulseAudio)', alsa_input_capture: 'Audio Input Capture (ALSA)',
+  coreaudio_input_capture: 'Audio Input Capture (macOS)', coreaudio_output_capture: 'Audio Output Capture (macOS)', sck_audio_capture: 'Audio Capture (macOS)',
+  pipewire_audio_application_capture: 'Application Audio Capture (PipeWire plugin)', pipewire_audio_input_capture: 'Audio Input Capture (PipeWire plugin)',
+  pipewire_audio_output_capture: 'Audio Output Capture (PipeWire plugin)',
+}
+
+export const sourceName = (id: string) => SOURCE_NAMES[id] ?? id
+
+/** What a source is for, so only sensible stand-ins are offered. */
+export function sourceKind(id: string): 'audio' | 'text' | 'camera' | 'video' {
+  if (/audio|wasapi|pulse|alsa/.test(id) || id === 'sck_audio_capture') return 'audio'
+  if (/^text_/.test(id)) return 'text'
+  if (/camera|avcapture|dshow|v4l2/.test(id)) return 'camera'
+  return 'video'
+}
+
+/** For the translation editor: every source that could stand in for `from` on `target`, never `from` itself. */
+export function standInOptions(from: string, target: Platform): string[] {
+  const kind = sourceKind(from)
+  const ids = new Set<string>(Object.keys(SOURCE_PLATFORMS).filter((id) => SOURCE_PLATFORMS[id].includes(target) && sourceKind(id) === kind && id !== from))
+  if (kind === 'text') ids.add('text_ft2_source')
+  return [...ids]
 }

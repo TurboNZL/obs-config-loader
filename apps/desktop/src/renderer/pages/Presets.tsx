@@ -1,19 +1,21 @@
 import { useEffect, useState } from 'react'
-import type { AssetNeed, GithubRepo, GithubState, GitState, InstallInfo, LogEntry, PresetDetails, PullResult, RenameRequest, RepoInfo, SaveResult } from '../../../electron/api'
-import { Card, Chip, Choice, Field, KIND_LABEL, Message, Page } from '../ui'
+import type { AssetNeed, FileChoice, GithubRepo, GithubState, GitState, InstallInfo, LogEntry, ObsScan, PresetDetails, PullResult, RenameRequest, RepoInfo, SaveResult } from '../../../electron/api'
+import { Card, Chip, Choice, Field, KIND_LABEL, Message, Page, plural } from '../ui'
+import { BigFiles, KeysChoice } from '../components/SaveOptions'
 import { GitMissing } from '../components/Account'
 
 type Msg = { tone: 'good' | 'warn' | 'bad'; text: string }
-export type PresetsGo = (t: 'settings' | 'export' | 'import') => void
+export type PresetsGo = (t: 'settings' | 'import') => void
 
-export function PresetsPage({ installs, applyRepo, go }: { installs: InstallInfo[] | null; applyRepo: (dir: string, installId?: string) => void; go: PresetsGo }) {
+export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstalls }: { installs: InstallInfo[] | null; applyRepo: (dir: string, installId?: string) => void; go: PresetsGo; startWith?: string; refreshInstalls: () => Promise<void> }) {
   const [repos, setRepos] = useState<RepoInfo[] | null>(null)
   const [git, setGit] = useState<GitState | null>(null)
   const [gh, setGh] = useState<GithubState>({ connected: false })
   const [notice, setNotice] = useState<Msg | null>(null)
-  const [adding, setAdding] = useState<'new' | 'get' | null>(null)
+  const [adding, setAdding] = useState<'new' | 'get' | null>(startWith ? 'new' : null)
 
-  const refresh = () => window.obsLoader.repos.list().then(setRepos)
+  // OBS's own list of layouts and settings can change when a preset is renamed or loaded, so it is read again too
+  const refresh = async () => { await window.obsLoader.repos.list().then(setRepos); await refreshInstalls() }
   const refreshGit = () => window.obsLoader.git.state().then(setGit)
   useEffect(() => { void refresh(); void refreshGit(); void window.obsLoader.github.state().then(setGh) }, [])
 
@@ -28,17 +30,16 @@ export function PresetsPage({ installs, applyRepo, go }: { installs: InstallInfo
       {notice && <Message tone={notice.tone}>{notice.text}</Message>}
 
       <div className="flex gap-2 flex-wrap">
-        <button className="btn btn-accent px-4 py-2" disabled={!git?.available} onClick={() => setAdding(adding === 'new' ? null : 'new')}>New preset from my OBS</button>
+        <button className="btn btn-accent px-4 py-2" disabled={!git?.available} onClick={() => setAdding(adding === 'new' ? null : 'new')}>Save my OBS setup</button>
         <button className="btn px-3 py-2" disabled={!git?.available} onClick={() => setAdding(adding === 'get' ? null : 'get')}>Get one from GitHub…</button>
         <button className="btn px-3 py-2" onClick={() => go('import')}>Open a setup file…</button>
-        <button className="btn btn-ghost px-3 py-2" onClick={() => go('export')}>Save a file straight from OBS…</button>
       </div>
 
-      {adding === 'new' && git?.available && <NewPreset installs={installs ?? []} gh={gh} go={go} onDone={done} onCancel={() => setAdding(null)} />}
+      {adding === 'new' && git?.available && <SaveSetup installs={installs ?? []} start={startWith} gh={gh} go={go} onDone={done} onCancel={() => setAdding(null)} />}
       {adding === 'get' && git?.available && <GetPreset gh={gh} count={repos?.length ?? 0} go={go} onDone={done} onCancel={() => setAdding(null)} />}
 
-      {repos?.length === 0 && !adding && <Message tone="warn">You have no presets yet. Press “New preset from my OBS” to make your first one.</Message>}
-      {repos?.map((r) => <PresetCard key={r.path} repo={r} installs={installs ?? []} gh={gh} refresh={refresh} apply={applyRepo} go={go} />)}
+      {repos?.length === 0 && !adding && <Message tone="warn">You have no presets yet. Press “Save my OBS setup” to make your first one.</Message>}
+      {repos?.map((r) => <PresetCard key={r.path} repo={r} installs={installs ?? []} gh={gh} refresh={refresh} apply={applyRepo} go={go} notify={setNotice} />)}
     </Page>
   )
 }
@@ -56,48 +57,116 @@ function FolderField({ folder, setFolder }: { folder: string; setFolder: (f: str
   )
 }
 
-function NewPreset({ installs, gh, go, onDone, onCancel }: { installs: InstallInfo[]; gh: GithubState; go: PresetsGo; onDone: (m: Msg) => Promise<void>; onCancel: () => void }) {
+function SaveSetup({ installs, start, gh, go, onDone, onCancel }: { installs: InstallInfo[]; start?: string; gh: GithubState; go: PresetsGo; onDone: (m: Msg) => Promise<void>; onCancel: () => void }) {
   const usable = installs.filter((i) => i.configExists)
   const [name, setName] = useState('My OBS setup')
   const [installId, setInstallId] = useState('')
   const [folder, setFolder] = useState('')
+  const [scenes, setScenes] = useState<string[]>([])
+  const [outputs, setOutputs] = useState<string[]>([])
+  const [remote, setRemote] = useState(true)
+  const [scripts, setScripts] = useState(true)
+  const [scan, setScan] = useState<ObsScan | null>(null)
+  const [asPreset, setAsPreset] = useState(true)
   const [online, setOnline] = useState(false)
   const [priv, setPriv] = useState(true)
+  const [toFile, setToFile] = useState(false)
+  const [chosen, setChosen] = useState<string[]>([])
+  const [withKeys, setWithKeys] = useState(false)
   const [more, setMore] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => { if (!installId && usable[0]) setInstallId(usable[0].id) }, [installs]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!installId && usable[0]) setInstallId(usable.find((i) => i.id === start)?.id ?? usable[0].id) }, [installs]) // eslint-disable-line react-hooks/exhaustive-deps
+  const install = usable.find((i) => i.id === installId)
+  useEffect(() => {
+    setScenes(install?.collections ?? []); setOutputs(install?.profiles ?? []); setChosen([])
+    if (installId) void window.obsLoader.obs.scan(installId).then(setScan).catch(() => setScan(null))
+  }, [installId, install?.collections.join('|'), install?.profiles.join('|')]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void window.obsLoader.repos.suggestFolder(name || 'obs-setup').then(setFolder) }, [name])
-  if (usable.length === 0) return <Message tone="warn">There is no OBS setup on this computer to copy yet. Open OBS once, or add OBS under “OBS on this computer”.</Message>
+  if (usable.length === 0) return <Message tone="warn">There is no OBS setup on this computer to save yet. Open OBS once, or add OBS under “OBS on this computer”.</Message>
+
+  const toggle = (list: string[], set: (l: string[]) => void, item: string, on: boolean) => set(on ? [...list, item] : list.filter((x) => x !== item))
+  const exclude = {
+    collections: (install?.collections ?? []).filter((c) => !scenes.includes(c)),
+    profiles: (install?.profiles ?? []).filter((c) => !outputs.includes(c)),
+    remoteControl: !remote, scripts: !scripts,
+  }
+  const nothing = scenes.length + outputs.length === 0
+  const go_ = async () => {
+    setBusy(true); setError(null)
+    const done: string[] = []
+    try {
+      if (asPreset) {
+        const r = await window.obsLoader.repos.create({ installId, name: name.trim(), folder, exclude, github: online && gh.connected ? { private: priv } : undefined })
+        if (!r.ok) { setError(r.error); setBusy(false); return }
+        done.push(`Saved the preset “${r.repo.name}”${r.published ? ` and backed it up at ${r.published}` : ''}`)
+      }
+      if (toFile) {
+        const r = await window.obsLoader.export.run({ installId, name: name.trim(), collections: scenes, profiles: outputs, media: 'small', includeKeys: withKeys, alsoBundle: chosen, exclude })
+        if (r && 'error' in r) { setError(r.error); setBusy(false); return }
+        if (r) done.push(`Saved the file ${r.path}${r.containsSecrets ? ' (it contains your stream keys: keep it private)' : r.secrets.length ? `. Your stream keys are not in it, so you type them when you load it: ${r.secrets.join(', ')}` : ''}${r.assets.external ? `. ${r.assets.external} big file${r.assets.external === 1 ? ' is' : 's are'} not inside; you point to ${r.assets.external === 1 ? 'it' : 'them'} when loading it` : ''}`)
+        else if (!asPreset) { setBusy(false); return } // the save window was closed and nothing else was asked for
+      }
+    } catch (e) { setError((e as Error).message); setBusy(false); return }
+    setBusy(false)
+    await onDone({ tone: withKeys && toFile ? 'warn' : 'good', text: done.join('. ') + '.' })
+  }
 
   return (
-    <Card title="New preset from my OBS">
+    <Card title="Save my OBS setup">
       {error && <Message tone="bad">{error}</Message>}
-      <Field label="Name"><input className="input w-full px-2 py-1.5" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+      <Field label="Give this setup a name"><input className="input w-full px-2 py-1.5" value={name} onChange={(e) => setName(e.target.value)} /></Field>
       {usable.length > 1 && (
-        <Field label="Copy the setup of">
+        <Field label="Save the setup of">
           <select className="input w-full px-2 py-1.5" value={installId} onChange={(e) => setInstallId(e.target.value)}>
             {usable.map((i) => <option key={i.id} value={i.id}>{i.label}: {KIND_LABEL[i.kind] ?? i.kind}</option>)}
           </select>
         </Field>
       )}
-      <Choice
-        checked={online && gh.connected} disabled={!gh.connected} onChange={setOnline}
-        title="Back it up online (GitHub)"
-        help={gh.connected ? 'Every save is also kept on GitHub, so you can use it on other computers.' : <>Sign in to GitHub in <button className="underline" onClick={() => go('settings')}>Settings</button> to turn this on.</>}
-      />
-      {online && gh.connected && <Choice checked={priv} onChange={setPriv} title="Keep it private" help="Only you can see it on GitHub." />}
-      <button className="btn btn-ghost px-2 py-0.5 text-xs" onClick={() => setMore(!more)}>{more ? 'Hide details' : 'Show details'}</button>
-      {more && <FolderField folder={folder} setFolder={setFolder} />}
+
+      <div>
+        <h3 className="text-sm font-semibold">What to save</h3>
+        <p className="text-xs text-muted mb-1">Untick anything you do not want in it.</p>
+        {(install?.collections ?? []).map((c) => <Choice key={'c' + c} checked={scenes.includes(c)} onChange={(on) => toggle(scenes, setScenes, c, on)} title={<>{c} <span className="text-muted">(scene layout)</span></>} />)}
+        {(install?.profiles ?? []).map((c) => <Choice key={'p' + c} checked={outputs.includes(c)} onChange={(on) => toggle(outputs, setOutputs, c, on)} title={<>{c} <span className="text-muted">(output settings)</span></>} />)}
+        {scan?.remoteControl && <Choice checked={remote} onChange={setRemote} title="OBS remote-control settings (WebSocket)" help="The port and password that other programs use to control OBS." />}
+        {scan && scan.scripts.length > 0 && <Choice checked={scripts} onChange={setScripts} title={`Scripts: ${scan.scripts.join(', ')}`} help="Kept with the setup so they come along." />}
+        <p className="text-xs text-muted mt-1">OBS calls scene layouts “Scene Collections” and output settings “Profiles”.</p>
+      </div>
+
+      <div>
+        <h3 className="text-sm font-semibold">Where to keep it</h3>
+        <Choice checked={asPreset} onChange={(on) => { setAsPreset(on); if (!on) setOnline(false); if (!on && !toFile) setToFile(true) }} title="As a preset on this computer" help="A preset you can load into OBS again, update later, rename and back up. Big files are never kept in it." />
+        <Choice
+          checked={online && asPreset && gh.connected} disabled={!asPreset || !gh.connected} onChange={setOnline} title="Back the preset up online (GitHub)"
+          help={!gh.connected ? <>Sign in to GitHub in <button className="underline" onClick={() => go('settings')}>Settings</button> to turn this on.</> : 'Never includes stream keys or big files.'}
+        />
+        {online && asPreset && gh.connected && <Choice checked={priv} onChange={setPriv} title="Keep it private" help="Only you can see it on GitHub." />}
+        <Choice checked={toFile} onChange={(on) => { setToFile(on); if (!on && !asPreset) setAsPreset(true) }} title="Also as one file" help="One file you can copy to another computer." />
+      </div>
+
+      {toFile && (
+        <div className="space-y-3 border-t border-line pt-3">
+          <BigFiles files={scan?.files ?? []} chosen={chosen} setChosen={setChosen} />
+          <KeysChoice checked={withKeys} onChange={setWithKeys} available={(scan?.keys.length ?? 0) > 0} help={(scan?.keys.length ?? 0) === 0 ? 'There are no stream keys in this OBS.' : undefined} />
+        </div>
+      )}
+
+      {asPreset && (
+        <>
+          <button className="btn btn-ghost px-2 py-0.5 text-xs" onClick={() => setMore(!more)}>{more ? 'Hide details' : 'Show details'}</button>
+          {more && <FolderField folder={folder} setFolder={setFolder} />}
+        </>
+      )}
+      <p className="text-sm text-muted">
+        This will save {plural(scenes.length, 'scene layout')} and {plural(outputs.length, 'output setting')}
+        {toFile ? (withKeys ? ', with your stream keys in the file' : ', without your stream keys in the file') : ''}.
+      </p>
       <div className="flex gap-2">
-        <button className="btn btn-accent px-4 py-2" disabled={busy || !name.trim() || !installId || !folder} onClick={async () => {
-          setBusy(true); setError(null)
-          const r = await window.obsLoader.repos.create({ installId, name: name.trim(), folder, github: online && gh.connected ? { private: priv } : undefined })
-          setBusy(false)
-          if (r.ok) await onDone({ tone: 'good', text: `Saved the preset “${r.repo.name}”${r.published ? ` and backed it up at ${r.published}` : ''}.` })
-          else setError(r.error)
-        }}>{busy ? 'Saving…' : 'Save preset'}</button>
+        <button className="btn btn-accent px-4 py-2" disabled={busy || !name.trim() || !installId || nothing || (asPreset && !folder)} onClick={go_}>
+          {busy ? 'Saving…' : toFile && !asPreset ? 'Save to a file…' : toFile ? 'Save preset and file…' : 'Save preset'}
+        </button>
         <button className="btn btn-ghost px-3 py-2" onClick={onCancel}>Cancel</button>
       </div>
     </Card>
@@ -194,7 +263,7 @@ function RenameRow({ label, value, onRename, indent }: { label?: string; value: 
   )
 }
 
-function Details({ repo, installId, refresh, obsNote }: { repo: RepoInfo; installId: string; refresh: () => Promise<void>; obsNote: boolean }) {
+function Details({ repo, installId, refresh, obsNote, notify }: { repo: RepoInfo; installId: string; refresh: () => Promise<void>; obsNote: boolean; notify: (m: Msg) => void }) {
   const [d, setD] = useState<PresetDetails | null>(null)
   const load = () => window.obsLoader.presets.details(repo.path).then(setD).catch(() => setD(null))
   useEffect(() => { void load() }, [repo.path, repo.status.commits]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -226,6 +295,10 @@ function Details({ repo, installId, refresh, obsNote }: { repo: RepoInfo; instal
         {d.outputs.map((o) => <RenameRow key={o.id} label="Output settings" value={o.name} onRename={rename({ kind: 'output', id: o.id })} />)}
       </div>
 
+      <SavesSettings repo={repo} d={d} reload={async () => { await load(); await refresh() }} />
+      <Translations repo={repo} d={d} reload={load} />
+      <MoveIt repo={repo} refresh={refresh} notify={notify} />
+
       <div>
         <h3 className="font-semibold text-sm">What it needs</h3>
         <ul className="text-sm space-y-0.5">
@@ -240,11 +313,111 @@ function Details({ repo, installId, refresh, obsNote }: { repo: RepoInfo; instal
   )
 }
 
+// ── what a preset saves ─────────────────────────────────────────────────────
+
+function SavesSettings({ repo, d, reload }: { repo: RepoInfo; d: PresetDetails; reload: () => Promise<void> }) {
+  const [msg, setMsg] = useState<Msg | null>(null)
+  const ex = d.exclude
+  const layoutNames = [...new Set([...d.layouts.map((l) => l.name), ...(ex.collections ?? [])])]
+  const outputNames = [...new Set([...d.outputs.map((o) => o.name), ...(ex.profiles ?? [])])]
+  const set = async (next: PresetDetails['exclude']) => {
+    const r = await window.obsLoader.presets.setExclude(repo.path, next)
+    setMsg(r.ok ? { tone: 'good', text: 'Changed. It applies the next time you save OBS to this preset.' } : { tone: 'bad', text: r.error })
+    await reload()
+  }
+  const flip = (list: string[] | undefined, name: string, keep: boolean) => (keep ? (list ?? []).filter((n) => n !== name) : [...(list ?? []), name])
+  return (
+    <div>
+      <h3 className="font-semibold text-sm">What this preset saves</h3>
+      <p className="text-xs text-muted mb-1">Untick what should stay out. Everything else in your OBS is kept each time you save. Stream keys and big files never go in a preset, so they never go to GitHub.</p>
+      {msg && <Message tone={msg.tone}>{msg.text}</Message>}
+      {layoutNames.map((n) => <Choice key={'l' + n} checked={!ex.collections?.includes(n)} onChange={(on) => set({ ...ex, collections: flip(ex.collections, n, on) })} title={<>{n} <span className="text-muted">(scene layout)</span></>} />)}
+      {outputNames.map((n) => <Choice key={'o' + n} checked={!ex.profiles?.includes(n)} onChange={(on) => set({ ...ex, profiles: flip(ex.profiles, n, on) })} title={<>{n} <span className="text-muted">(output settings)</span></>} />)}
+      <Choice checked={!ex.remoteControl} onChange={(on) => set({ ...ex, remoteControl: !on })} title="OBS remote-control settings (WebSocket)" help="The port and password other programs use to control OBS. The password is never saved in a preset." />
+      <Choice checked={!ex.scripts} onChange={(on) => set({ ...ex, scripts: !on })} title="Scripts" help="Small script files are kept in the preset, and put back when it is loaded." />
+    </div>
+  )
+}
+
+// ── how sources change on other computers ──────────────────────────────────
+
+function Translations({ repo, d, reload }: { repo: RepoInfo; d: PresetDetails; reload: () => Promise<void> }) {
+  const [msg, setMsg] = useState<Msg | null>(null)
+  if (d.translations.length === 0) return null
+  const current = () => {
+    const o: Record<string, Record<string, string | null>> = {}
+    for (const row of d.translations) for (const t of row.targets) {
+      if (t.chosen === undefined) continue
+      const keys = t.platform === 'linux' ? ['linux', 'linux-pipewire'] : [t.platform]
+      for (const k of keys) (o[row.from] ??= {})[k] = t.chosen
+    }
+    return o
+  }
+  const change = async (from: string, platform: string, value: string) => {
+    const o = current()
+    const keys = platform === 'linux' ? ['linux', 'linux-pipewire'] : [platform]
+    for (const k of keys) {
+      if (value === '') { if (o[from]) { delete o[from][k]; if (!Object.keys(o[from]).length) delete o[from] } } else (o[from] ??= {})[k] = value === '__hide__' ? null : value
+    }
+    const r = await window.obsLoader.presets.setOverrides(repo.path, o)
+    setMsg(r.ok ? { tone: 'good', text: 'Saved. It is used the next time this preset is loaded on another kind of computer.' } : { tone: 'bad', text: r.error })
+    await reload()
+  }
+  return (
+    <div>
+      <h3 className="font-semibold text-sm">How sources change on other computers</h3>
+      <p className="text-xs text-muted mb-1">Some sources only exist on one system. When this preset is loaded on another, the app swaps each for the closest one. Change a choice here if it guessed wrong. You pick the window, screen or device again either way.</p>
+      {msg && <Message tone={msg.tone}>{msg.text}</Message>}
+      {d.translations.map((row) => (
+        <div key={row.from} className="bt-row py-1 space-y-1">
+          <div className="text-sm font-medium">{row.name}</div>
+          {row.targets.map((t) => (
+            <label key={t.platform} className="flex items-center gap-2 pl-3 text-sm">
+              <span className="w-16 text-muted shrink-0">On {t.label}:</span>
+              <select
+                className="input flex-1 px-2 py-1" aria-label={`${row.name} on ${t.label}`}
+                value={t.chosen === undefined ? '' : t.chosen === null ? '__hide__' : t.chosen}
+                onChange={(e) => void change(row.from, t.platform, e.target.value)}
+              >
+                <option value="">{t.defaultName ? `Automatic: ${t.defaultName}` : 'Automatic: hide it'}</option>
+                <option value="__hide__">Hide it</option>
+                {t.options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </select>
+            </label>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── moving a preset ────────────────────────────────────────────────────────
+
+function MoveIt({ repo, refresh, notify }: { repo: RepoInfo; refresh: () => Promise<void>; notify: (m: Msg) => void }) {
+  const [msg, setMsg] = useState<Msg | null>(null)
+  const [busy, setBusy] = useState(false)
+  return (
+    <div>
+      <h3 className="font-semibold text-sm">Where it is kept</h3>
+      <p className="mono text-muted">{repo.path}</p>
+      {msg && <Message tone={msg.tone}>{msg.text}</Message>}
+      <button className="btn px-3 py-1.5 mt-1" disabled={busy} onClick={async () => {
+        const parent = await window.obsLoader.files.pick('Choose the folder to move this preset into', true)
+        if (!parent) return
+        setBusy(true); setMsg(null)
+        const r = await window.obsLoader.presets.move(repo.path, parent)
+        setBusy(false)
+        if (r.ok) { notify({ tone: 'good', text: `Moved “${r.repo.name}” to ${r.repo.path}.` }); await refresh() } else setMsg({ tone: 'bad', text: r.error })
+      }}>{busy ? 'Moving…' : 'Move to another folder…'}</button>
+    </div>
+  )
+}
+
 // ── one preset ───────────────────────────────────────────────────────────────
 
 type Pending = { kind: 'save'; files: string[] } | { kind: 'pull'; files: string[] } | null
 
-function PresetCard({ repo, installs, gh, refresh, apply, go }: { repo: RepoInfo; installs: InstallInfo[]; gh: GithubState; refresh: () => Promise<void>; apply: (dir: string, installId?: string) => void; go: PresetsGo }) {
+function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: RepoInfo; installs: InstallInfo[]; gh: GithubState; refresh: () => Promise<void>; apply: (dir: string, installId?: string) => void; go: PresetsGo; notify: (m: Msg) => void }) {
   const st = repo.status
   const usable = installs.filter((i) => i.configExists)
   const [installId, setInstallId] = useState(repo.installId && usable.some((i) => i.id === repo.installId) ? repo.installId : usable[0]?.id ?? '')
@@ -261,6 +434,8 @@ function PresetCard({ repo, installs, gh, refresh, apply, go }: { repo: RepoInfo
   const [open, setOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [withKeys, setWithKeys] = useState(false)
+  const [fileChoices, setFileChoices] = useState<FileChoice[]>([])
+  const [chosen, setChosen] = useState<string[]>([])
   const [keys, setKeys] = useState({ count: 0, canStore: true })
   const online = !!repo.remoteUrl
 
@@ -319,7 +494,7 @@ function PresetCard({ repo, installs, gh, refresh, apply, go }: { repo: RepoInfo
     if (r.ok) { setEditRemote(false); setRemoteUrl(''); setMsg({ tone: 'good', text: 'Address saved. Use Upload to send it.' }) } else setMsg({ tone: 'bad', text: r.error })
   })
   const exportFile = () => run(async () => {
-    const r = await window.obsLoader.presets.exportFile(repo.path, withKeys)
+    const r = await window.obsLoader.presets.exportFile(repo.path, withKeys, chosen)
     if (r.ok) {
       setExporting(false); setWithKeys(false)
       setMsg({ tone: r.keys ? 'warn' : 'good', text: `Saved the file${r.keys ? ` with ${r.keys} stream key${r.keys === 1 ? '' : 's'} inside. Treat it like a password: anyone with it can stream as you` : ''}.${r.missingMedia.length ? ` ${r.missingMedia.length} big file${r.missingMedia.length === 1 ? ' is' : 's are'} not inside (${r.missingMedia.slice(0, 3).join(', ')}${r.missingMedia.length > 3 ? '…' : ''}); the other computer will ask for them.` : ''}` })
@@ -395,18 +570,17 @@ function PresetCard({ repo, installs, gh, refresh, apply, go }: { repo: RepoInfo
       <div className="flex gap-2 flex-wrap">
         <button className="btn btn-accent px-3 py-1.5" disabled={busy || !installId} onClick={() => save(false)}>Save OBS to this preset</button>
         <button className="btn px-3 py-1.5" disabled={busy} onClick={() => apply(repo.path, installId)}>Load into OBS…</button>
-        <button className="btn px-3 py-1.5" disabled={busy} onClick={() => setExporting(!exporting)}>Save to a file…</button>
+        <button className="btn px-3 py-1.5" disabled={busy} onClick={async () => { const on = !exporting; setExporting(on); if (on) { setChosen([]); setFileChoices(await window.obsLoader.presets.scanFile(repo.path).catch(() => [])) } }}>Save to a file…</button>
       </div>
 
       {exporting && (
         <div className="space-y-2 border-t border-line pt-3">
           <p className="text-sm">This makes one file you can copy to another computer.</p>
-          <Choice
-            checked={withKeys} onChange={setWithKeys} disabled={keys.count === 0}
-            title={keys.count ? `Include my stream keys (${keys.count} remembered on this computer)` : 'Include my stream keys'}
-            help={keys.count ? undefined : keys.canStore ? 'None are remembered yet. Press “Save OBS to this preset” first, and they will be.' : 'This computer has no system keychain, so keys cannot be remembered.'}
+          <BigFiles files={fileChoices} chosen={chosen} setChosen={setChosen} forPreset />
+          <KeysChoice
+            checked={withKeys} onChange={setWithKeys} available={keys.count > 0}
+            help={keys.count ? `${keys.count} remembered on this computer. Off is safest: the file is then safe to share.` : keys.canStore ? 'None are remembered yet. Press “Save OBS to this preset” first, and they will be.' : 'This computer has no system keychain, so keys cannot be remembered.'}
           />
-          {withKeys && <Message tone="bad">The file will contain your stream keys. Anyone who has it can stream as you. Keep it private, and delete it once you have loaded it.</Message>}
           <div className="flex gap-2">
             <button className="btn btn-accent px-3 py-1.5" disabled={busy} onClick={exportFile}>Choose where to save…</button>
             <button className="btn btn-ghost px-3 py-1.5" onClick={() => setExporting(false)}>Cancel</button>
@@ -442,10 +616,9 @@ function PresetCard({ repo, installs, gh, refresh, apply, go }: { repo: RepoInfo
               </select>
             </Field>
           )}
-          <Details repo={repo} installId={installId} refresh={refresh} obsNote />
+          <Details repo={repo} installId={installId} refresh={refresh} obsNote notify={notify} />
           <div className="space-y-1">
-            <h3 className="font-semibold text-sm">Where it is</h3>
-            <p className="mono text-muted">{repo.path}</p>
+            <h3 className="font-semibold text-sm">Online address</h3>
             {repo.remoteUrl && !editRemote ? (
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="mono">{repo.remoteUrl}</span>
