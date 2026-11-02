@@ -32,6 +32,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
   const [conflict, setConflict] = useState<ConflictMode>('replace')
   const [activate, setActivate] = useState(true)
   const [preferPipewire, setPreferPipewire] = useState(true)
+  const [choices, setChoices] = useState<Record<string, string | null>>({})
   const [remember, setRemember] = useState(true)
   const [report, setReport] = useState<ImportReport | null>(null)
   const [busy, setBusy] = useState(false)
@@ -48,7 +49,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
   const load = async (r: BundleSummary | { error: string } | null) => {
     if (!r) return
     if ('error' in r) { setError(r.error); return }
-    setError(null); setDone(null); setReport(null); setNote(null)
+    setError(null); setDone(null); setReport(null); setNote(null); setChoices({})
     setBundle(r)
     setScenes(r.manifest.collections.map((c) => c.id))
     setOutputs(r.manifest.profiles.map((c) => c.id))
@@ -69,7 +70,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
   useEffect(() => { void checkLive() }, [repoDir, installId, done]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const request = (): ImportRequest => ({
-    handle: bundle!.handle, installId, collections: scenes, profiles: outputs, variables: clean(variables), assetFiles, conflict, activate, preferPipewire,
+    handle: bundle!.handle, installId, collections: scenes, profiles: outputs, variables: clean(variables), assetFiles, conflict, activate, preferPipewire, sourceChoices: choices,
   })
 
   // Re-run the "what would happen" check whenever an answer changes, so the summary is always about what the button will do.
@@ -82,7 +83,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
     }, 200)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bundle, installId, scenes, outputs, variables, assetFiles, conflict, activate, preferPipewire])
+  }, [bundle, installId, scenes, outputs, variables, assetFiles, conflict, activate, preferPipewire, choices])
 
   const apply = async () => {
     setBusy(true); setError(null)
@@ -306,10 +307,33 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
                   <h3 className="text-sm font-semibold">Screen, window and sound capture</h3>
                   <p className="text-xs text-muted">These work differently on each kind of computer, so they are set up per computer.</p>
                   {report.substitutions.map((s) => (
-                    <div key={s.source + s.from} className="text-sm bt-row py-1">
-                      <strong>{s.source}</strong>: {s.result === 'variant' ? 'using the version you saved for this kind of computer.'
-                        : s.result === 'substituted' ? 'this setup was made for another kind of computer, so a matching capture was put in its place. Choose the window or screen again in OBS.'
-                        : 'there is no equivalent on this computer, so it is hidden (not deleted).'}
+                    <div key={s.source + s.from} className="text-sm bt-row py-1 space-y-1">
+                      <div>
+                        <strong>{s.source}</strong>: {s.result === 'variant' ? 'using the version you saved for this kind of computer.'
+                          : s.result === 'added' ? `${s.note ?? ''}`
+                          : s.result === 'substituted' ? <>this setup was made for another kind of computer, so <strong>{s.toName ?? 'a matching capture'}</strong> was put in place of {s.fromName ?? 'it'}. Choose the window or screen again in OBS.</>
+                          : s.key && choices[s.key] === null ? 'hidden, as you chose (not deleted).'
+                          : 'there is no equivalent on this computer, so it is hidden (not deleted).'}
+                      </div>
+                      {(s.result === 'substituted' || s.result === 'disabled') && s.key && (
+                        <label className="flex items-center gap-2 pl-3">
+                          <span className="text-muted shrink-0">Use instead:</span>
+                          <select
+                            className="input flex-1 px-2 py-1" aria-label={`What ${s.source} becomes`}
+                            value={s.key in choices ? (choices[s.key] === null ? '__hide__' : choices[s.key]!) : ''}
+                            onChange={(e) => {
+                              const v = e.target.value; const k = s.key!
+                              const next = { ...choices }
+                              if (v === '') delete next[k]; else next[k] = v === '__hide__' ? null : v
+                              setChoices(next)
+                            }}
+                          >
+                            <option value="">{s.result === 'substituted' ? `Automatic: ${s.toName ?? 'a matching capture'}` : 'Automatic: hide it'}</option>
+                            <option value="__hide__">Hide it</option>
+                            {(s.options ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                          </select>
+                        </label>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -318,17 +342,17 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
               {report.plugins.length > 0 && (
                 <div className="space-y-2">
                   <h3 className="text-sm font-semibold">OBS plugins this setup uses</h3>
-                  <p className="text-xs text-muted">Plugins are not part of the file. Install any that are missing, then restart OBS.</p>
+                  <p className="text-xs text-muted">Plugins are not part of the file. A missing plugin never stops the load: its sources just stay empty until you install it and restart OBS. Plugins that do not exist for this kind of computer are not needed here.</p>
                   {report.plugins.map((f) => (
                     <div key={f.plugin.id} className="bt-row py-1 space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm font-medium">{f.plugin.name}</span>
-                        <Chip tone={f.status === 'present' ? 'good' : f.status === 'missing' ? 'bad' : 'warn'}>
-                          {f.status === 'present' ? 'installed' : f.status === 'missing' ? 'not installed' : 'could not check'}
+                        <Chip tone={f.status === 'present' ? 'good' : f.status === 'missing' ? 'warn' : f.status === 'not-needed' ? undefined : 'warn'}>
+                          {f.status === 'present' ? 'installed' : f.status === 'missing' ? 'not installed' : f.status === 'not-needed' ? 'not needed on this computer' : 'could not check'}
                         </Chip>
                         {f.plugin.homepage && <button className="btn btn-ghost px-2 py-0.5 text-xs" onClick={() => window.obsLoader.app.openExternal(f.plugin.homepage!)}>Where to get it</button>}
                       </div>
-                      {f.status !== 'present' && f.plugin.install?.[pluginKey as keyof NonNullable<typeof f.plugin.install>] && (
+                      {f.status !== 'present' && f.status !== 'not-needed' && f.plugin.install?.[pluginKey as keyof NonNullable<typeof f.plugin.install>] && (
                         <pre className="cmd mono rounded-theme">{f.plugin.install[pluginKey as keyof NonNullable<typeof f.plugin.install>]}</pre>
                       )}
                     </div>

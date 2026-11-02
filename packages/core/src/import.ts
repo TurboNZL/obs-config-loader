@@ -5,7 +5,7 @@ import type { Bundle, Manifest, Platform, PlatformMapEntry } from './types.js'
 import type { Host, ObsInstall } from './detect.js'
 import { BUILTIN_TOKENS, pathModule, resolveJson, resolveString, type BuiltinToken, type TokenResolver } from './tokens.js'
 import { getIni, mapIniValues, setIni } from './ini.js'
-import { DEFAULT_PLATFORM_MAP, PIPEWIRE_AUDIO_MODULE, PIPEWIRE_SCREEN, PIPEWIRE_UNIFIED_SINCE, availableOn, isPipewireAudioId, isPlatformSpecific, legacyPipewireId } from './sources.js'
+import { DEFAULT_PLATFORM_MAP, standInOptions, sourceName, PIPEWIRE_AUDIO_MODULE, PIPEWIRE_SCREEN, PIPEWIRE_UNIFIED_SINCE, availableOn, isPipewireAudioId, isPlatformSpecific, legacyPipewireId } from './sources.js'
 import { applyVariants, parseVariants, variantsPathFor } from './variants.js'
 import { KNOWN_PLUGINS, checkPlugins, installedModules, type PluginFinding } from './plugins.js'
 import { unversioned } from './plugins.js'
@@ -40,6 +40,8 @@ export interface ImportOptions {
   installed?: DetectedVersions
   /** Also put back OBS's remote-control (WebSocket) settings, when the setup has them. Default true. */
   websocket?: boolean
+  /** The person's choice for this load, per source id: a stand-in id, or null to hide it. Wins over everything else. */
+  sourceChoices?: Record<string, string | null>
 }
 
 export type WriteAction = 'create' | 'replace' | 'keep-both' | 'skip'
@@ -61,6 +63,12 @@ export interface Substitution {
   /** `substituted` replaced the id; `disabled` kept the id and hid the scene items. */
   result: 'substituted' | 'disabled' | 'variant' | 'added'
   note?: string
+  /** The source id a choice for this row is keyed by (`ImportOptions.sourceChoices`). */
+  key?: string
+  /** For a swapped or hidden source: the plain names, and what else could stand in (for the choice on the import screen). */
+  fromName?: string
+  toName?: string
+  options?: { id: string; name: string }[]
 }
 
 export interface ImportReport {
@@ -119,6 +127,8 @@ interface AdaptContext {
   pipewireAudio: boolean
   /** The target OBS's version, when known (the PipeWire capture sources changed in 30.2). */
   obsVersion?: string
+  /** This load's own choices per source id (a stand-in id, or null to hide it). */
+  choices?: Record<string, string | null>
 }
 
 function pickReplacement(from: string, entry: PlatformMapEntry, target: Platform, ctx: AdaptContext): string | undefined {
@@ -164,8 +174,9 @@ function adaptSources(collection: any, manifest: Manifest, target: Platform, ctx
     const ownTargets = overrides[key] ?? {}
     const ownKey = target === 'linux' ? (ctx.preferPipewire && 'linux-pipewire' in ownTargets ? 'linux-pipewire' : 'linux' in ownTargets ? 'linux' : 'linux-pipewire' in ownTargets ? 'linux-pipewire' : undefined) : (target in ownTargets ? target : undefined)
     const own = ownKey ? ownTargets[ownKey as keyof typeof ownTargets] : undefined
-    const hasOwn = ownKey !== undefined
-    const to = hasOwn ? (own ?? undefined) : entry ? pickReplacement(key, entry, target, ctx) : undefined
+    const chosenNow = ctx.choices && key in ctx.choices ? ctx.choices[key] : undefined
+    const hasOwn = chosenNow !== undefined || ownKey !== undefined
+    const to = chosenNow !== undefined ? (chosenNow ?? undefined) : ownKey !== undefined ? (own ?? undefined) : entry ? pickReplacement(key, entry, target, ctx) : undefined
     const program = key === 'wasapi_process_output_capture' ? programOf(s.settings?.window) : undefined
     // Windows window/game capture with "capture audio" on: that audio has to become its own source elsewhere
     const wantsAudio = WINDOWS_AUDIO_PARENTS.has(key) && s.settings?.capture_audio === true
@@ -177,11 +188,11 @@ function adaptSources(collection: any, manifest: Manifest, target: Platform, ctx
       s.id = to
       s.versioned_id = to
       s.settings = {}
-      subs.push({ source: s.name, from: id, to, result: 'substituted', note: hasOwn ? 'As you set it in the preset settings.' : entry?.note })
+      subs.push({ source: s.name, from: id, to, result: 'substituted', note: chosenNow !== undefined ? 'As you chose.' : hasOwn ? 'As you set it in the preset settings.' : entry?.note, key, fromName: sourceName(key), toName: sourceName(to), options: standInOptions(key, target).map((o) => ({ id: o, name: sourceName(o) })) })
     } else {
       if (s.name) disabled.add(`n:${s.name}`)
       if (s.uuid) disabled.add(`u:${s.uuid}`)
-      subs.push({ source: s.name, from: id, result: 'disabled', note: hasOwn ? 'Hidden, as you set it in the preset settings.' : 'No equivalent on this platform; kept as is and hidden.' })
+      subs.push({ source: s.name, from: id, result: 'disabled', note: chosenNow === null ? 'Hidden, as you chose.' : hasOwn ? 'Hidden, as you set it in the preset settings.' : 'No equivalent on this platform; kept as is and hidden.', key, fromName: sourceName(key), options: standInOptions(key, target).map((o) => ({ id: o, name: sourceName(o) })) })
     }
     if (program && to) subs[subs.length - 1].note = `${subs[subs.length - 1].note ?? ''} It was capturing ${program}.`.trim()
     if (audioTo) {
@@ -247,7 +258,7 @@ export function planImport(o: ImportOptions): ImportPlan {
   const mediaDir = o.mediaDir ?? p.join(cfg, 'obs-config-loader', m.id, 'media')
   const conflict = o.conflict ?? 'replace'
   const installedMods = installedModules(host, install)
-  const adaptCtx: AdaptContext = { preferPipewire: o.preferPipewire ?? true, pipewireAudio: installedMods.has(PIPEWIRE_AUDIO_MODULE), obsVersion: o.installed?.obs }
+  const adaptCtx: AdaptContext = { preferPipewire: o.preferPipewire ?? true, pipewireAudio: installedMods.has(PIPEWIRE_AUDIO_MODULE), obsVersion: o.installed?.obs, choices: o.sourceChoices }
 
   if (o.obsRunning) blockers.push('OBS is running. Close it first: it rewrites its files on exit and would undo the import.')
   if (m.obsMinVersion) warnings.push(`This setup was made for OBS ${m.obsMinVersion} or newer.`)
@@ -454,7 +465,7 @@ export function planImport(o: ImportOptions): ImportPlan {
     warnings.push(`This setup runs ${scripts.length === 1 ? 'a script' : scripts.length + ' scripts'} (${scripts.map((s) => s.filename).join(', ')}). The scripts are put back, but OBS needs Python (or Lua) set up under Tools, then Scripts, for them to run.`)
   }
   warnings.push(...versionNotes(m, o.installed))
-  const plugins = checkPlugins(m.plugins, installedModules(host, install))
+  const plugins = checkPlugins(m.plugins, installedMods, target)
   if (target === 'linux' && subs.some((x) => x.to && isPipewireAudioId(x.to)) && !installedMods.has(PIPEWIRE_AUDIO_MODULE)) {
     const how = KNOWN_PLUGINS.find((k) => k.id === 'obs-pipewire-audio-capture')?.install
     warnings.push(`Some audio sources became PipeWire audio sources, which need the PipeWire Audio Capture plugin, and it is not installed in this OBS. ${(install.kind === 'flatpak' ? how?.['linux-flatpak'] : how?.['linux-native']) ?? ''}`.trim())

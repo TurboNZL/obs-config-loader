@@ -42,6 +42,8 @@ export interface PluginRef {
   required?: boolean
   /** Newest version any computer saved this setup with (when it could be told). */
   version?: string
+  /** Systems the plugin exists for. Left out = all. A plugin that does not exist where the setup is loaded is not needed there. */
+  platforms?: Platform[]
   homepage?: string
   install?: Partial<Record<'linux-flatpak' | 'linux-native' | 'windows' | 'macos', string>>
 }

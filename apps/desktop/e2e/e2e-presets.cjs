@@ -219,6 +219,38 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   await card('Show').waitFor()
   check('and they are still listed and work', await card('Show').locator('button:has-text("Save OBS to this preset")').isEnabled())
 
+  console.log('10. loading a setup made on Windows: plugins that only exist on Linux never stop it, and each swapped source can be chosen')
+  const wz = new JSZip()
+  wz.file('manifest.json', JSON.stringify({ format: 'obs-config-bundle', version: 1, id: 'win-1', name: 'From Windows', source: { platform: 'win32' }, collections: [{ id: 'c', name: 'Win scenes', file: 'collections/c.json' }], profiles: [], variables: [], assets: [],
+    plugins: [{ id: 'obs-pipewire-audio-capture', name: 'PipeWire Audio Capture', provides: [{ kind: 'module', id: 'linux-pipewire-audio' }], platforms: ['linux'] }], platformMap: [] }))
+  wz.file('collections/c.json', JSON.stringify({ name: 'Win scenes', sources: [
+    { id: 'scene', name: 'S', uuid: 'u1', settings: { items: [{ name: 'Game window', source_uuid: 'u2', visible: true, id: 1 }] } },
+    { id: 'window_capture', name: 'Game window', uuid: 'u2', settings: { window: 'x:y:Game.exe', capture_audio: true } },
+    { id: 'wasapi_input_capture', name: 'Mic', uuid: 'u3', settings: {} },
+  ] }))
+  const winFile = path.join(root, 'from-windows.obsbundle'); fs.writeFileSync(winFile, await wz.generateAsync({ type: 'nodebuffer' }))
+  await page.click('nav >> text=Presets')
+  await app.evaluate(({ dialog }, p) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] }) }, winFile)
+  await page.click('button:has-text("Open a setup file")')
+  await page.click('button:has-text("Choose a file")')
+  await page.waitForSelector('text=Here is what will happen')
+  const mic = page.locator('select[aria-label="What Mic becomes"]')
+  const win = page.locator('select[aria-label="What Game window becomes"]')
+  await mic.waitFor()
+  check('each swapped source has a choice', (await win.locator('option').count()) > 3)
+  check('the load is never stopped by plugins', await page.locator('button:has-text("Load into OBS")').isEnabled())
+  await mic.selectOption('__hide__')
+  await page.waitForSelector('text=hidden, as you chose')
+  await win.selectOption({ label: 'Window Capture (X11)' })
+  await page.waitForFunction(() => document.querySelector('main').innerText.includes('Window Capture (X11)'))
+  await page.screenshot({ path: OUT + '/p7-import-choices.png', fullPage: true })
+  await page.click('button:has-text("Load into OBS")')
+  await page.waitForSelector('text=Done.')
+  const loaded = JSON.parse(fs.readFileSync(path.join(cfg, 'basic/scenes/Win scenes.json'), 'utf8'))
+  check('the chosen stand-in was used', loaded.sources.find((x) => x.name === 'Game window').id === 'xcomposite_input')
+  check('the hidden source stays but is hidden where it is used', loaded.sources.find((x) => x.name === 'Mic').id === 'wasapi_input_capture')
+  check('capture audio still became its own audio source', loaded.sources.some((x) => x.name === 'Game window (audio)' && x.id === 'pipewire_audio_application_capture'))
+
   await app.close()
   console.log(process.exitCode ? 'E2E-PRESETS FAILED' : 'E2E-PRESETS OK')
 })().catch((e) => { console.error('E2E-PRESETS FAIL', e); process.exit(1) })

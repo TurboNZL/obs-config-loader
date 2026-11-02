@@ -55,7 +55,12 @@ Under **OBS on this computer**, *Make a second OBS* runs the same OBS program wi
 - Its plugin folder is shown on its card (*Show plugins folder*). Plugins installed as Flatpak extensions are shared by every Flatpak OBS; put plugins you want kept separate in that folder instead.
 - Loading a setup only waits for the OBS that uses the same settings, so a second OBS being open never blocks the first.
 
+## Choosing what swapped sources become
+When you load a setup made on another kind of computer, the **Here is what will happen** step lists every source that had to be swapped or hidden, each with a **Use instead** menu. Pick another stand-in, or **Hide it**, and the summary updates straight away. To make a choice stick for a preset, set it under **How sources change on other computers** in the preset's details.
+
 ## Plugins
+A missing plugin never stops a load: its sources stay empty until you install it and restart OBS. A plugin that does not exist for your kind of computer (the PipeWire audio plugin on Windows, say) is marked **not needed on this computer**; its sources are swapped for Windows ones instead.
+
 Plugins are not part of a preset. When you save, the app lists the plugins your setup uses; when you load, it checks which are installed on this computer (asking OBS itself, so it does not matter where the plugin's files are) and shows where to get the missing ones. Install them, then restart OBS.
 
 OBS 33 and newer look for plugins you add yourself in `~/.local/share/obs-studio/plugins` on Linux; older versions use the plugins folder in the settings folder (File, Show Settings Folder). The app knows both.

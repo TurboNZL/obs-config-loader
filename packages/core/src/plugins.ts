@@ -1,5 +1,5 @@
 import type { Host, ObsInstall } from './detect.js'
-import type { PluginRef } from './types.js'
+import type { Platform, PluginRef } from './types.js'
 import { CROSS_PLATFORM_BUILTIN_SOURCES, SOURCE_PLATFORMS } from './sources.js'
 import { readPluginManager } from './versions.js'
 
@@ -41,6 +41,7 @@ export const KNOWN_PLUGINS: PluginRef[] = [
       { kind: 'source', id: 'pipewire_audio_output_capture' },
       { kind: 'module', id: 'linux-pipewire-audio' },
     ],
+    platforms: ['linux'],
     homepage: 'https://github.com/dimtpap/obs-pipewire-audio-capture',
     install: {
       'linux-flatpak': 'flatpak install flathub com.obsproject.Studio.Plugin.PipeWireAudioCapture (if no devices show up afterwards: flatpak override --user --filesystem=xdg-run/pipewire-0 com.obsproject.Studio)',
@@ -57,6 +58,23 @@ export const KNOWN_PLUGINS: PluginRef[] = [
       'linux-native': 'Install the package from the project releases page (see the project page).',
       windows: 'Run the installer from the project releases page.',
       macos: 'Follow the project page.',
+    },
+  },
+  {
+    // module and file names checked against the plugin's own source (buildspec.json, aitum-stream-suite.cpp, component-source.c):
+    // it keeps its canvases, outputs and docks in `aitum.json` inside the profile, and registers the source `component_source`
+    id: 'aitum-stream-suite',
+    name: 'Aitum Stream Suite',
+    provides: [
+      { kind: 'module', id: 'aitum-stream-suite' },
+      { kind: 'source', id: 'component_source' },
+    ],
+    homepage: 'https://github.com/Aitum/obs-aitum-stream-suite',
+    install: {
+      windows: 'Download the installer from the project page, close OBS, run it, then start OBS again.',
+      macos: 'Download the package from the project page and follow its steps.',
+      'linux-flatpak': 'Follow the project page (it may not have a Flatpak extension yet).',
+      'linux-native': 'Follow the project page.',
     },
   },
   {
@@ -108,7 +126,8 @@ export function installedModules(host: Host, install: ObsInstall): Set<string> {
   return found
 }
 
-export type PluginStatus = 'present' | 'missing'
+/** `not-needed`: the plugin does not exist for this system, and the setup does not use it here. */
+export type PluginStatus = 'present' | 'missing' | 'not-needed'
 export interface PluginFinding {
   plugin: PluginRef
   status: PluginStatus | 'unverifiable'
@@ -125,6 +144,7 @@ const norm = (s: string) => s.toLowerCase().replace(/[-_]/g, '')
 /** Profile files that prove a plugin is in use even though no scene id mentions it. */
 export const FILE_HINTS: Record<string, string> = {
   'obs-multi-rtmp.json': 'obs-multi-rtmp',
+  'aitum.json': 'aitum-stream-suite',
 }
 
 export function pluginReport(used: UsedIds, modules: Set<string> | undefined, hinted: Set<string> = new Set()): PluginReport {
@@ -153,9 +173,11 @@ export function pluginReport(used: UsedIds, modules: Set<string> | undefined, hi
 }
 
 /** Importer side: check the plugins a bundle declares against what the target has. */
-export function checkPlugins(refs: PluginRef[], modules: Set<string> | undefined): PluginFinding[] {
+export function checkPlugins(refs: PluginRef[], modules: Set<string> | undefined, target?: Platform): PluginFinding[] {
   const moduleSet = modules ? new Set([...modules].map(norm)) : undefined
   return refs.map((plugin) => {
+    const platforms = KNOWN_PLUGINS.find((k) => k.id === plugin.id)?.platforms ?? plugin.platforms
+    if (target && platforms && !platforms.includes(target)) return { plugin, status: 'not-needed' as const, usedBy: [] }
     const modIds = plugin.provides.filter((p) => p.kind === 'module').map((p) => norm(p.id))
     const status: PluginFinding['status'] = !modIds.length || !moduleSet
       ? 'unverifiable'

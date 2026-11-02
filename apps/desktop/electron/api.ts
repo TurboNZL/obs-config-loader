@@ -30,6 +30,8 @@ export interface ImportRequest {
   preferPipewire: boolean
   /** Put back OBS's remote-control (WebSocket) settings when the setup has them. Default yes. */
   websocket?: boolean
+  /** This load's own choice per source id: a stand-in id, or null to hide the source. */
+  sourceChoices?: Record<string, string | null>
 }
 
 export interface ExportRequest {

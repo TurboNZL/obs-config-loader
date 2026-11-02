@@ -14,7 +14,7 @@ export interface ScrubResult<T> { value: T; variables: Variable[] }
  * (one stream key used by OBS and by a multi-output plugin is one question at import).
  */
 /** Plugin config files we recognise, so a secret in one is described by the plugin's name, not a file name. */
-const FILE_LABEL: Record<string, string> = { 'obs-multi-rtmp.json': 'Multiple RTMP outputs' }
+const FILE_LABEL: Record<string, string> = { 'obs-multi-rtmp.json': 'Multiple RTMP outputs', 'aitum.json': 'Aitum Stream Suite' }
 
 export class SecretScrubber {
   private byValue = new Map<string, string>()
