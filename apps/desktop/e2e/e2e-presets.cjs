@@ -109,7 +109,7 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   console.log('4. export the preset to a file')
   const bundle = path.join(root, 'out.obsbundle')
   await app.evaluate(({ dialog }, p) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: p }) }, bundle)
-  await show.locator('button:has-text("Export to a file")').click()
+  await show.locator('button:has-text("Save to a file")').click()
   await page.waitForSelector('text=This makes one file')
   check('stream keys cannot be ticked when none are remembered', await show.locator('label:has-text("Include my stream keys") input').isDisabled())
   await show.locator('button:has-text("Choose where to save")').click()

@@ -8,7 +8,7 @@ A **preset** is a saved copy of your OBS setup: your scenes, output settings, pl
 - **New preset from my OBS** saves what is in OBS now. Each preset gets its own folder inside the app's presets folder (change it under **Settings**).
 - **Save OBS to this preset** updates it after you change things in OBS.
 - **Load into OBS…** puts a preset into the OBS on this computer. Close OBS first: it saves over its own files when it closes and would undo the change. Before you load, the app shows **what will happen** in plain words: what will be replaced (a backup copy is always kept first), which plugins you still need, and anything you need to set up again.
-- **Export to a file…** makes one file you can copy to another computer (USB stick, cloud drive, anything). On that computer press **Open a setup file…** on the Presets page.
+- **Save to a file…** makes one file you can copy to another computer (USB stick, cloud drive, anything). On that computer press **Open a setup file…** on the Presets page.
 - **Back up online** keeps a copy on GitHub that is updated every time you save. Switch it on per preset; you can use the same preset on all your computers.
 
 ## Renaming

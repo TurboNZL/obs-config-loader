@@ -395,7 +395,7 @@ function PresetCard({ repo, installs, gh, refresh, apply, go }: { repo: RepoInfo
       <div className="flex gap-2 flex-wrap">
         <button className="btn btn-accent px-3 py-1.5" disabled={busy || !installId} onClick={() => save(false)}>Save OBS to this preset</button>
         <button className="btn px-3 py-1.5" disabled={busy} onClick={() => apply(repo.path, installId)}>Load into OBS…</button>
-        <button className="btn px-3 py-1.5" disabled={busy} onClick={() => setExporting(!exporting)}>Export to a file…</button>
+        <button className="btn px-3 py-1.5" disabled={busy} onClick={() => setExporting(!exporting)}>Save to a file…</button>
       </div>
 
       {exporting && (
