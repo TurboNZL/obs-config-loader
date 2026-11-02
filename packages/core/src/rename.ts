@@ -54,7 +54,7 @@ export function renameSceneLayout(dir: string, id: string, newName: string): str
   const vOld = nodePath.join(dir, variantsPathFor(c.file))
   if (fs.existsSync(vOld) && newFile !== c.file) fs.renameSync(vOld, nodePath.join(dir, variantsPathFor(newFile)))
   changed.push(c.file, newFile)
-  c.id = newId; const oldName = c.name; c.name = name; c.file = newFile
+  c.id = newId; const oldName = c.name; c.name = name; c.file = newFile; delete c.fileName // OBS names the file after the new name now
   if (b.manifest.exclude?.collections?.includes(oldName)) b.manifest.exclude.collections = b.manifest.exclude.collections.map((n) => (n === oldName ? name : n))
   if (b.manifest.activeCollection === id) b.manifest.activeCollection = newId
   writeManifest(dir, b.manifest)
@@ -77,7 +77,7 @@ export function renameOutputSetting(dir: string, id: string, newName: string): s
   if (newDir !== p.dir) fs.renameSync(nodePath.join(dir, p.dir), nodePath.join(dir, newDir))
   const old = p.dir
   const oldName = p.name
-  p.id = newId; p.name = name; p.dir = newDir
+  p.id = newId; p.name = name; p.dir = newDir; delete p.dirName
   if (b.manifest.exclude?.profiles?.includes(oldName)) b.manifest.exclude.profiles = b.manifest.exclude.profiles.map((n) => (n === oldName ? name : n))
   if (b.manifest.activeProfile === id) b.manifest.activeProfile = newId
   writeManifest(dir, b.manifest)
@@ -140,29 +140,29 @@ const fileSafe = (n: string) => n.replace(/[\\/:*?"<>|\0]/g, '_')
  * Rename a scene layout in an OBS settings folder (its file, the name inside it, and the "current" choice in global.ini).
  * OBS must not be running: it rewrites its files when it quits and would undo this.
  */
-export function renameLayoutInObs(configDir: string, from: string, newName: string): void {
+export function renameLayoutInObs(configDir: string, from: string, newName: string, fromFile: string = from): void {
   const to = need(newName)
   const dir = nodePath.join(configDir, 'basic', 'scenes')
-  const src = nodePath.join(dir, fileSafe(from) + '.json'), dst = nodePath.join(dir, fileSafe(to) + '.json')
+  const src = nodePath.join(dir, fileSafe(fromFile) + '.json'), dst = nodePath.join(dir, fileSafe(to) + '.json')
   if (!fs.existsSync(src)) throw new RenameError(`OBS has no scene layout called “${from}”.`)
   if (src !== dst && fs.existsSync(dst)) throw new RenameError(`OBS already has a scene layout called “${to}”.`)
   const json = JSON.parse(fs.readFileSync(src, 'utf8')); json.name = to
   fs.writeFileSync(dst, JSON.stringify(json, null, 4) + '\n')
   if (src !== dst) fs.rmSync(src)
-  renameActive(configDir, 'collection', from, fileSafe(from), to, fileSafe(to))
+  renameActive(configDir, 'collection', from, fileSafe(fromFile), to, fileSafe(to))
 }
 
 /** Rename output settings in an OBS settings folder (folder, the name in basic.ini, global.ini). */
-export function renameOutputInObs(configDir: string, from: string, newName: string): void {
+export function renameOutputInObs(configDir: string, from: string, newName: string, fromDir: string = from): void {
   const to = need(newName)
   const root = nodePath.join(configDir, 'basic', 'profiles')
-  const src = nodePath.join(root, fileSafe(from)), dst = nodePath.join(root, fileSafe(to))
+  const src = nodePath.join(root, fileSafe(fromDir)), dst = nodePath.join(root, fileSafe(to))
   if (!fs.existsSync(src)) throw new RenameError(`OBS has no output settings called “${from}”.`)
   if (src !== dst && fs.existsSync(dst)) throw new RenameError(`OBS already has output settings called “${to}”.`)
   if (src !== dst) fs.renameSync(src, dst)
   const ini = nodePath.join(dst, 'basic.ini')
   if (fs.existsSync(ini)) fs.writeFileSync(ini, setIni(fs.readFileSync(ini, 'utf8'), 'General', 'Name', to))
-  renameActive(configDir, 'profile', from, fileSafe(from), to, fileSafe(to))
+  renameActive(configDir, 'profile', from, fileSafe(fromDir), to, fileSafe(to))
 }
 
 /** Rename a scene or source inside one scene layout in an OBS settings folder. Returns false when OBS has no such thing. */

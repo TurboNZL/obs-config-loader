@@ -10,6 +10,8 @@ export interface TokenResolver {
   asset(id: string): string | undefined
   variable(name: string): string | undefined
   builtin(name: BuiltinToken): string | undefined
+  /** Is this variable a folder or file path? Then separators in the whole value follow the target system. */
+  isPath?(name: string): boolean
   /** Called for every token that could not be resolved. */
   missing(kind: 'asset' | 'var' | 'builtin', name: string): void
 }
@@ -43,6 +45,7 @@ export function resolveString(s: string, r: TokenResolver, target: Platform): st
     if (kind === 'var' && arg) {
       const v = r.variable(arg)
       if (v === undefined) { r.missing('var', arg); return '' }
+      if (r.isPath?.(arg)) usedPathToken = true
       return v
     }
     if (arg === undefined && (BUILTIN_TOKENS as readonly string[]).includes(kind)) {
@@ -99,4 +102,9 @@ export function splitPath(s: string): { root: string; parts: string[] } {
     return { root: m[1], parts: m[2].split(/[\\/]/).filter(Boolean) }
   }
   return { root: '/', parts: s.split('/').filter(Boolean) }
+}
+
+/** The name OBS gives a file or folder for a scene layout or output settings called `name`. */
+export function sanitizeFileName(name: string): string {
+  return name.replace(/[\\/:*?"<>|\0]/g, '_').replace(/^\.+/, '_').trim() || 'Untitled'
 }

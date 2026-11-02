@@ -323,6 +323,20 @@ async function baseFor(dir: string, install: ObsInstall, git: GitRunner): Promis
   return { head, base: head }
 }
 
+/**
+ * What the preset has that this OBS has not got yet: saves that came after the last time the preset was put into OBS or OBS was
+ * saved into it (typically after "Get updates"). `null` when nobody has said yet, so nothing can be claimed.
+ */
+export async function pendingForObs(dir: string, install: ObsInstall, git: GitRunner = defaultGit): Promise<string[] | null> {
+  const head = await revParse(dir, 'HEAD', git)
+  const marked = await revParse(dir, syncRef(install), git)
+  if (!head || !marked) return null
+  if (marked === head) return []
+  if ((await git(['merge-base', '--is-ancestor', marked, head], dir)).code !== 0) return null
+  const r = await git(['diff', '--name-only', marked, head], dir)
+  return r.stdout.split('\n').filter(Boolean).filter((f) => !/^(manifest\.json|assets\.lock\.json|\.gitignore)$/.test(f) || true)
+}
+
 /** Call after the repo's content has been loaded into OBS: from now on live edits are measured from here. */
 export async function markSynced(dir: string, install: ObsInstall, git: GitRunner = defaultGit): Promise<void> {
   const head = await revParse(dir, 'HEAD', git)
@@ -369,6 +383,11 @@ function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest[
         }
       } catch { /* leave as exported */ }
     }
+    // a folder's suggested place is the first saver's, so two computers with different folders never rewrite it back and forth
+    bundle.manifest.variables = bundle.manifest.variables.map((v) => {
+      const old = prev.manifest.variables.find((x) => x.name === v.name)
+      return old && old.default !== undefined ? { ...v, default: old.default } : v
+    })
     const { collections: _c, profiles: _p, variables: _v, assets: _a, plugins: _pl, platformMap: _pm, ...rest } = prev.manifest
     void _c; void _p; void _v; void _a; void _pl; void _pm
     const merged = { ...rest, ...bundle.manifest, exportedAt: prev.manifest.exportedAt, revision: prev.manifest.revision } as Manifest

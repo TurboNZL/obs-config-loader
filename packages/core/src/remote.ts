@@ -138,6 +138,35 @@ export async function githubCreateRepo(
   }
 }
 
+/**
+ * GitHub repositories made by this app are all called `OBS-Config-<name>`, so they are easy to find among a person's others.
+ * Takes what a person typed (a preset's name, or only the part after the prefix) and gives the repository name.
+ */
+export const REPO_PREFIX = 'OBS-Config-'
+export function githubRepoName(typed: string): string {
+  const rest = typed.trim().replace(/^obs-config-/i, '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
+  return REPO_PREFIX + (rest || 'setup')
+}
+
+/** `owner` and `repo` from a GitHub address (https or ssh), when it is one. */
+export function parseGithubUrl(url: string): { owner: string; repo: string } | null {
+  const m = /^(?:https?:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url.trim())
+    // the stand-in used in tests and GitHub Enterprise: any host, the last two path parts
+    ?? /^(?:https?:\/\/[^/]+\/)([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url.trim())
+  return m ? { owner: m[1], repo: m[2] } : null
+}
+
+/** Rename a repository on GitHub. Returns the new addresses (the old address keeps working on GitHub, but we switch to the new one). */
+export async function githubRenameRepo(token: string, owner: string, repo: string, newName: string, f?: Fetch): Promise<GithubRepo> {
+  try {
+    return toRepo(await gh<any>(token, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { method: 'PATCH', body: JSON.stringify({ name: githubRepoName(newName) }) }, f))
+  } catch (e) {
+    if (e instanceof GithubError && e.status === 422) throw new GithubError(`You already have a repository called "${githubRepoName(newName)}" on GitHub. Pick another name.`, 422)
+    if (e instanceof GithubError && e.status === 404) throw new GithubError('GitHub could not find that repository, or your token may not be allowed to change it.', 404)
+    throw e
+  }
+}
+
 /** The link that opens GitHub's token page with the right permission ticked, so the user only has to press Generate. */
 export const GITHUB_TOKEN_URL =
   'https://github.com/settings/tokens/new?scopes=repo&description=' + encodeURIComponent('OBS Config Loader')
@@ -152,7 +181,7 @@ export async function publishToGithub(
   const st = await repoStatus(dir, git)
   if (!st.isRepo) throw new Error('That folder is not a git repository.')
   if (st.remote) throw new Error('This repository already has a remote. Change its address instead.')
-  const repo = await githubCreateRepo(token, name, opts, f)
+  const repo = await githubCreateRepo(token, githubRepoName(name), opts, f)
   const set = await setRemote(dir, repo.cloneUrl, git)
   if (!set.ok) throw new Error(set.message)
   return { repo, push: await pushRepo(dir, git) }

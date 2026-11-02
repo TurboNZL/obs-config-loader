@@ -804,9 +804,9 @@ function registerIpc() {
       const layout = m.collections.find((c) => c.id === (r.kind === 'layout' ? r.id : r.layoutId))
       const output = m.profiles.find((x) => x.id === r.id)
       // is the same thing in the linked OBS too?
-      const inObs = !!inst && (r.kind === 'layout' ? !!layout && obsHasLayout(inst.configDir, layout.name)
-        : r.kind === 'output' ? !!output && obsHasOutput(inst.configDir, output.name)
-        : r.kind === 'scene' ? !!layout && obsHasLayout(inst.configDir, layout.name) : false)
+      const inObs = !!inst && (r.kind === 'layout' ? !!layout && obsHasLayout(inst.configDir, layout.fileName ?? layout.name)
+        : r.kind === 'output' ? !!output && obsHasOutput(inst.configDir, output.dirName ?? output.name)
+        : r.kind === 'scene' ? !!layout && obsHasLayout(inst.configDir, layout.fileName ?? layout.name) : false)
       if (inObs && (await obsRunningFor(inst!))) return { ok: false, error: 'OBS is open. Close it first, so the new name can be changed in OBS as well.' }
       if (inObs) {
         // make sure nothing done in OBS since the last save is lost
@@ -824,9 +824,9 @@ function registerIpc() {
         else if (r.kind === 'output') renameOutputSetting(r.path, outputNow!.id, r.to)
         else renameSceneOrSource(r.path, layoutNow!.id, r.from!, r.to)
         if (inObs) {
-          if (r.kind === 'layout') renameLayoutInObs(inst!.configDir, layoutNow!.name, r.to)
-          else if (r.kind === 'output') renameOutputInObs(inst!.configDir, outputNow!.name, r.to)
-          else renameSourceInObs(inst!.configDir, layoutNow!.name, r.from!, r.to)
+          if (r.kind === 'layout') renameLayoutInObs(inst!.configDir, layoutNow!.name, r.to, layoutNow!.fileName ?? layoutNow!.name)
+          else if (r.kind === 'output') renameOutputInObs(inst!.configDir, outputNow!.name, r.to, outputNow!.dirName ?? outputNow!.name)
+          else renameSourceInObs(inst!.configDir, layoutNow!.fileName ?? layoutNow!.name, r.from!, r.to)
         }
       } catch (e) {
         // leave the preset exactly as it was
