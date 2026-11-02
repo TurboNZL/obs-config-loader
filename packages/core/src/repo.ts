@@ -228,6 +228,8 @@ export interface CaptureOptions {
   appVersion?: string
   /** This computer's OBS and plugin versions, recorded in the setup (the newest ever saved is kept). */
   versions?: DetectedVersions
+  /** What a brand-new preset leaves out. An existing preset's own list always wins. */
+  exclude?: Manifest['exclude']
   /** When the repo and OBS changed the same lines: stop (default), or settle just those lines in favour of one side. */
   onConflict?: 'abort' | 'keep-repo' | 'keep-obs'
   git?: GitRunner
@@ -267,7 +269,7 @@ export async function markSynced(dir: string, install: ObsInstall, git: GitRunne
 }
 
 /** Overlay the live OBS state onto a checkout of the repo (keeps ids, names, platform originals, unknown manifest fields). */
-function writeLiveInto(o: CaptureOptions, target: string): void {
+function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest['exclude']): void {
   let prev: Bundle | undefined
   try { prev = readBundleDir(target) } catch (e) {
     if (!(e instanceof BundleError && e.code === 'not-a-bundle')) throw e
@@ -278,7 +280,7 @@ function writeLiveInto(o: CaptureOptions, target: string): void {
     description: typeof pm?.description === 'string' ? pm.description : undefined,
     // No name filter: OBS is the source of truth for which scenes/profiles exist. (Filtering by the names saved
     // earlier made a renamed collection or profile vanish, and the folder was then wiped.)
-    bundleBelowBytes: o.bundleBelowBytes, appVersion: o.appVersion, versions: o.versions, exclude: pm?.exclude,
+    bundleBelowBytes: o.bundleBelowBytes, appVersion: o.appVersion, versions: o.versions, exclude: excludeNow ?? pm?.exclude ?? o.exclude,
     // the repo's history is its revision list: keep these two still so they never cause a merge conflict
     revision: pm?.revision, now: pm?.exportedAt ? new Date(pm.exportedAt) : undefined,
   })
@@ -319,6 +321,7 @@ function writeLiveInto(o: CaptureOptions, target: string): void {
     if (prev.manifest.generator) bundle.manifest.generator = prev.manifest.generator
   } else {
     delete (bundle.manifest as Partial<Manifest>).revision
+    if (o.exclude && Object.values(o.exclude).some((v) => (Array.isArray(v) ? v.length : v))) bundle.manifest.exclude = o.exclude
   }
   deriveManifestFields(bundle) // from the final files (canonical + every platform's variants), not from this machine alone
   applyVersions(bundle.manifest, prev?.manifest, o.versions)
@@ -344,6 +347,9 @@ export async function captureLive(o: CaptureOptions): Promise<CaptureResult> {
   }
   const { head, base } = await baseFor(o.dir, o.install, git)
   const id = await identity(o.dir, git)
+  // What the preset leaves out is what it says NOW (its current files), not what it said at the commit OBS last matched.
+  let excludeNow: Manifest['exclude'] | undefined
+  try { excludeNow = readBundleDir(o.dir).manifest.exclude ?? {} } catch { /* first save: nothing yet */ }
 
   try {
     // First capture into an empty repository: write straight into the working tree.
@@ -360,7 +366,7 @@ export async function captureLive(o: CaptureOptions): Promise<CaptureResult> {
     try {
       const add = await git(['worktree', 'add', '--detach', wt, base], o.dir)
       if (add.code !== 0) return { status: 'error', message: `Could not prepare a scratch checkout: ${add.stderr.trim()}` }
-      writeLiveInto(o, wt)
+      writeLiveInto(o, wt, excludeNow)
       await git(['add', '-A'], wt)
       const files = (await git(['diff', '--cached', '--name-only'], wt)).stdout.split('\n').filter(Boolean).sort()
       if (!files.length) return { status: 'unchanged' }

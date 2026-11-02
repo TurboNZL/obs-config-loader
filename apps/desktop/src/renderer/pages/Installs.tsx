@@ -5,7 +5,7 @@ import { Card, Chip, Field, KIND_LABEL, Message, Page } from '../ui'
 export function InstallsPage({ installs, refresh, go }: {
   installs: InstallInfo[] | null
   refresh: () => Promise<void>
-  go: (t: 'import' | 'export', installId?: string) => void
+  go: (t: 'import' | 'presets', installId?: string) => void
 }) {
   const [msg, setMsg] = useState<string | null>(null)
 
@@ -39,7 +39,7 @@ export function InstallsPage({ installs, refresh, go }: {
 
 type Start = { phase: 'idle' } | { phase: 'starting' } | { phase: 'checking' } | { phase: 'own' } | { phase: 'notown' } | { phase: 'failed'; message: string; command?: string }
 
-function InstallCard({ i, refresh, go }: { i: InstallInfo; refresh: () => Promise<void>; go: (t: 'import' | 'export', installId?: string) => void }) {
+function InstallCard({ i, refresh, go }: { i: InstallInfo; refresh: () => Promise<void>; go: (t: 'import' | 'presets', installId?: string) => void }) {
   const [start, setStart] = useState<Start>({ phase: 'idle' })
   const [confirmRemove, setConfirmRemove] = useState(false)
   const [deleteFiles, setDeleteFiles] = useState(false)
@@ -99,7 +99,7 @@ function InstallCard({ i, refresh, go }: { i: InstallInfo; refresh: () => Promis
       <div className="flex gap-2 flex-wrap">
         {i.launch && <button className="btn px-3 py-1.5" disabled={start.phase === 'starting' || start.phase === 'checking'} onClick={launch}>Start OBS</button>}
         <button className="btn btn-accent px-3 py-1.5" onClick={() => go('import', i.id)}>Load a setup here</button>
-        <button className="btn px-3 py-1.5" disabled={!i.configExists} onClick={() => go('export', i.id)}>Save this setup to a file</button>
+        <button className="btn px-3 py-1.5" disabled={!i.configExists} onClick={() => go('presets', i.id)}>Save this setup…</button>
         <button className="btn btn-ghost px-3 py-1.5" disabled={!i.configExists} onClick={() => window.obsLoader.installs.openFolder(i.id)}>Show its folder</button>
         {isInstance && <button className="btn btn-ghost px-3 py-1.5" onClick={() => window.obsLoader.instances.openPlugins(i.id)}>Show plugins folder</button>}
         {i.custom && <button className="btn btn-ghost px-3 py-1.5" onClick={() => setConfirmRemove(true)}>Remove from this list…</button>}

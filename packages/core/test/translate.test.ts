@@ -178,3 +178,30 @@ describe('big files in a file', () => {
     expect(withIt.manifest.assets.find((x) => x.id === a.id)!.sha256).toBe(a.sha256)
   })
 })
+
+describe('changing what a preset leaves out', () => {
+  it('takes effect at the next save, both ways, even though OBS was last matched before the change', async () => {
+    const home = nodePath.join(tmp, 'home'); const { cfg } = makeSource(home)
+    fs.writeFileSync(nodePath.join(cfg, 'basic/scenes/Other.json'), JSON.stringify({ name: 'Other', sources: [] }))
+    const dir = nodePath.join(tmp, 'repo'); await initRepo(dir)
+    const h = host('linux', home), inst = install(cfg)
+    await captureLive({ host: h, install: inst, dir, name: 'Mine' })
+    expect(fs.existsSync(nodePath.join(dir, 'collections/other.json'))).toBe(true)
+    const { execFileSync } = await import('node:child_process')
+    const setExclude = (ex: unknown) => {
+      const m = JSON.parse(fs.readFileSync(nodePath.join(dir, 'manifest.json'), 'utf8')); if (ex) m.exclude = ex; else delete m.exclude
+      fs.writeFileSync(nodePath.join(dir, 'manifest.json'), JSON.stringify(m, null, 2) + '\n')
+      execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@e.com', 'commit', '-qam', 'settings'], { cwd: dir })
+    }
+    setExclude({ collections: ['Other'] })
+    expect((await captureLive({ host: h, install: inst, dir, dryRun: true })).status).toBe('changes') // the person is told a save would change things
+    expect((await captureLive({ host: h, install: inst, dir })).status).toBe('committed')
+    expect(fs.existsSync(nodePath.join(dir, 'collections/other.json'))).toBe(false)
+    expect(readBundleDir(dir).manifest.collections.map((c) => c.name)).toEqual(['Main'])
+    expect((await captureLive({ host: h, install: inst, dir })).status).toBe('unchanged')
+    setExclude(undefined)
+    expect((await captureLive({ host: h, install: inst, dir })).status).toBe('committed')
+    expect(fs.existsSync(nodePath.join(dir, 'collections/other.json'))).toBe(true)
+    expect(readBundleDir(dir).manifest.exclude).toBeUndefined()
+  })
+})

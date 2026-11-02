@@ -5,7 +5,7 @@ OBS Config Loader moves your whole OBS setup between computers, and can keep it 
 ## Presets
 A **preset** is a saved copy of your OBS setup: your scenes, output settings, plugin list, scripts and OBS's remote-control settings. Everything lives under **Presets**.
 
-- **New preset from my OBS** saves what is in OBS now. Each preset gets its own folder inside the app's presets folder (change it under **Settings**).
+- **Save my OBS setup** is the one place to save. Pick what to include, then where it goes: **as a preset** on this computer (the default), **backed up online**, **also as one file**, or just a file. A preset is optional. Each preset gets its own folder inside the app's presets folder.
 - **Save OBS to this preset** updates it after you change things in OBS.
 - **Load into OBS…** puts a preset into the OBS on this computer. Close OBS first: it saves over its own files when it closes and would undo the change. Before you load, the app shows **what will happen** in plain words: what will be replaced (a backup copy is always kept first), which plugins you still need, and anything you need to set up again.
 - **Save to a file…** makes one file you can copy to another computer (USB stick, cloud drive, anything). On that computer press **Open a setup file…** on the Presets page.

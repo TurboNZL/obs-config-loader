@@ -109,7 +109,7 @@ exec "${bin}/obs" -e "setTimeout(function(){},1500)"
   await page.click('button:has-text("Add OBS from a folder")')
   await page.waitForSelector('text=added by you')
   const opt = page.locator('section.card:has-text("Make a second OBS") select option:has-text("portable")')
-  check('a portable OBS cannot be picked to make a second one from', await opt.isDisabled() && (await opt.innerText()).includes('cannot have a second one'))
+  check('a portable OBS cannot be picked to make a second one from', (await opt.evaluate((o) => o.disabled)) && (await opt.innerText()).includes('cannot have a second one'))
   check('and the button stays off for it', true)
 
   console.log('6. remove the separate OBS, deleting its files')

@@ -7,13 +7,15 @@ import {
   gitAvailable, gitInstallHelp, githubAuthGit, githubListRepos, githubWhoAmI, initRepo, markSynced, planImport, portableInstall, publishToGithub,
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
-  assetBundlePath, attachSecrets, commitAll, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
+  assetBundlePath, attachSecrets, commitAll, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
   renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, renameSourceInObs, RenameError,
 } from '@obs-config-loader/core'
 import { Updates } from './updater'
 import type { BundleSummary, ExportRequest, ExportResult, GithubState, ImportRequest, InstallInfo, Locations, RepoInfo } from './api'
 
 const host = realHost()
+/** Pictures, sounds and videos up to this size travel inside a file by themselves; bigger ones only when chosen. */
+const SMALL_FILE = 5 * 1024 * 1024
 const bundles = new Map<string, Bundle & { source: string }>()
 let nextHandle = 1
 
@@ -334,6 +336,7 @@ function registerIpc() {
       const bundle = exportBundle({
         host, install, name: r.name, collections: r.collections, profiles: r.profiles, appVersion: app.getVersion(), versions: detectVersions(install, host), includeSecrets: r.includeKeys === true && (r.format ?? 'file') === 'file',
         bundleBelowBytes: r.media === 'all' ? Infinity : r.media === 'none' ? 0 : undefined,
+        alsoBundle: r.alsoBundle, exclude: r.exclude,
       })
       let out: string
       if ((r.format ?? 'file') === 'file') {
@@ -433,14 +436,14 @@ function registerIpc() {
     return { ok: true, repo: await repoInfo({ path: folder }) }
   })
 
-  ipcMain.handle('repos:create', async (_e, r: { installId: string; name: string; folder: string; github?: { private: boolean } }) => {
+  ipcMain.handle('repos:create', async (_e, r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude'] }) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     if (!emptyOrMissing(r.folder)) return { ok: false, error: 'That folder is not empty. Choose another one.' }
     try {
       const git = gitRunner()
       await initRepo(r.folder, git)
       const inst = findInstall(r.installId)
-      const res = await captureLive({ host, install: inst, dir: r.folder, name: r.name, appVersion: app.getVersion(), versions: detectVersions(inst, host), git })
+      const res = await captureLive({ host, install: inst, dir: r.folder, name: r.name, appVersion: app.getVersion(), versions: detectVersions(inst, host), exclude: r.exclude, git })
       if (res.status === 'error') return { ok: false, error: res.message }
       rememberKeysFrom(inst, r.folder)
       rememberRepo(r.folder, r.installId)
@@ -567,24 +570,105 @@ function registerIpc() {
     try { return { count: Object.keys(readSecrets()[readBundleDir(p).manifest.id] ?? {}).length, canStore: safeStorage.isEncryptionAvailable() } } catch { return { count: 0, canStore: safeStorage.isEncryptionAvailable() } }
   })
   ipcMain.handle('presets:details', (_e, p: string) => {
-    const m = readBundleDir(p).manifest
+    const b = readBundleDir(p)
+    const m = b.manifest
+    const overrides = m.platformOverrides ?? {}
+    const platforms: ('win32' | 'darwin' | 'linux')[] = ['win32', 'darwin', 'linux']
+    const label = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }
     return {
       savedWithObs: m.savedWithObs as string | undefined,
       plugins: m.plugins.map((x) => ({ name: x.name, version: x.version, known: !x.id.startsWith('unknown:') })),
       scripts: m.assets.filter((a) => a.role === 'script').map((a) => a.filename),
-      remoteControl: readBundleDir(p).files.has('global/obs-websocket.json'),
+      remoteControl: b.files.has(WEBSOCKET_FILE),
       layouts: m.collections.map((c) => ({ id: c.id, name: c.name, ...listNames(p, c.id) })),
       outputs: m.profiles.map((x) => ({ id: x.id, name: x.name })),
+      exclude: m.exclude ?? {},
+      translations: m.platformMap.filter((e) => SOURCE_PLATFORMS[e.from]).map((e) => ({
+        from: e.from, name: sourceName(e.from),
+        targets: platforms.filter((pl) => !availableOn(e.from, pl)).map((pl) => {
+          const def = pl === 'linux' ? (e.to['linux-pipewire'] ?? e.to.linux) : e.to[pl]
+          const own = overrides[e.from]
+          const has = own && (pl === 'linux' ? 'linux' in own || 'linux-pipewire' in own : pl in own)
+          const val = has ? (pl === 'linux' ? (own!.linux ?? own!['linux-pipewire'] ?? null) : own![pl] ?? null) : undefined
+          return {
+            platform: pl, label: label[pl], default: def ?? null, defaultName: def ? sourceName(def) : null,
+            chosen: val === undefined ? undefined : val, // undefined = the built-in choice; null = hide it
+            options: standInOptions(e.from, pl).map((id) => ({ id, name: sourceName(id) })),
+          }
+        }),
+      })),
     }
   })
-  ipcMain.handle('presets:exportFile', async (_e, p: string, includeKeys: boolean) => {
+
+  /** Change the preset's own settings file and keep the change as a saved step. */
+  const editManifest = async (p: string, change: (m: ReturnType<typeof readBundleDir>['manifest']) => void, message: string) => {
+    const git = gitRunner()
+    const st = await repoStatus(p, git)
+    if (st.dirtyFiles.length) return { ok: false as const, error: 'This preset has changes that are not saved yet. Save them first.' }
+    const m = readBundleDir(p).manifest
+    change(m)
+    fs.writeFileSync(path.join(p, 'manifest.json'), serializeManifest(m))
+    await commitAll(p, message, git)
+    if (st.remote) await pushRepo(p, git)
+    return { ok: true as const }
+  }
+  ipcMain.handle('presets:setExclude', (_e, p: string, exclude: NonNullable<ExportRequest['exclude']>) =>
+    editManifest(p, (m) => {
+      const clean = { ...(exclude.collections?.length ? { collections: exclude.collections } : {}), ...(exclude.profiles?.length ? { profiles: exclude.profiles } : {}), ...(exclude.remoteControl ? { remoteControl: true } : {}), ...(exclude.scripts ? { scripts: true } : {}) }
+      if (Object.keys(clean).length) m.exclude = clean; else delete m.exclude
+    }, 'Changed what this preset saves'))
+  ipcMain.handle('presets:setOverrides', (_e, p: string, overrides: Record<string, Record<string, string | null>>) =>
+    editManifest(p, (m) => { if (Object.keys(overrides).length) m.platformOverrides = overrides as never; else delete m.platformOverrides }, 'Changed how sources are translated between computers'))
+
+  ipcMain.handle('presets:move', async (_e, p: string, parent: string) => {
+    try {
+      const target = path.join(parent, path.basename(p))
+      if (path.resolve(target) === path.resolve(p)) return { ok: false, error: 'It is already there.' }
+      if (path.resolve(target).startsWith(path.resolve(p) + path.sep)) return { ok: false, error: 'Choose a folder outside this preset.' }
+      if (fs.existsSync(target) && fs.readdirSync(target).length) return { ok: false, error: `There is already something called “${path.basename(p)}” in that folder. Choose another place.` }
+      fs.mkdirSync(parent, { recursive: true })
+      try { fs.renameSync(p, target) } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e
+        // another disk: copy, check, then remove the old one
+        fs.cpSync(p, target, { recursive: true })
+        if (!fs.existsSync(path.join(target, 'manifest.json'))) throw new Error('The copy did not finish, so nothing was moved.')
+        fs.rmSync(p, { recursive: true, force: true })
+      }
+      const s = loadSettings()
+      for (const r of s.repos) if (r.path === p) r.path = target
+      saveSettings(s)
+      return { ok: true, repo: await repoInfo(s.repos.find((r) => r.path === target) ?? { path: target }) }
+    } catch (e) { return { ok: false, error: `Could not move it: ${(e as Error).message}` } }
+  })
+
+  // what is in an OBS (and what would go into a file), without reading any big file into the file
+  ipcMain.handle('obs:scan', (_e, installId: string) => {
+    const b = exportBundle({ host, install: findInstall(installId), name: 'scan', bundleBelowBytes: 0 })
+    return {
+      files: b.manifest.assets.filter((a) => a.role !== 'script').map((a) => ({ id: a.id, filename: a.filename, size: a.size ?? 0, available: a.size !== undefined, auto: (a.size ?? 0) <= SMALL_FILE })),
+      scripts: b.manifest.assets.filter((a) => a.role === 'script').map((a) => a.filename),
+      remoteControl: b.files.has(WEBSOCKET_FILE),
+      keys: b.manifest.variables.filter((v) => v.kind === 'secret').map((v) => v.label ?? v.name),
+    }
+  })
+  ipcMain.handle('presets:scanFile', (_e, p: string) => {
+    const m = readBundleDir(p).manifest
+    const locs = readLocations()[m.id]?.assets ?? {}
+    return m.assets.filter((a) => a.role !== 'script' && a.mode === 'external').map((a) => {
+      const f = locs[a.id]
+      const ok = !!f && fs.existsSync(f)
+      const size = ok ? fs.statSync(f).size : a.size ?? 0
+      return { id: a.id, filename: a.filename, size, available: ok, auto: ok && size <= SMALL_FILE }
+    })
+  })
+  ipcMain.handle('presets:exportFile', async (_e, p: string, includeKeys: boolean, alsoBundle: string[] = []) => {
     try {
       const b = readBundleDir(p)
-      // bring back the big files this computer knows about, so the file is complete
+      // bring back the files this computer knows about: small ones always, big ones only when chosen
       const locs = readLocations()[b.manifest.id]?.assets ?? {}
       for (const a of b.manifest.assets) {
         const f = locs[a.id]
-        if (a.mode === 'external' && f && fs.existsSync(f) && fs.statSync(f).size <= 5 * 1024 * 1024) {
+        if (a.mode === 'external' && f && fs.existsSync(f) && (fs.statSync(f).size <= SMALL_FILE || alsoBundle.includes(a.id))) {
           a.mode = 'bundled'; b.files.set(assetBundlePath(a), fs.readFileSync(f))
         }
       }
