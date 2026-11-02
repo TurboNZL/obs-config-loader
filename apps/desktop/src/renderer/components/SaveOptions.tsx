@@ -42,7 +42,7 @@ export function KeysChoice({ checked, onChange, available, help }: { checked: bo
     <>
       <Choice
         checked={checked} disabled={!available} onChange={onChange} title="Include my stream keys in the file"
-        help={help ?? 'Off is safest: the file is then safe to share, and you type your keys again when you load it. Turn it on only if this file is just for you.'}
+        help={help ?? 'Off is safest: the file is then safe to share, and you type your keys again when you open it. Turn it on only if this file is just for you.'}
       />
       {checked && (
         <Message tone="bad">

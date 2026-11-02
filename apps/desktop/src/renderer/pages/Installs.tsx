@@ -98,7 +98,7 @@ function InstallCard({ i, refresh, go }: { i: InstallInfo; refresh: () => Promis
 
       <div className="flex gap-2 flex-wrap">
         {i.launch && <button className="btn px-3 py-1.5" disabled={start.phase === 'starting' || start.phase === 'checking'} onClick={launch}>Start OBS</button>}
-        <button className="btn btn-accent px-3 py-1.5" onClick={() => go('import', i.id)}>Load a setup here</button>
+        <button className="btn btn-accent px-3 py-1.5" onClick={() => go('import', i.id)}>Apply a setup here</button>
         <button className="btn px-3 py-1.5" disabled={!i.configExists} onClick={() => go('presets', i.id)}>Save this setup…</button>
         <button className="btn btn-ghost px-3 py-1.5" disabled={!i.configExists} onClick={() => window.obsLoader.installs.openFolder(i.id)}>Show its folder</button>
         {isInstance && <button className="btn btn-ghost px-3 py-1.5" onClick={() => window.obsLoader.instances.openPlugins(i.id)}>Show plugins folder</button>}

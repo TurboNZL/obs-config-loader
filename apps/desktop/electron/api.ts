@@ -76,6 +76,8 @@ export interface RepoInfo {
   /** OBS install this repo is saved from / applied to on this computer. */
   installId?: string
   status: RepoStatus
+  /** What it is called online, and a link when it is on github.com. */
+  online?: { name: string; url?: string }
 }
 
 export type UpdateState = {
@@ -185,7 +187,8 @@ export interface Api {
     setRemote(path: string, url: string): Promise<Done<object>>
     publish(path: string, name: string, priv: boolean): Promise<Done<{ url: string; pushed: boolean }>>
     /** What OBS has changed since the last save (dry run). */
-    live(path: string, installId: string): Promise<{ changed: string[] } | { error: string }>
+    /** `changed`: what OBS has that the preset does not. `pending`: what the preset has that this OBS does not (null: not known yet). */
+    live(path: string, installId: string): Promise<{ changed: string[]; pending?: string[] | null } | { error: string }>
     save(path: string, installId: string, commitDirtyFirst: boolean, onConflict?: SaveConflictChoice): Promise<SaveResult>
     pull(path: string, onConflict?: PullConflictChoice): Promise<PullResult>
     /** `force`: replace the online copy with this one (refused if someone pushed since we last looked). */
@@ -213,6 +216,8 @@ export interface Api {
     setOverrides(path: string, overrides: Record<string, Record<string, string | null>>): Promise<Done<object>>
     move(path: string, parentFolder: string): Promise<Done<{ repo: RepoInfo }>>
     rename(r: RenameRequest): Promise<Done<{ alsoInObs: boolean }>>
+    /** Rename the GitHub repository (the app always keeps the `OBS-Config-` start). */
+    renameOnline(path: string, name: string): Promise<Done<{ name: string }>>
     setOnline(path: string, on: boolean, name: string, priv: boolean): Promise<Done<{ url?: string; needsAccount?: boolean }>>
   }
   locations: {

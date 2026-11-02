@@ -129,7 +129,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
       if (keepPreset && !bundle!.repoDir && !existing) {
         const folder = await window.obsLoader.repos.suggestFolder(m!.name)
         const p = await window.obsLoader.repos.fromBundle(bundle!.handle, folder, installId)
-        setNote(p.ok ? `Kept as the preset “${p.repo.name}”${m!.repository?.url ? ', linked to its online copy' : ''}. Find it under “Presets”.` : `Loaded, but it could not be kept as a preset: ${p.error}`)
+        setNote(p.ok ? `Kept as the preset “${p.repo.name}”${m!.repository?.url ? ', linked to its online copy' : ''}. Find it under “Presets”.` : `Applied, but it could not be kept as a preset: ${p.error}`)
       }
       await refresh()
     } catch (e) { setError((e as Error).message) }
@@ -147,7 +147,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
   let step = 0
 
   return (
-    <Page title="Load a setup into OBS" intro="Open a setup file, choose which OBS it goes into, and check what will happen. Nothing changes until you press the button at the end.">
+    <Page title="Apply a setup to OBS" intro="Open a setup file, choose which OBS it goes into, and check what will happen. Nothing changes until you press the button at the end.">
       {error && <Message tone="bad">{error}</Message>}
 
       {done && install && (
@@ -159,7 +159,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
           <Card title="What now?">
             <div className="flex gap-2 flex-wrap">
               {install.launch && <button className="btn btn-accent px-4 py-2" onClick={() => void window.obsLoader.installs.launch(install.id).then((r) => setNote(r.ok ? 'Starting OBS…' : r.message))}>Start OBS</button>}
-              <button className="btn px-3 py-2" onClick={() => { setDone(null); setBundle(null); setReport(null) }}>Load another file</button>
+              <button className="btn px-3 py-2" onClick={() => { setDone(null); setBundle(null); setReport(null) }}>Open another file</button>
             </div>
             {note && <p className="text-sm text-muted">{note}</p>}
             {report && report.plugins.some((p) => p.status === 'missing') && <p className="text-sm">Some plugins this setup uses are not installed yet: see below.</p>}
@@ -209,7 +209,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
               {!bundle?.repoDir && !m.repository?.url && existing && <Message tone="good">You already have this as the preset “{existing.name}”.</Message>}
               {bundle?.repoDir && behind > 0 && (
                 <Message tone="warn">
-                  A newer version of this preset is online ({plural(behind, 'change')}). Get it first so you load the latest.
+                  A newer version of this preset is online ({plural(behind, 'change')}). Get it first so you apply the latest.
                   <div className="mt-2">
                     <button className="btn btn-accent px-3 py-1" disabled={saving} onClick={getUpdates}>{saving ? 'Getting it…' : 'Get updates first'}</button>
                   </div>
@@ -223,7 +223,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
 
       {m?.containsSecrets && !done && (
         <Message tone="bad">
-          <strong>Careful: this file contains stream keys.</strong> Anyone who has it can stream as you. Only load it if you trust where it came from, and delete it afterwards.
+          <strong>Careful: this file contains stream keys.</strong> Anyone who has it can stream as you. Only use it if you trust where it came from, and delete it afterwards.
         </Message>
       )}
 
@@ -235,10 +235,10 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
                 {usable.map((i) => <option key={i.id} value={i.id}>{i.label} ({KIND_LABEL[i.kind] ?? i.kind})</option>)}
               </select>
             ) : install ? <p className="text-sm"><strong>{install.label}</strong> <span className="text-muted">({KIND_LABEL[install.kind] ?? install.kind})</span></p> : <Message tone="warn">No OBS found. Add one under “OBS on this computer”.</Message>}
-            {install?.running && <Message tone="warn">This OBS is open right now. Close it first: it saves over its files when it closes and would undo the load.</Message>}
+            {install?.running && <Message tone="warn">This OBS is open right now. Close it first: it saves over its files when it closes and would undo it.</Message>}
           </Step>
 
-          <Step n={++step} title="What should be loaded?">
+          <Step n={++step} title="What should be applied?">
             {m.collections.length > 0 && (
               <div>
                 <h3 className="text-sm font-semibold">Scenes</h3>
@@ -331,7 +331,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
               {report.containsSecrets && <Message tone="bad">The stream keys in this file will be put into OBS. Delete the file afterwards.</Message>}
 
               <ul className="space-y-1.5 text-sm">
-                <li>✔ Load {plural(scenes.length, 'scene layout')} and {plural(outputs.length, 'output setting')} into <strong>{install.label}</strong>.</li>
+                <li>✔ Put {plural(scenes.length, 'scene layout')} and {plural(outputs.length, 'output setting')} into <strong>{install.label}</strong>.</li>
                 {(replaced.scenes.length > 0 || replaced.outputs.length > 0) && conflict === 'replace' && (
                   <li>↻ These already exist and will be replaced (a backup copy is kept first): <strong>{[...replaced.scenes, ...replaced.outputs].join(', ')}</strong>.</li>
                 )}
@@ -384,7 +384,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
               {report.plugins.length > 0 && (
                 <div className="space-y-2">
                   <h3 className="text-sm font-semibold">OBS plugins this setup uses</h3>
-                  <p className="text-xs text-muted">Plugins are not part of the file. A missing plugin never stops the load: its sources just stay empty until you install it and restart OBS. Plugins that do not exist for this kind of computer are not needed here.</p>
+                  <p className="text-xs text-muted">Plugins are not part of the file. A missing plugin never stops you applying it: its sources just stay empty until you install it and restart OBS. Plugins that do not exist for this kind of computer are not needed here.</p>
                   {report.plugins.map((f) => (
                     <div key={f.plugin.id} className="bt-row py-1 space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -404,7 +404,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
 
               {liveChanges.length > 0 && (
                 <Message tone="warn">
-                  OBS has changes that are not saved in this preset yet. Loading would replace them, so save them to the preset first.
+                  OBS has changes that are not saved in this preset yet. Applying it would replace them, so save them to the preset first.
                   <div className="mt-2">
                     <button className="btn btn-accent px-3 py-1" disabled={saving} onClick={async () => {
                       setSaving(true)
@@ -427,7 +427,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
               </details>
 
               <button className="btn btn-accent px-5 py-2.5 text-base" disabled={busy || report.blockers.length > 0 || report.willWrite.length === 0 || scenes.length + outputs.length === 0} onClick={apply}>
-                {busy ? 'Loading…' : liveChanges.length > 0 ? 'Load into OBS anyway' : 'Load into OBS'}
+                {busy ? 'Applying…' : liveChanges.length > 0 ? 'Apply to OBS anyway' : 'Apply to OBS'}
               </button>
             </Step>
           )}

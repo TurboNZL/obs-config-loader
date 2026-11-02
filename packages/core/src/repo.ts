@@ -79,7 +79,7 @@ export async function repoStatus(dir: string, git: GitRunner = defaultGit): Prom
   const top = await git(['rev-parse', '--show-toplevel'], dir)
   // A folder inside some other repo is not "its own repo": require the folder to be the top level.
   if (top.code !== 0 || !samePath(top.stdout.trim(), dir)) return empty
-  const st = await git(['status', '--porcelain=v1', '-b', '--untracked-files=all'], dir)
+  const st = await git(['--no-optional-locks', 'status', '--porcelain=v1', '-b', '--untracked-files=all'], dir) // read-only: never take the index lock, so a check can never collide with a save
   const lines = st.stdout.split('\n').filter(Boolean)
   const head = lines.shift() ?? ''
   const m = /^## (?:No commits yet on |Initial commit on )?([^.\s]+)(?:\.\.\.(\S+))?(?: \[(.*)\])?$/.exec(head)

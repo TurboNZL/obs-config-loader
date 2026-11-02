@@ -22,7 +22,7 @@ export function HomePage({ installs, go }: { installs: InstallInfo[] | null; go:
       </header>
 
       <div className="space-y-3">
-        <Big title="My presets" text="Save your OBS setup as a preset. Load it back into OBS, export it to a file for another computer, or switch on online backup." onClick={() => go('presets')} accent />
+        <Big title="My presets" text="Save your OBS setup as a preset. Apply it back to OBS, save it to a file for another computer, or switch on online backup." onClick={() => go('presets')} accent />
         <Big title="Open a setup file" text="Someone sent you a setup file, or you exported one earlier: put it into the OBS on this computer." onClick={() => go('import')} />
       </div>
 

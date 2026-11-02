@@ -243,6 +243,17 @@ collections/main.platforms.json   { "<source name>": { "win32": {...}, "linux": 
   never from one machine's live state. `source` and `generator` in a repository's manifest are frozen after the
   first save.
 
+### Exact OBS names, and scripts that need their folder
+
+`collections[].fileName` and `profiles[].dirName` (optional) are the file and folder names OBS used when they differ from what OBS
+would call them for the shown `name`. Other tools can depend on them, so importers put them back exactly (except under "keep both").
+
+A `variables[]` entry of kind `path` may carry `mustContain` (files that should be in that folder); importers warn when they are not.
+Exporters use this for **script folders**: when an OBS script (`modules.scripts-tool[].path`) sits in a folder with other files and
+looks around itself (`__file__`, `script_path()`, `dirname`), the script is not copied; a `SCRIPT_FOLDER` variable is declared and every
+path inside that folder is written as `{{var:SCRIPT_FOLDER}}/<relative path>`. A suggested folder (`default`) is the first saver's and is
+never rewritten by a later save.
+
 ### Profile settings per system
 
 `profiles/<id>/platforms.json` is `{ "<win32|darwin|linux>": { "ini": { "<section>": { "<key>": "<value>" } }, "files": { "streamEncoder.json": "<text>", "recordEncoder.json": "<text>" } } }`:

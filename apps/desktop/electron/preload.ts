@@ -80,6 +80,7 @@ const api: Api = {
     setOverrides: (p, o) => call('presets:setOverrides', p, o),
     move: (p, parent) => call('presets:move', p, parent),
     rename: (r) => call('presets:rename', r),
+    renameOnline: (p, n) => call('presets:renameOnline', p, n),
     setOnline: (p, on, n, priv) => call('presets:setOnline', p, on, n, priv),
   },
   locations: {

@@ -24,7 +24,7 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
   return (
     <Page
       title="Presets"
-      intro="A preset is a saved copy of your OBS setup: scenes, output settings and plugin list. Load it into OBS whenever you like, save it to a file, or switch on online backup to keep it safe on GitHub."
+      intro="A preset is a saved copy of your OBS setup: scenes, output settings and plugin list. Apply it to OBS whenever you like, save it to a file, or switch on online backup to keep it safe on GitHub."
     >
       {git && !git.available && <GitMissing git={git} recheck={refreshGit} />}
       {notice && <Message tone={notice.tone}>{notice.text}</Message>}
@@ -217,7 +217,7 @@ function GetPreset({ gh, count, go, onDone, onCancel }: { gh: GithubState; count
           setBusy(true); setError(null)
           const r = await window.obsLoader.repos.clone(url, folder)
           setBusy(false)
-          if (r.ok) await onDone({ tone: 'good', text: `Downloaded “${r.repo.name}”. Press “Load into OBS” on it to use it.` }); else setError(r.error)
+          if (r.ok) await onDone({ tone: 'good', text: `Downloaded “${r.repo.name}”. Press “Apply to OBS…” on it to use it.` }); else setError(r.error)
         }}>{busy ? 'Downloading…' : 'Download'}</button>
         <button className="btn px-3 py-2" onClick={async () => {
           setError(null)
@@ -336,7 +336,7 @@ function SavesSettings({ repo, d, reload }: { repo: RepoInfo; d: PresetDetails; 
       {layoutNames.map((n) => <Choice key={'l' + n} checked={!ex.collections?.includes(n)} onChange={(on) => set({ ...ex, collections: flip(ex.collections, n, on) })} title={<>{n} <span className="text-muted">(scene layout)</span></>} />)}
       {outputNames.map((n) => <Choice key={'o' + n} checked={!ex.profiles?.includes(n)} onChange={(on) => set({ ...ex, profiles: flip(ex.profiles, n, on) })} title={<>{n} <span className="text-muted">(output settings)</span></>} />)}
       <Choice checked={!ex.remoteControl} onChange={(on) => set({ ...ex, remoteControl: !on })} title="OBS remote-control settings (WebSocket)" help="The port and password other programs use to control OBS. The password is never saved in a preset." />
-      <Choice checked={!ex.scripts} onChange={(on) => set({ ...ex, scripts: !on })} title="Scripts" help="Small script files are kept in the preset, and put back when it is loaded." />
+      <Choice checked={!ex.scripts} onChange={(on) => set({ ...ex, scripts: !on })} title="Scripts" help="Small script files are kept in the preset, and put back when it is applied." />
     </div>
   )
 }
@@ -362,13 +362,13 @@ function Translations({ repo, d, reload }: { repo: RepoInfo; d: PresetDetails; r
       if (value === '') { if (o[from]) { delete o[from][k]; if (!Object.keys(o[from]).length) delete o[from] } } else (o[from] ??= {})[k] = value === '__hide__' ? null : value
     }
     const r = await window.obsLoader.presets.setOverrides(repo.path, o)
-    setMsg(r.ok ? { tone: 'good', text: 'Saved. It is used the next time this preset is loaded on another kind of computer.' } : { tone: 'bad', text: r.error })
+    setMsg(r.ok ? { tone: 'good', text: 'Saved. It is used the next time this preset is applied on another kind of computer.' } : { tone: 'bad', text: r.error })
     await reload()
   }
   return (
     <div>
       <h3 className="font-semibold text-sm">How sources change on other computers</h3>
-      <p className="text-xs text-muted mb-1">Some sources only exist on one system. When this preset is loaded on another, the app swaps each for the closest one. Change a choice here if it guessed wrong. You pick the window, screen or device again either way.</p>
+      <p className="text-xs text-muted mb-1">Some sources only exist on one system. When this preset is applied on another, the app swaps each for the closest one. Change a choice here if it guessed wrong. You pick the window, screen or device again either way.</p>
       {msg && <Message tone={msg.tone}>{msg.text}</Message>}
       {d.translations.map((row) => (
         <div key={row.from} className="bt-row py-1 space-y-1">
@@ -389,6 +389,31 @@ function Translations({ repo, d, reload }: { repo: RepoInfo; d: PresetDetails; r
           ))}
         </div>
       ))}
+    </div>
+  )
+}
+
+// ── the name on GitHub ─────────────────────────────────────────────────────
+
+function RenameOnline({ repo, refresh, notify }: { repo: RepoInfo; refresh: () => Promise<void>; notify: (m: Msg) => void }) {
+  const [text, setText] = useState((repo.online?.name ?? '').replace(/^obs-config-/i, ''))
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<Msg | null>(null)
+  return (
+    <div className="space-y-1">
+      <h3 className="font-semibold text-sm">Name on GitHub</h3>
+      {msg && <Message tone={msg.tone}>{msg.text}</Message>}
+      <div className="flex items-center gap-1">
+        <span className="mono text-muted">OBS-Config-</span>
+        <input className="input flex-1 px-2 py-1.5" aria-label="New name on GitHub" value={text} onChange={(e) => setText(e.target.value)} />
+        <button className="btn px-3 py-1.5" disabled={busy || !text.trim()} onClick={async () => {
+          setBusy(true); setMsg(null)
+          const r = await window.obsLoader.presets.renameOnline(repo.path, text)
+          setBusy(false)
+          if (r.ok) { notify({ tone: 'good', text: `It is now called “${r.name}” on GitHub. This preset follows it.` }); await refresh() } else setMsg({ tone: 'bad', text: r.error })
+        }}>{busy ? 'Renaming…' : 'Rename on GitHub'}</button>
+      </div>
+      <p className="text-xs text-muted">Other computers that already use this preset keep working: GitHub forwards the old name.</p>
     </div>
   )
 }
@@ -424,6 +449,8 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
   const usable = installs.filter((i) => i.configExists)
   const [installId, setInstallId] = useState(repo.installId && usable.some((i) => i.id === repo.installId) ? repo.installId : usable[0]?.id ?? '')
   const [live, setLive] = useState<string[] | null>(null)
+  const [pending, setPending] = useState<string[] | null>(null)
+  const [ghName, setGhName] = useState(repo.name.replace(/^obs-config-/i, ''))
   const [msg, setMsg] = useState<Msg | null>(null)
   const [log, setLog] = useState<LogEntry[] | null>(null)
   const [needs, setNeeds] = useState<AssetNeed[]>([])
@@ -440,11 +467,18 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
   const [chosen, setChosen] = useState<string[]>([])
   const [keys, setKeys] = useState({ count: 0, canStore: true })
   const online = !!repo.remoteUrl
+  const obsLine = live === null ? 'Checking OBS…'
+    : live.length > 0 && (pending?.length ?? 0) > 0 ? 'OBS has changes the preset does not have, and the preset has changes OBS does not have.'
+    : live.length > 0 ? 'OBS has changes the preset does not have yet.'
+    : (pending?.length ?? 0) > 0 ? `This preset has changes OBS does not have yet (${plural(pending!.length, 'file')}).`
+    : 'OBS and this preset match.'
+  const obsAccent: 'save' | 'apply' | null = live && live.length > 0 ? 'save' : (pending?.length ?? 0) > 0 ? 'apply' : null
 
   const check = async () => {
     if (!installId) return
     const r = await window.obsLoader.repos.live(repo.path, installId)
     setLive('error' in r ? null : r.changed)
+    setPending('error' in r ? null : r.pending ?? null)
   }
   useEffect(() => { void check() }, [installId, st.dirtyFiles.length, st.commits]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void window.obsLoader.repos.needs(repo.path).then(setNeeds).catch(() => setNeeds([])) }, [repo.path, st.behind])
@@ -453,6 +487,11 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
   const [cmp, setCmp] = useState<OnlineComparison | null>(null)
   const [sure, setSure] = useState<'mine' | 'theirs' | null>(null)
   const disagree = !!cmp && cmp.unrelated && st.ahead > 0
+  const ghLine = !checked ? 'Asking GitHub…'
+    : st.ahead > 0 && st.behind > 0 ? 'Both this computer and GitHub have changed: choose below.'
+    : st.behind > 0 ? `GitHub has ${plural(st.behind, 'newer change')}.`
+    : st.ahead > 0 ? `${plural(st.ahead, 'save')} not uploaded yet.`
+    : 'Same as GitHub.'
   useEffect(() => { if (online) void window.obsLoader.repos.check(repo.path).then(async () => { setChecked(true); await refresh() }); else setChecked(true) }, [repo.path, online]) // eslint-disable-line react-hooks/exhaustive-deps
   // when the two have both moved, say what is newer where (so a person can tell which side is really the newer one)
   useEffect(() => { if (online && checked && (st.behind > 0 || st.ahead > 0)) void window.obsLoader.repos.compare(repo.path).then(setCmp); else setCmp(null) }, [online, checked, st.behind, st.ahead, repo.path])
@@ -480,7 +519,7 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
 
   const showPull = (r: PullResult) => {
     setConflict(null)
-    if (r.status === 'updated') setMsg({ tone: 'good', text: `Got ${r.files.length} changed file${r.files.length === 1 ? '' : 's'}. Press “Load into OBS” to use them.` })
+    if (r.status === 'updated') setMsg({ tone: 'good', text: `Got ${r.files.length} changed file${r.files.length === 1 ? '' : 's'}. Press “Apply to OBS…” to put them into OBS.` })
     else if (r.status === 'conflict') { setConflict({ kind: 'pull', files: r.conflicts }); setMsg(null) }
     else if (r.status === 'dirty') setMsg({ tone: 'warn', text: `Save your changes first (${r.files.length} file${r.files.length === 1 ? ' was' : 's were'} changed by hand). Use “Save OBS to this preset”.` })
     else if (r.status === 'error') setMsg({ tone: 'bad', text: r.message })
@@ -506,10 +545,10 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
   const useOnline = () => run(async () => {
     const r = await window.obsLoader.repos.useOnline(repo.path)
     setSure(null)
-    setMsg(r.ok ? { tone: 'good', text: 'This computer now has the online version. Your previous one is kept in History. Load it into OBS to use it.' } : { tone: 'bad', text: r.error })
+    setMsg(r.ok ? { tone: 'good', text: 'This computer now has the online version. Your previous one is kept in History. Apply it to OBS to use it.' } : { tone: 'bad', text: r.error })
   })
   const toggleOnline = (on: boolean) => run(async () => {
-    const r = await window.obsLoader.presets.setOnline(repo.path, on, repo.name, priv)
+    const r = await window.obsLoader.presets.setOnline(repo.path, on, ghName.trim() || repo.name, priv)
     if (r.ok) setMsg({ tone: 'good', text: on ? (r.url ? `Backed up online at ${r.url}.` : 'Backed up online.') : 'Online backup is off for this preset. What is already on GitHub stays there.' })
     else setMsg({ tone: 'warn', text: r.error })
   })
@@ -526,23 +565,32 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
   })
 
   return (
-    <Card
-      title={repo.name}
-      right={<div className="flex gap-2 flex-wrap justify-end">
-        <Chip tone={online ? 'good' : undefined}>{online ? 'backed up online' : 'only on this computer'}</Chip>
-        {st.ahead > 0 && <Chip tone="warn">{st.ahead} to upload</Chip>}
-        {st.behind > 0 && <Chip tone="warn">{st.behind} to download</Chip>}
-        {st.dirtyFiles.length > 0 && <Chip tone="warn">{st.dirtyFiles.length} changed by hand</Chip>}
-      </div>}
-    >
+    <Card title={repo.name}>
       {msg && <Message tone={msg.tone}>{msg.text}</Message>}
 
-      {online && checked && st.behind > 0 && st.ahead === 0 && (
-        <Message tone="warn">
-          A newer version of this preset is online ({plural(st.behind, 'change')}). Get it, then load it into OBS.
-          <div className="mt-2"><button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => pull()}>Get updates</button></div>
-        </Message>
-      )}
+      <div className="rounded-theme border border-line p-3 space-y-3" role="group" aria-label="Where this preset stands">
+        <div className="space-y-1">
+          <div className="text-xs text-muted">OBS ⇄ this preset (on this computer)</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm flex-1 min-w-48">{obsLine}</span>
+            <button className={'btn px-3 py-1 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy || !installId} onClick={() => save(false)}>Save OBS to this preset</button>
+            <button className={'btn px-3 py-1 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => apply(repo.path, installId)}>Apply to OBS…</button>
+          </div>
+        </div>
+        <div className="space-y-1 border-t border-line pt-2">
+          <div className="text-xs text-muted">
+            This preset ⇄ GitHub{online && repo.online ? <> · <button className="underline" disabled={!repo.online.url} onClick={() => repo.online?.url && window.obsLoader.app.openExternal(repo.online.url)}>{repo.online.name}</button></> : ''}
+          </div>
+          {online ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm flex-1 min-w-48">{ghLine}</span>
+              <button className={'btn px-3 py-1 ' + (checked && st.behind > 0 && st.ahead === 0 ? 'btn-accent' : '')} disabled={busy} onClick={() => pull()}>Get updates</button>
+              <button className={'btn px-3 py-1 ' + (checked && st.ahead > 0 && st.behind === 0 ? 'btn-accent' : '')} disabled={busy} onClick={push}>Upload</button>
+            </div>
+          ) : <p className="text-sm text-muted">Only on this computer. Switch on “Back up online” below to keep a copy on GitHub.</p>}
+        </div>
+      </div>
+
       {online && checked && (st.behind > 0 && st.ahead > 0 || disagree) && (
         <Message tone="bad">
           <strong>This computer and the online copy have both changed.</strong> Choose which one is right.
@@ -571,8 +619,6 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
           )}
         </Message>
       )}
-      {live && live.length > 0 && <Message tone="warn">OBS has changes that are not in this preset yet. Press “Save OBS to this preset” to keep them.</Message>}
-      {live && live.length === 0 && installId && <p className="text-sm text-muted">This preset matches your OBS.</p>}
 
       {dirtyAsk && (
         <Message tone="warn">
@@ -626,8 +672,6 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
       )}
 
       <div className="flex gap-2 flex-wrap">
-        <button className="btn btn-accent px-3 py-1.5" disabled={busy || !installId} onClick={() => save(false)}>Save OBS to this preset</button>
-        <button className="btn px-3 py-1.5" disabled={busy} onClick={() => apply(repo.path, installId)}>Load into OBS…</button>
         <button className="btn px-3 py-1.5" disabled={busy} onClick={async () => { const on = !exporting; setExporting(on); if (on) { setChosen([]); setFileChoices(await window.obsLoader.presets.scanFile(repo.path).catch(() => [])) } }}>Save to a file…</button>
       </div>
 
@@ -647,18 +691,28 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
       )}
 
       <div className="border-t border-line pt-3 space-y-2">
-        <Choice
-          checked={online} disabled={busy} onChange={(on) => toggleOnline(on)}
-          title="Back up online"
-          help={online ? 'Every save is uploaded to GitHub automatically, so this preset is safe and you can use it on your other computers.' : gh.connected ? 'Keeps a copy on GitHub, updated whenever you save.' : undefined}
-        />
-        {!online && gh.connected && <Choice checked={priv} onChange={setPriv} title="Keep it private" help="Only you can see it on GitHub. Choose before switching backup on." />}
-        {!online && !gh.connected && <p className="text-sm text-muted">To switch this on, sign in to GitHub in <button className="underline" onClick={() => go('settings')}>Settings</button> first.</p>}
-        {online && (
-          <div className="flex gap-2 flex-wrap">
-            <button className="btn px-3 py-1" disabled={busy} onClick={() => pull()}>Get updates</button>
-            <button className="btn px-3 py-1" disabled={busy} onClick={push}>Upload now</button>
-          </div>
+        {!online ? (
+          <>
+            <Choice
+              checked={false} disabled={busy || !gh.connected} onChange={(on) => on && toggleOnline(true)}
+              title="Back up online (GitHub)"
+              help={gh.connected ? 'Keeps a copy on GitHub, updated whenever you save, so you can use this preset on your other computers.' : undefined}
+            />
+            {gh.connected && (
+              <>
+                <Field label="Name on GitHub" hint="Always starts with OBS-Config- so they are easy to find.">
+                  <div className="flex items-center gap-1">
+                    <span className="mono text-muted">OBS-Config-</span>
+                    <input className="input flex-1 px-2 py-1.5" aria-label="Name on GitHub" value={ghName} onChange={(e) => setGhName(e.target.value)} />
+                  </div>
+                </Field>
+                <Choice checked={priv} onChange={setPriv} title="Keep it private" help="Only you can see it on GitHub. Choose before switching backup on." />
+              </>
+            )}
+            {!gh.connected && <p className="text-sm text-muted">To switch this on, sign in to GitHub in <button className="underline" onClick={() => go('settings')}>Settings</button> first.</p>}
+          </>
+        ) : (
+          <Choice checked disabled={busy} onChange={(on) => !on && toggleOnline(false)} title="Back up online (GitHub)" help="Every save is uploaded automatically, so a copy is always on GitHub." />
         )}
       </div>
 
@@ -675,6 +729,7 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
             </Field>
           )}
           <Details repo={repo} installId={installId} refresh={refresh} obsNote notify={notify} />
+          {online && gh.connected && repo.online && <RenameOnline repo={repo} refresh={refresh} notify={notify} />}
           <div className="space-y-1">
             <h3 className="font-semibold text-sm">Online address</h3>
             {repo.remoteUrl && !editRemote ? (
