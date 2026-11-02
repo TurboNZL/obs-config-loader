@@ -28,6 +28,8 @@ export interface ImportRequest {
   conflict: ConflictMode
   activate: boolean
   preferPipewire: boolean
+  /** Put back OBS's remote-control (WebSocket) settings when the setup has them. Default yes. */
+  websocket?: boolean
 }
 
 export interface ExportRequest {
@@ -76,15 +78,28 @@ export interface GitState { available: boolean; help: GitInstallHelp; platform: 
 export interface GithubState { connected: boolean; login?: string; /** Token is kept for this session only (no system keychain). */ sessionOnly?: boolean }
 export type Done<T> = ({ ok: true } & T) | { ok: false; error: string; cancelled?: boolean }
 
+/** Extra facts about a save that went through. */
+export interface SaveExtras { keysRemembered?: number; upload?: 'uploaded' | 'failed'; uploadError?: string }
 export type SaveResult =
-  | { status: 'unchanged' }
-  | { status: 'committed'; files: string[]; commit: string; merged: boolean }
+  | ({ status: 'unchanged' } & SaveExtras)
+  | ({ status: 'committed'; files: string[]; commit: string; merged: boolean } & SaveExtras)
   | { status: 'conflict'; conflicts: string[] }
   | { status: 'dirty'; files: string[] }
   | { status: 'error'; message: string }
 
 export type SaveConflictChoice = 'abort' | 'keep-repo' | 'keep-obs'
 export type PullConflictChoice = 'abort' | 'keep-mine' | 'keep-theirs'
+
+export interface AppSettings { presetsRoot: string; defaultPresetsRoot: string; isDefault: boolean; rememberKeys: boolean; canStoreKeys: boolean }
+export interface PresetDetails {
+  savedWithObs?: string
+  plugins: { name: string; version?: string; known: boolean }[]
+  scripts: string[]
+  remoteControl: boolean
+  layouts: { id: string; name: string; scenes: string[]; sources: string[] }[]
+  outputs: { id: string; name: string }[]
+}
+export interface RenameRequest { path: string; installId?: string; kind: 'preset' | 'layout' | 'output' | 'scene'; id?: string; layoutId?: string; from?: string; to: string }
 
 export interface Locations { assets: Record<string, string>; variables: Record<string, string> }
 
@@ -154,6 +169,18 @@ export interface Api {
     needs(path: string): Promise<AssetNeed[]>
     setAsset(path: string, assetId: string, file: string): Promise<void>
     openFolder(path: string): Promise<void>
+  }
+  settings: {
+    get(): Promise<AppSettings>
+    setPresetsRoot(path: string | null): Promise<void>
+    setRememberKeys(on: boolean): Promise<void>
+  }
+  presets: {
+    details(path: string): Promise<PresetDetails>
+    keys(path: string): Promise<{ count: number; canStore: boolean }>
+    exportFile(path: string, includeKeys: boolean): Promise<Done<{ path: string; keys: number; missingMedia: string[] }>>
+    rename(r: RenameRequest): Promise<Done<{ alsoInObs: boolean }>>
+    setOnline(path: string, on: boolean, name: string, priv: boolean): Promise<Done<{ url?: string; needsAccount?: boolean }>>
   }
   locations: {
     load(bundleId: string): Promise<Locations>

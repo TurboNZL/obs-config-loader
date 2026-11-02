@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as nodePath from 'node:path'
 import { readBundleDir, serializeManifest } from './bundleIO.js'
 import { slug } from './export.js'
-import { setIni } from './ini.js'
+import { getIni, setIni } from './ini.js'
 import { variantsPathFor, type VariantsFile } from './variants.js'
 
 /**
@@ -127,3 +127,64 @@ export function listNames(dir: string, collectionId: string): { scenes: string[]
   const all: any[] = json.sources ?? []
   return { scenes: all.filter((s) => s.id === 'scene').map((s) => s.name), sources: all.filter((s) => s.id !== 'scene').map((s) => s.name) }
 }
+
+// ── the same renames, in an OBS settings folder ──────────────────────────────
+
+const fileSafe = (n: string) => n.replace(/[\\/:*?"<>|\0]/g, '_')
+
+/**
+ * Rename a scene layout in an OBS settings folder (its file, the name inside it, and the "current" choice in global.ini).
+ * OBS must not be running: it rewrites its files when it quits and would undo this.
+ */
+export function renameLayoutInObs(configDir: string, from: string, newName: string): void {
+  const to = need(newName)
+  const dir = nodePath.join(configDir, 'basic', 'scenes')
+  const src = nodePath.join(dir, fileSafe(from) + '.json'), dst = nodePath.join(dir, fileSafe(to) + '.json')
+  if (!fs.existsSync(src)) throw new RenameError(`OBS has no scene layout called “${from}”.`)
+  if (src !== dst && fs.existsSync(dst)) throw new RenameError(`OBS already has a scene layout called “${to}”.`)
+  const json = JSON.parse(fs.readFileSync(src, 'utf8')); json.name = to
+  fs.writeFileSync(dst, JSON.stringify(json, null, 4) + '\n')
+  if (src !== dst) fs.rmSync(src)
+  const g = nodePath.join(configDir, 'global.ini')
+  if (fs.existsSync(g)) {
+    let t = fs.readFileSync(g, 'utf8')
+    if (getIni(t, 'Basic', 'SceneCollection') === from) t = setIni(t, 'Basic', 'SceneCollection', to)
+    if (getIni(t, 'Basic', 'SceneCollectionFile') === fileSafe(from)) t = setIni(t, 'Basic', 'SceneCollectionFile', fileSafe(to))
+    fs.writeFileSync(g, t)
+  }
+}
+
+/** Rename output settings in an OBS settings folder (folder, the name in basic.ini, global.ini). */
+export function renameOutputInObs(configDir: string, from: string, newName: string): void {
+  const to = need(newName)
+  const root = nodePath.join(configDir, 'basic', 'profiles')
+  const src = nodePath.join(root, fileSafe(from)), dst = nodePath.join(root, fileSafe(to))
+  if (!fs.existsSync(src)) throw new RenameError(`OBS has no output settings called “${from}”.`)
+  if (src !== dst && fs.existsSync(dst)) throw new RenameError(`OBS already has output settings called “${to}”.`)
+  if (src !== dst) fs.renameSync(src, dst)
+  const ini = nodePath.join(dst, 'basic.ini')
+  if (fs.existsSync(ini)) fs.writeFileSync(ini, setIni(fs.readFileSync(ini, 'utf8'), 'General', 'Name', to))
+  const g = nodePath.join(configDir, 'global.ini')
+  if (fs.existsSync(g)) {
+    let t = fs.readFileSync(g, 'utf8')
+    if (getIni(t, 'Basic', 'Profile') === from) t = setIni(t, 'Basic', 'Profile', to)
+    if (getIni(t, 'Basic', 'ProfileDir') === fileSafe(from)) t = setIni(t, 'Basic', 'ProfileDir', fileSafe(to))
+    fs.writeFileSync(g, t)
+  }
+}
+
+/** Rename a scene or source inside one scene layout in an OBS settings folder. Returns false when OBS has no such thing. */
+export function renameSourceInObs(configDir: string, layout: string, from: string, newName: string): boolean {
+  const to = need(newName)
+  const file = nodePath.join(configDir, 'basic', 'scenes', fileSafe(layout) + '.json')
+  if (!fs.existsSync(file)) return false
+  const json = JSON.parse(fs.readFileSync(file, 'utf8'))
+  if (!(json.sources ?? []).some((s: any) => s.name === from)) return false
+  if ((json.sources ?? []).some((s: any) => s.name === to)) throw new RenameError(`There is already something called “${to}” in OBS's scene layout “${layout}”.`)
+  renameSourceInJson(json, from, to)
+  fs.writeFileSync(file, JSON.stringify(json, null, 4) + '\n')
+  return true
+}
+
+export const obsHasLayout = (configDir: string, name: string) => fs.existsSync(nodePath.join(configDir, 'basic', 'scenes', fileSafe(name) + '.json'))
+export const obsHasOutput = (configDir: string, name: string) => fs.existsSync(nodePath.join(configDir, 'basic', 'profiles', fileSafe(name)))

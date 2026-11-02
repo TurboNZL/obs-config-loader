@@ -281,3 +281,53 @@ describe('where plugins are found', () => {
     expect(versionNotes(m, v).join()).toMatch(/PipeWire Audio Capture is installed but switched off/)
   })
 })
+
+describe('remembered stream keys', () => {
+  it('can be attached to a file made from a saved preset, and are ignored when not asked for', async () => {
+    const { attachSecrets } = await import('../src/index.js')
+    const { cfg, dir, h, inst } = setup()
+    addWebsocket(cfg)
+    // what the app remembers on the computer: every secret OBS has, by variable name
+    const live = exportBundle({ host: h, install: inst, name: 'k', includeSecrets: true })
+    const remembered = Object.fromEntries(live.manifest.variables.filter((v) => v.kind === 'secret' && v.value).map((v) => [v.name, v.value!]))
+    expect(Object.values(remembered)).toEqual(expect.arrayContaining(['live_SECRET123', 'yt-SECRET456', 'ws-SECRET789']))
+
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'Mine' })
+    const folder = readBundleDir(dir)
+    expect(JSON.stringify([...folder.files.keys()])).not.toContain('READ-ME')
+    const plain = readBundleDir(dir)
+    expect(plain.manifest.containsSecrets).toBeUndefined()
+    const n = attachSecrets(folder, { ...remembered, NOT_IN_THIS_SETUP: 'x' })
+    expect(n).toBe(3)
+    expect(folder.manifest.containsSecrets).toBe(true)
+    expect(folder.files.has('READ-ME-FIRST-CONTAINS-STREAM-KEYS.txt')).toBe(true)
+    expect(folder.manifest.variables.some((v) => v.value === 'x')).toBe(false)
+    // and loading that file somewhere else puts the key in
+    const home2 = nodePath.join(tmp, 'h2'); const cfg2 = nodePath.join(home2, '.config', 'obs-studio'); fs.mkdirSync(cfg2, { recursive: true })
+    applyImport(planImport({ bundle: folder, install: install(cfg2), host: host('linux', home2) }))
+    expect(fs.readFileSync(nodePath.join(cfg2, 'basic/profiles/Main/service.json'), 'utf8')).toContain('live_SECRET123')
+    expect(attachSecrets(plain, {})).toBe(0)
+  })
+})
+
+describe('renaming in OBS itself', () => {
+  it('renames a scene layout, output settings and a scene in an OBS settings folder, and the active choice follows', async () => {
+    const { renameLayoutInObs, renameOutputInObs, renameSourceInObs, obsHasLayout, obsHasOutput } = await import('../src/index.js')
+    const { cfg } = setup()
+    renameLayoutInObs(cfg, 'Main', 'Show')
+    renameOutputInObs(cfg, 'Main', 'High quality')
+    expect(obsHasLayout(cfg, 'Show')).toBe(true); expect(obsHasLayout(cfg, 'Main')).toBe(false)
+    expect(obsHasOutput(cfg, 'High quality')).toBe(true)
+    const g = fs.readFileSync(nodePath.join(cfg, 'global.ini'), 'utf8')
+    expect(g).toContain('SceneCollection=Show'); expect(g).toContain('SceneCollectionFile=Show'); expect(g).toContain('ProfileDir=High quality')
+    expect(JSON.parse(fs.readFileSync(nodePath.join(cfg, 'basic/scenes/Show.json'), 'utf8')).name).toBe('Show')
+    expect(fs.readFileSync(nodePath.join(cfg, 'basic/profiles/High quality/basic.ini'), 'utf8')).toContain('Name=High quality')
+    expect(renameSourceInObs(cfg, 'Show', 'Scene', 'Gameplay')).toBe(true)
+    expect(renameSourceInObs(cfg, 'Show', 'Nope', 'X')).toBe(false)
+    const j = JSON.parse(fs.readFileSync(nodePath.join(cfg, 'basic/scenes/Show.json'), 'utf8'))
+    expect(j.current_scene).toBe('Gameplay')
+    expect(() => renameLayoutInObs(cfg, 'Show', 'Show')).not.toThrow()
+    expect(() => renameLayoutInObs(cfg, 'Missing', 'X')).toThrow(/no scene layout/)
+  })
+})

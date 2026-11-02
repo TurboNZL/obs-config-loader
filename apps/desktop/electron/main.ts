@@ -7,6 +7,8 @@ import {
   gitAvailable, gitInstallHelp, githubAuthGit, githubListRepos, githubWhoAmI, initRepo, markSynced, planImport, portableInstall, publishToGithub,
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
+  assetBundlePath, attachSecrets, commitAll, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
+  renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, renameSourceInObs, RenameError,
 } from '@obs-config-loader/core'
 import { Updates } from './updater'
 import type { BundleSummary, ExportRequest, ExportResult, GithubState, ImportRequest, InstallInfo, Locations, RepoInfo } from './api'
@@ -18,7 +20,13 @@ let nextHandle = 1
 // ── settings (user-added installs) ───────────────────────────────────────────
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json')
 interface RepoEntry { path: string; installId?: string }
-interface Settings { customInstalls: ObsInstall[]; repos: RepoEntry[]; customFrame?: boolean }
+interface Settings {
+  customInstalls: ObsInstall[]; repos: RepoEntry[]; customFrame?: boolean
+  /** Where new presets are kept. Unset = the app's own folder under Documents. */
+  presetsRoot?: string
+  /** Remember stream keys on this computer (encrypted by the system keychain, never in a preset or online). Default on. */
+  rememberKeys?: boolean
+}
 function loadSettings(): Settings {
   try { return { customInstalls: [], repos: [], ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) } } catch { return { customInstalls: [], repos: [] } }
 }
@@ -141,11 +149,17 @@ const gitMissing = 'Git is not installed. Open the Git repositories page: it can
 const errText = (e: unknown) => redact((e as Error).message, loadGithubToken())
 
 /** A folder name for a new repository under Documents, never one that already has something in it. */
-function suggestFolder(name: string): string {
+/** The app's own folder for presets: ~/Documents/OBS Config Loader/Presets unless the person chose another. */
+function defaultPresetsRoot(): string {
   // Some systems report the home folder itself as "Documents" (no desktop folder settings): use ~/Documents then.
   let docs = app.getPath('documents')
   if (path.resolve(docs) === path.resolve(app.getPath('home'))) docs = path.join(docs, 'Documents')
-  const root = path.join(docs, 'OBS Config Loader')
+  return path.join(docs, 'OBS Config Loader', 'Presets')
+}
+const presetsRoot = () => loadSettings().presetsRoot || defaultPresetsRoot()
+
+function suggestFolder(name: string): string {
+  const root = presetsRoot()
   const base = name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'obs-setup'
   let p = path.join(root, base)
   for (let n = 2; fs.existsSync(p) && fs.readdirSync(p).length; n++) p = path.join(root, `${base}-${n}`)
@@ -164,6 +178,28 @@ function readSecrets(): Record<string, Record<string, string>> {
     const raw = fs.readFileSync(secretsPath())
     return JSON.parse(safeStorage.decryptString(raw))
   } catch { return {} }
+}
+
+function writeSecretsClear() { try { fs.rmSync(secretsPath(), { force: true }) } catch { /* nothing there */ } }
+function writeSecrets(all: Record<string, Record<string, string>>): boolean {
+  if (!safeStorage.isEncryptionAvailable()) return false // never write secrets in the clear
+  fs.mkdirSync(path.dirname(secretsPath()), { recursive: true })
+  fs.writeFileSync(secretsPath(), safeStorage.encryptString(JSON.stringify(all)))
+  return true
+}
+
+/** After a save: keep this OBS's stream keys on this computer (encrypted), so a preset can be loaded or exported with them later. */
+function rememberKeysFrom(install: ObsInstall, presetPath: string): number {
+  if (loadSettings().rememberKeys === false || !safeStorage.isEncryptionAvailable()) return 0
+  try {
+    const live = exportBundle({ host, install, name: 'keys', includeSecrets: true, bundleBelowBytes: 0 })
+    const values = Object.fromEntries(live.manifest.variables.filter((v) => v.kind === 'secret' && v.value).map((v) => [v.name, v.value!]))
+    if (!Object.keys(values).length) return 0
+    const id = readBundleDir(presetPath).manifest.id
+    const all = readSecrets()
+    all[id] = { ...(all[id] ?? {}), ...values }
+    return writeSecrets(all) ? Object.keys(values).length : 0
+  } catch { return 0 }
 }
 
 // ── updates (electron-updater from the project's GitHub releases) ──
@@ -280,6 +316,7 @@ function registerIpc() {
       bundle: b, install: findInstall(r.installId), host,
       collections: r.collections, profiles: r.profiles, variables: r.variables, assetFiles: r.assetFiles,
       conflict: r.conflict, activate: r.activate, preferPipewire: r.preferPipewire, obsRunning: await obsRunningFor(findInstall(r.installId)),
+      installed: detectVersions(findInstall(r.installId), host), websocket: r.websocket,
     }
   }
   ipcMain.handle('import:plan', async (_e, r: ImportRequest) => planImport(await importOpts(r)).report)
@@ -295,7 +332,7 @@ function registerIpc() {
     try {
       const install = findInstall(r.installId)
       const bundle = exportBundle({
-        host, install, name: r.name, collections: r.collections, profiles: r.profiles, appVersion: app.getVersion(), includeSecrets: r.includeKeys === true && (r.format ?? 'file') === 'file',
+        host, install, name: r.name, collections: r.collections, profiles: r.profiles, appVersion: app.getVersion(), versions: detectVersions(install, host), includeSecrets: r.includeKeys === true && (r.format ?? 'file') === 'file',
         bundleBelowBytes: r.media === 'all' ? Infinity : r.media === 'none' ? 0 : undefined,
       })
       let out: string
@@ -402,8 +439,10 @@ function registerIpc() {
     try {
       const git = gitRunner()
       await initRepo(r.folder, git)
-      const res = await captureLive({ host, install: findInstall(r.installId), dir: r.folder, name: r.name, appVersion: app.getVersion(), git })
+      const inst = findInstall(r.installId)
+      const res = await captureLive({ host, install: inst, dir: r.folder, name: r.name, appVersion: app.getVersion(), versions: detectVersions(inst, host), git })
       if (res.status === 'error') return { ok: false, error: res.message }
+      rememberKeysFrom(inst, r.folder)
       rememberRepo(r.folder, r.installId)
       let published: string | undefined
       if (r.github) {
@@ -448,11 +487,27 @@ function registerIpc() {
     return { changed: r.status === 'changes' ? r.files : [] }
   })
   ipcMain.handle('repos:save', async (_e, p: string, installId: string, commitDirtyFirst: boolean, onConflict?: 'abort' | 'keep-repo' | 'keep-obs') => {
+    const inst = findInstall(installId)
     const r = await captureLive({
-      host, install: findInstall(installId), dir: p, onDirty: commitDirtyFirst ? 'commit-first' : 'refuse', onConflict,
-      appVersion: app.getVersion(), git: gitRunner(),
+      host, install: inst, dir: p, onDirty: commitDirtyFirst ? 'commit-first' : 'refuse', onConflict,
+      appVersion: app.getVersion(), versions: detectVersions(inst, host), git: gitRunner(),
     })
     if (r.status === 'changes') return { status: 'unchanged' }
+    if (r.status === 'committed' || r.status === 'unchanged') {
+      const keys = rememberKeysFrom(inst, p)
+      // a preset that is backed up online is kept up to date: upload right after saving (a failure is reported, not hidden)
+      let upload: 'uploaded' | 'failed' | undefined
+      let uploadError: string | undefined
+      if (r.status === 'committed' && (await repoStatus(p, gitRunner())).remote) {
+        const pr = await pushRepo(p, gitRunner())
+        if (pr.status === 'pushed') upload = 'uploaded'
+        else if (pr.status === 'error') {
+          upload = 'failed'
+          uploadError = /rejected|non-fast-forward|fetch first|behind|fast-forward|git pull/i.test(pr.message) ? 'The online copy has newer changes. Press “Get updates” first, then “Upload now”.' : pr.message
+        }
+      }
+      return { ...r, keysRemembered: keys, upload, uploadError }
+    }
     return r
   })
   ipcMain.handle('repos:pull', (_e, p: string, onConflict?: 'abort' | 'keep-mine' | 'keep-theirs') => pullRepo(p, gitRunner(), onConflict))
@@ -484,11 +539,134 @@ function registerIpc() {
 
   ipcMain.handle('secrets:load', (_e, id: string) => readSecrets()[id] ?? {})
   ipcMain.handle('secrets:save', (_e, id: string, values: Record<string, string>) => {
-    if (!safeStorage.isEncryptionAvailable()) return false // never write secrets in the clear
     const all = readSecrets()
     all[id] = values
-    fs.writeFileSync(secretsPath(), safeStorage.encryptString(JSON.stringify(all)))
-    return true
+    return writeSecrets(all)
+  })
+
+  // ── settings ──
+  ipcMain.handle('settings:get', () => {
+    const s = loadSettings()
+    return {
+      presetsRoot: presetsRoot(), defaultPresetsRoot: defaultPresetsRoot(), isDefault: !s.presetsRoot,
+      rememberKeys: s.rememberKeys !== false, canStoreKeys: safeStorage.isEncryptionAvailable(),
+    }
+  })
+  ipcMain.handle('settings:setPresetsRoot', (_e, p: string | null) => {
+    const s = loadSettings()
+    if (p) s.presetsRoot = p; else delete s.presetsRoot
+    saveSettings(s)
+  })
+  ipcMain.handle('settings:setRememberKeys', (_e, on: boolean) => {
+    const s = loadSettings(); s.rememberKeys = on === true; saveSettings(s)
+    if (!on) writeSecretsClear()
+  })
+
+  // ── presets (a preset is one of the saved setup folders) ──
+  ipcMain.handle('presets:keys', (_e, p: string) => {
+    try { return { count: Object.keys(readSecrets()[readBundleDir(p).manifest.id] ?? {}).length, canStore: safeStorage.isEncryptionAvailable() } } catch { return { count: 0, canStore: safeStorage.isEncryptionAvailable() } }
+  })
+  ipcMain.handle('presets:details', (_e, p: string) => {
+    const m = readBundleDir(p).manifest
+    return {
+      savedWithObs: m.savedWithObs as string | undefined,
+      plugins: m.plugins.map((x) => ({ name: x.name, version: x.version, known: !x.id.startsWith('unknown:') })),
+      scripts: m.assets.filter((a) => a.role === 'script').map((a) => a.filename),
+      remoteControl: readBundleDir(p).files.has('global/obs-websocket.json'),
+      layouts: m.collections.map((c) => ({ id: c.id, name: c.name, ...listNames(p, c.id) })),
+      outputs: m.profiles.map((x) => ({ id: x.id, name: x.name })),
+    }
+  })
+  ipcMain.handle('presets:exportFile', async (_e, p: string, includeKeys: boolean) => {
+    try {
+      const b = readBundleDir(p)
+      // bring back the big files this computer knows about, so the file is complete
+      const locs = readLocations()[b.manifest.id]?.assets ?? {}
+      for (const a of b.manifest.assets) {
+        const f = locs[a.id]
+        if (a.mode === 'external' && f && fs.existsSync(f) && fs.statSync(f).size <= 5 * 1024 * 1024) {
+          a.mode = 'bundled'; b.files.set(assetBundlePath(a), fs.readFileSync(f))
+        }
+      }
+      const kept = includeKeys ? attachSecrets(b, readSecrets()[b.manifest.id] ?? {}) : 0
+      const mark = b.manifest.containsSecrets ? ' (CONTAINS STREAM KEYS)' : ''
+      const d = await dialog.showSaveDialog({
+        title: 'Save your setup to a file', defaultPath: `${b.manifest.name.replace(/[\\/:*?"<>|]/g, '_')}${mark}.obsbundle`,
+        filters: [{ name: 'OBS config bundle', extensions: ['obsbundle'] }],
+      })
+      if (d.canceled || !d.filePath) return { ok: false, cancelled: true, error: '' }
+      fs.writeFileSync(d.filePath, await writeBundleZip(b))
+      return { ok: true, path: d.filePath, keys: kept, missingMedia: b.manifest.assets.filter((a) => a.mode === 'external').map((a) => a.filename) }
+    } catch (e) { return { ok: false, error: (e as Error).message } }
+  })
+
+  ipcMain.handle('presets:rename', async (_e, r: { path: string; installId?: string; kind: 'preset' | 'layout' | 'output' | 'scene'; id?: string; layoutId?: string; from?: string; to: string }) => {
+    const git = gitRunner()
+    try {
+      const st = await repoStatus(r.path, git)
+      if (st.dirtyFiles.length) return { ok: false, error: 'This preset has changes that are not saved yet. Save them first, then rename.' }
+      const m = readBundleDir(r.path).manifest
+      const inst = r.installId ? allInstalls().find((i) => i.id === r.installId && i.configExists) : undefined
+      const layout = m.collections.find((c) => c.id === (r.kind === 'layout' ? r.id : r.layoutId))
+      const output = m.profiles.find((x) => x.id === r.id)
+      // is the same thing in the linked OBS too?
+      const inObs = !!inst && (r.kind === 'layout' ? !!layout && obsHasLayout(inst.configDir, layout.name)
+        : r.kind === 'output' ? !!output && obsHasOutput(inst.configDir, output.name)
+        : r.kind === 'scene' ? !!layout && obsHasLayout(inst.configDir, layout.name) : false)
+      if (inObs && (await obsRunningFor(inst!))) return { ok: false, error: 'OBS is open. Close it first, so the new name can be changed in OBS as well.' }
+      if (inObs) {
+        // make sure nothing done in OBS since the last save is lost
+        const cap = await captureLive({ host, install: inst!, dir: r.path, appVersion: app.getVersion(), versions: detectVersions(inst!, host), git })
+        if (cap.status === 'conflict') return { ok: false, error: 'OBS and this preset changed the same part. Save OBS to the preset first and settle that, then rename.' }
+        if (cap.status === 'error' || cap.status === 'dirty') return { ok: false, error: cap.status === 'error' ? cap.message : 'This preset has changes that are not saved yet.' }
+      }
+      const fresh = readBundleDir(r.path).manifest // the save above may have changed the ids
+      const layoutNow = fresh.collections.find((c) => c.name === layout?.name) ?? layout
+      const outputNow = fresh.profiles.find((x) => x.name === output?.name) ?? output
+      const label = r.kind === 'preset' ? 'preset' : r.kind === 'layout' ? 'scene layout' : r.kind === 'output' ? 'output settings' : 'scene'
+      try {
+        if (r.kind === 'preset') renamePreset(r.path, r.to)
+        else if (r.kind === 'layout') renameSceneLayout(r.path, layoutNow!.id, r.to)
+        else if (r.kind === 'output') renameOutputSetting(r.path, outputNow!.id, r.to)
+        else renameSceneOrSource(r.path, layoutNow!.id, r.from!, r.to)
+        if (inObs) {
+          if (r.kind === 'layout') renameLayoutInObs(inst!.configDir, layoutNow!.name, r.to)
+          else if (r.kind === 'output') renameOutputInObs(inst!.configDir, outputNow!.name, r.to)
+          else renameSourceInObs(inst!.configDir, layoutNow!.name, r.from!, r.to)
+        }
+      } catch (e) {
+        // leave the preset exactly as it was
+        await git(['checkout', '--', '.'], r.path); await git(['clean', '-fdq'], r.path)
+        throw e
+      }
+      await commitAll(r.path, `Renamed ${label}${r.from ? ` “${r.from}”` : ''} to “${r.to.trim()}”`, git)
+      if (inObs) await markSynced(r.path, inst!, git)
+      if (st.remote) await pushRepo(r.path, git) // best effort: a failure shows as "to upload" on the preset
+      return { ok: true, alsoInObs: inObs }
+    } catch (e) {
+      return { ok: false, error: e instanceof RenameError ? e.message : errText(e) }
+    }
+  })
+
+  ipcMain.handle('presets:setOnline', async (_e, p: string, on: boolean, name: string, priv: boolean) => {
+    if (!(await hasGit())) return { ok: false, error: gitMissing }
+    const git = gitRunner()
+    try {
+      const st = await repoStatus(p, git)
+      if (!on) {
+        if (st.remote) await git(['remote', 'remove', 'origin'], p)
+        return { ok: true }
+      }
+      if (!st.remote) {
+        const t = loadGithubToken()
+        if (!t) return { ok: false, needsAccount: true, error: 'Sign in to GitHub first (under Settings), then switch this on.' }
+        const out = await publishToGithub(p, t, name, { private: priv })
+        if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but uploading failed: ${out.push.message}` }
+        return { ok: true, url: out.repo.htmlUrl }
+      }
+      const pr = await pushRepo(p, git)
+      return pr.status === 'error' ? { ok: false, error: pr.message } : { ok: true }
+    } catch (e) { return { ok: false, error: errText(e) } }
   })
 
   ipcMain.handle('updates:state', () => updates.state)

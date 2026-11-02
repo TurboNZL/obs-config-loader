@@ -2,37 +2,36 @@
 
 OBS Config Loader moves your whole OBS setup between computers, and can keep it safely backed up. Your scenes, sources, stream and recording settings and pictures all travel together, and it works between Linux, Windows and Mac.
 
-## Move your setup to another computer
-1. On the computer that has your OBS set up, open **Save my setup**. Choose what to include and press **Save to a file…**.
-2. Copy the file to the other computer (USB stick, cloud drive, anything).
-3. On the other computer, open **Load a setup**, choose the file, and press **Load into OBS**.
+## Presets
+A **preset** is a saved copy of your OBS setup: your scenes, output settings, plugin list, scripts and OBS's remote-control settings. Everything lives under **Presets**.
 
-Close OBS before loading: it saves over its own files when it closes and would undo the change. The app tells you if OBS is open.
+- **New preset from my OBS** saves what is in OBS now. Each preset gets its own folder inside the app's presets folder (change it under **Settings**).
+- **Save OBS to this preset** updates it after you change things in OBS.
+- **Load into OBS…** puts a preset into the OBS on this computer. Close OBS first: it saves over its own files when it closes and would undo the change. Before you load, the app shows **what will happen** in plain words: what will be replaced (a backup copy is always kept first), which plugins you still need, and anything you need to set up again.
+- **Export to a file…** makes one file you can copy to another computer (USB stick, cloud drive, anything). On that computer press **Open a setup file…** on the Presets page.
+- **Back up online** keeps a copy on GitHub that is updated every time you save. Switch it on per preset; you can use the same preset on all your computers.
 
-Before you load, the app shows **what will happen** in plain words: what will be replaced (a backup copy is always kept first), which OBS plugins you still need to install, and anything you need to set up again.
+## Renaming
+Open **Show details** on a preset to rename the preset, a scene layout, output settings, a scene, or any source. The new name is used everywhere it appears, and if your OBS has the same thing, it is renamed there too (close OBS first). Nothing is left behind under the old name.
 
 ## Stream keys
 A stream key is the secret that lets OBS go live on your channel.
 
-- **By default your stream keys are not in the file.** That makes the file safe to share. When you load it, the app asks for each key (or keeps the one OBS already has if you leave it empty).
-- If the file is just for you, for example to move to your other computer in one step, you can tick **Include my stream keys in the file** when saving. Then:
-  - the file's name says **(CONTAINS STREAM KEYS)**, and so does a note inside it;
-  - the app shows a red warning every time it is opened;
-  - it can never be put into an online backup.
-  
-  Anyone who has such a file can stream as you. Keep it private and delete it once you have loaded it.
+- **They are never stored in a preset folder or online.** That keeps presets safe to share.
+- **Remembered on this computer.** When you save a preset, your stream keys are kept encrypted by your system's keychain, only on this computer, so you can load the preset again without typing them. Turn this off under **Settings**. Without a system keychain nothing is remembered.
+- **In a file, if you choose.** When exporting you can tick **Include my stream keys**. Then the file's name says **(CONTAINS STREAM KEYS)**, there is a note inside, and the app shows a red warning every time it is opened. Anyone who has such a file can stream as you. Keep it private and delete it once you have loaded it.
+- When you load something without keys, the key OBS already has is kept.
+
+## What a preset needs
+**Show details** lists the OBS version the preset was saved with, the plugins it uses (with their version when the plugin reports one), its scripts, and whether it includes OBS's remote-control settings. When you load a preset onto a computer with an older OBS or plugin, or a plugin switched off in OBS, the app tells you first. Scripts are put back with their paths fixed, but OBS still needs Python set up (Tools, Scripts) for them to run.
 
 ## Online backup
-Under **Online backup** you can keep your setup on GitHub (or any git server). Every change is kept as a version, you can use the same setup on all your computers, and edits you make in OBS are never lost when the setup changes somewhere else. Stream keys are never stored in it.
-
-Everything is done in the app, you never need a terminal:
-- **No Git yet?** The page offers to install it for you.
-- **GitHub (optional).** Press *Open GitHub's token page*, press *Generate token* there, and paste the token into the app. Then you can create a backup on GitHub in one step, publish an existing one with one click, and pick your backups from a list. The token is kept in your system's keychain; it is never written into a file or an address.
-- **Start one** from your OBS: tick *Also create it on GitHub* if you want it online.
-- **Use a backup you already have:** choose it from your GitHub list, or paste any git address.
-- **Save my OBS changes to the backup** keeps what is in OBS now. Do this before you (or an AI assistant) change the backup, so the next change starts from what you really have.
-- If the backup changed in the meantime, your OBS edits are *combined* with those changes. If both changed the same part, nothing is changed until you choose whose version to keep for just that part.
-- **Get updates** and **Upload** talk to the online copy. After getting updates, **Load into OBS** puts them into OBS.
+Presets use Git (a free tool) and, optionally, GitHub. Everything is done in the app, you never need a terminal. Go to **Settings** to set up the account:
+- **No Git yet?** Settings offers to install it for you.
+- **GitHub.** Press *Open GitHub's token page*, press *Generate token* there, and paste the token into the app. The token is kept in your system's keychain; it is never written into a file or an address.
+- Then switch on **Back up online** on a preset, or tick it when making a new one. **Get one from GitHub…** downloads a preset you already have there (or paste any git address).
+- If the preset changed online in the meantime, your OBS edits are *combined* with those changes. If both changed the same part, nothing is changed until you choose whose version to keep for just that part.
+- **Get updates** and **Upload now** talk to the online copy. After getting updates, **Load into OBS…** puts them into OBS.
 - Big pictures, sounds and videos are not stored online. After getting updates, the app asks you to point to any that are missing.
 
 ## One setup, several operating systems
@@ -47,7 +46,9 @@ Under **OBS on this computer**, *Make a second OBS* creates another copy of OBS 
 - Loading a setup only waits for the OBS that uses the same settings, so a second OBS being open never blocks the first.
 
 ## Plugins
-Plugins are not part of a setup file. When you save, the app lists the plugins your setup uses; when you load, it checks which are installed on this computer and shows where to get the missing ones. Install them, then restart OBS.
+Plugins are not part of a preset. When you save, the app lists the plugins your setup uses; when you load, it checks which are installed on this computer (asking OBS itself, so it does not matter where the plugin's files are) and shows where to get the missing ones. Install them, then restart OBS.
+
+OBS 33 and newer look for plugins you add yourself in `~/.local/share/obs-studio/plugins` on Linux; older versions use the plugins folder in the settings folder (File, Show Settings Folder). The app knows both.
 
 ## If something goes wrong
 - **Loaded the wrong thing?** Every load keeps a backup copy of what it replaced. The *Done* screen shows where it is.

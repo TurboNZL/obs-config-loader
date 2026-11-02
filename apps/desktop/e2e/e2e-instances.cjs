@@ -74,7 +74,7 @@ fs.chmodSync(path.join(bin, 'flatpak'), 0o755)
   check('flatpak run with both variables before the app id and --multi last', new RegExp(`^run --env=XDG_CONFIG_HOME=${appDir}/config/instances/heavy-plugins --env=XDG_DATA_HOME=${appDir}/data/instances/heavy-plugins com\\.obsproject\\.Studio --multi$`, 'm').test(calls))
 
   console.log('3. only the running one is marked running; the main OBS can still be imported into')
-  await page.click('nav >> text=Save my setup'); await page.click('nav >> text=OBS on this computer')
+  await page.click('nav >> text=Presets'); await page.click('nav >> text=OBS on this computer')
   await page.waitForSelector('section.card:has-text("Heavy plugins") >> text=open now')
   const main = page.locator('section.card:has(span:text-is("OBS Studio (Flatpak)"))')
   check('the separate OBS shows running', (await heavy.innerText()).includes('open now'))
@@ -97,7 +97,7 @@ exec "${bin}/obs" -e "setTimeout(function(){},1500)"
 
   console.log('4b. a separate OBS that cannot be started at all is reported, with the command it tried')
   fs.rmSync(path.join(root, 'bin/flatpak')) // now "flatpak" cannot start at all
-  await page.click('nav >> text=Save my setup'); await page.click('nav >> text=OBS on this computer')
+  await page.click('nav >> text=Presets'); await page.click('nav >> text=OBS on this computer')
   await heavy.locator('button:has-text("Start OBS")').click()
   await page.waitForSelector('text=Could not start it')
   check('failure shows the command it tried', (await heavy.innerText()).includes('flatpak run --env=XDG_CONFIG_HOME='))

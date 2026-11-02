@@ -193,6 +193,25 @@ export function deriveManifestFields(b: Bundle): void {
   b.manifest.platformMap = DEFAULT_PLATFORM_MAP.filter((e) => used.sources.has(e.from) && isPlatformSpecific(e.from))
 }
 
+/**
+ * Put secret values (by variable name) into a bundle, for a file the person chose to include their keys in.
+ * Marks the bundle the way `exportBundle` does. Returns how many keys went in; names the setup does not ask for are ignored.
+ */
+export function attachSecrets(b: Bundle, values: Record<string, string>): number {
+  let n = 0
+  b.manifest.variables = b.manifest.variables.map((v) => {
+    if (v.kind !== 'secret' || !values[v.name]) return v
+    n++
+    return { ...v, value: values[v.name] }
+  })
+  if (n) {
+    b.manifest.containsSecrets = true
+    b.manifest.warning = SECRETS_WARNING
+    b.files.set(SECRETS_README_NAME, Buffer.from(SECRETS_README))
+  }
+  return n
+}
+
 export function exportBundle(opts: ExportOptions): Bundle {
   const { host, install } = opts
   const cfg = install.configDir

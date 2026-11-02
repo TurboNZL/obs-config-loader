@@ -1,7 +1,7 @@
 import type { InstallInfo } from '../../../electron/api'
 import { Card, Chip, Message, KIND_LABEL, plural } from '../ui'
 
-type Go = (t: 'installs' | 'import' | 'export' | 'repos') => void
+type Go = (t: 'installs' | 'import' | 'presets' | 'settings') => void
 
 function Big({ title, text, onClick, accent }: { title: string; text: string; onClick: () => void; accent?: boolean }) {
   return (
@@ -18,13 +18,12 @@ export function HomePage({ installs, go }: { installs: InstallInfo[] | null; go:
     <div className="bt-page mx-auto max-w-3xl p-6 space-y-6">
       <header>
         <h1 className="text-3xl font-bold">What would you like to do?</h1>
-        <p className="text-muted mt-1">Move your whole OBS setup (scenes, settings, plugins list) between computers, or keep it safely backed up.</p>
+        <p className="text-muted mt-1">Keep your whole OBS setup (scenes, settings, plugin list) as presets: move it between computers, or keep it safely backed up.</p>
       </header>
 
       <div className="space-y-3">
-        <Big title="Save my OBS setup to a file" text="Make one file you can copy to another computer, or keep as a backup." onClick={() => go('export')} accent />
-        <Big title="Load a setup into OBS" text="Open a setup file and put it into the OBS on this computer." onClick={() => go('import')} />
-        <Big title="Keep my setup backed up online" text="Save it to GitHub (or any git server) so you always have every version, and can use it on all your computers." onClick={() => go('repos')} />
+        <Big title="My presets" text="Save your OBS setup as a preset. Load it back into OBS, export it to a file for another computer, or switch on online backup." onClick={() => go('presets')} accent />
+        <Big title="Open a setup file" text="Someone sent you a setup file, or you exported one earlier: put it into the OBS on this computer." onClick={() => go('import')} />
       </div>
 
       <Card title="OBS on this computer" right={<button className="btn btn-ghost px-2 py-1 text-sm" onClick={() => go('installs')}>Manage…</button>}>

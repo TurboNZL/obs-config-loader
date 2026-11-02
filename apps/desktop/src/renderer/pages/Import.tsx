@@ -170,8 +170,8 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
                   const folder = await window.obsLoader.repos.suggestFolder(m.name)
                   const r = await window.obsLoader.repos.fromBundle(bundle!.handle, folder)
                   setSaving(false)
-                  if (r.ok) setNote(`Started an online-backup folder for this setup at ${r.repo.path}. Find it under “Online backup”.`); else setError(r.error)
-                }}>Start an online backup from this file…</button>
+                  if (r.ok) setNote(`Saved this setup as a preset at ${r.repo.path}. Find it under “Presets”.`); else setError(r.error)
+                }}>Keep this as a preset…</button>
               )}
             </div>
           )}
@@ -338,17 +338,17 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
 
               {liveChanges.length > 0 && (
                 <Message tone="warn">
-                  OBS has changes that are not saved in your online backup yet. Loading would replace them, so save them to the backup first.
+                  OBS has changes that are not saved in this preset yet. Loading would replace them, so save them to the preset first.
                   <div className="mt-2">
                     <button className="btn btn-accent px-3 py-1" disabled={saving} onClick={async () => {
                       setSaving(true)
                       const r = await window.obsLoader.repos.save(repoDir!, installId, false)
                       setSaving(false)
-                      if (r.status === 'dirty') setError('Some files in the backup folder were changed by hand. Open “Online backup” to deal with them first.')
+                      if (r.status === 'dirty') setError('Some files in the preset were changed by hand. Open “Presets” to deal with them first.')
                       else if (r.status === 'error') setError(r.message)
-                      else if (r.status === 'conflict') setError('Your OBS and the backup both changed the same part. Open “Online backup” to choose which to keep.')
+                      else if (r.status === 'conflict') setError('Your OBS and the preset both changed the same part. Open “Presets” to choose which to keep.')
                       else await checkLive()
-                    }}>{saving ? 'Saving…' : 'Save them to the backup now'}</button>
+                    }}>{saving ? 'Saving…' : 'Save them to the preset now'}</button>
                   </div>
                 </Message>
               )}

@@ -19,6 +19,8 @@ collections/<id>.json         OBS scene collections, with tokens instead of mach
 profiles/<id>/basic.ini       OBS profile files (output, video, audio settings)
 profiles/<id>/streamEncoder.json, recordEncoder.json, service.json, ...
 media/<assetId>/<filename>    bundled assets (only those with "mode": "bundled")
+scripts/<assetId>/<filename>  OBS scripts (.py, .lua): small, so kept even in the directory form
+global/obs-websocket.json     OBS's remote-control (WebSocket) settings; the password is a secret variable
 ```
 
 ## `manifest.json`
@@ -35,6 +37,7 @@ media/<assetId>/<filename>    bundled assets (only those with "mode": "bundled")
   "generator": { "name": "obs-config-loader", "version": "2026.10.1" },
   "source": { "platform": "linux", "obsVersion": "31.0.0" },
   "obsMinVersion": "28.0.0",
+  "savedWithObs": "31.0.2",             // newest OBS version any computer saved this with; only ever goes up
 
   "collections": [{ "id": "main", "name": "Main", "file": "collections/main.json" }],
   "profiles":    [{ "id": "main", "name": "Main", "dir":  "profiles/main" }],
@@ -84,6 +87,14 @@ That is the **only** way a secret value is ever written, and such a file is mark
 
 On import, a value typed by the user beats the one in the file, and the one in the file beats what is already in OBS.
 
+### `global/obs-websocket.json`: remote control
+
+OBS's built-in WebSocket server settings (`plugin_config/obs-websocket/config.json`): port, whether a password is
+required, and the password itself. Stream decks, overlays and scripts depend on them. The password is a `secret` variable
+(target `global/obs-websocket.json#server_password`) with the same rules as a stream key: never in the directory form, only
+in a file that says `containsSecrets`, and on import what was typed beats the file, which beats what OBS already has.
+Importers may offer to skip it.
+
 ### `assets`: media files that scenes point at
 
 Referenced as `{{asset:ID}}` inside collection files.
@@ -101,7 +112,10 @@ Referenced as `{{asset:ID}}` inside collection files.
   asks the user to locate it (checking `sha256` when present) and remembers the choice. Until it is
   given, the source is imported with an empty path and flagged; nothing is lost, and the
   placeholder survives later exports.
-- `role`: `image | video | audio | font | other`, used only for the UI.
+- `role`: `image | video | audio | font | script | other`. A `script` asset (an OBS Python or Lua script listed under
+  `modules.scripts-tool` in a collection) is stored under `scripts/<id>/<filename>` instead of `media/`, up to 1 MB, and
+  stays bundled in the directory form. On import it is written next to the other imported files and the collection's
+  script path points at it. OBS still needs Python (or Lua) set up for it to run; the importer says so.
 
 ### `plugins`: what the setup needs but does not bundle
 
@@ -120,6 +134,12 @@ instructions.
     "macos": "Copy into ~/Library/Application Support/obs-studio/plugins/"
   } }
 ```
+
+`version` (optional) is the newest version any computer saved the setup with, and is only known when the plugin tells
+OBS one (`obs_module_version`; some plugins, such as PipeWire Audio Capture, do not). The importer warns when this
+computer's version is older, and when OBS has the plugin switched off. Where a plugin is installed is never recorded: it is
+looked for in OBS's own module list (`<settings folder>/plugin_manager/modules.json`) and in the plugin folders
+(settings folder, `~/.local/share/obs-studio/plugins` for OBS 33 and newer, Flatpak data folders and extensions).
 
 `provides` lists OBS identifiers the plugin supplies (source `id`, filter `id`, output `id`,
 module name). The importer detects missing plugins by checking every `id` used in the collection
