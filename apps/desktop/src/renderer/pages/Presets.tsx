@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AssetNeed, FileChoice, GithubRepo, GithubState, GitState, InstallInfo, LogEntry, ObsScan, PresetDetails, PullResult, RenameRequest, RepoInfo, SaveResult } from '../../../electron/api'
+import type { AssetNeed, FileChoice, OnlineComparison, GithubRepo, GithubState, GitState, InstallInfo, LogEntry, ObsScan, PresetDetails, PullResult, RenameRequest, RepoInfo, SaveResult } from '../../../electron/api'
 import { Card, Chip, Choice, Field, KIND_LABEL, Message, Page, plural } from '../ui'
 import { BigFiles, KeysChoice } from '../components/SaveOptions'
 import { GitMissing } from '../components/Account'
@@ -450,7 +450,12 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
   useEffect(() => { void window.obsLoader.repos.needs(repo.path).then(setNeeds).catch(() => setNeeds([])) }, [repo.path, st.behind])
   // an online preset asks what is new when it is shown, so "newer version online" is true and not last time's guess
   const [checked, setChecked] = useState(false)
+  const [cmp, setCmp] = useState<OnlineComparison | null>(null)
+  const [sure, setSure] = useState<'mine' | 'theirs' | null>(null)
+  const disagree = !!cmp && cmp.unrelated && st.ahead > 0
   useEffect(() => { if (online) void window.obsLoader.repos.check(repo.path).then(async () => { setChecked(true); await refresh() }); else setChecked(true) }, [repo.path, online]) // eslint-disable-line react-hooks/exhaustive-deps
+  // when the two have both moved, say what is newer where (so a person can tell which side is really the newer one)
+  useEffect(() => { if (online && checked && (st.behind > 0 || st.ahead > 0)) void window.obsLoader.repos.compare(repo.path).then(setCmp); else setCmp(null) }, [online, checked, st.behind, st.ahead, repo.path])
   useEffect(() => { void window.obsLoader.presets.keys(repo.path).then(setKeys) }, [repo.path, st.commits])
 
   const run = async (f: () => Promise<void>) => { setBusy(true); try { await f() } catch (e) { setMsg({ tone: 'bad', text: (e as Error).message }) } setBusy(false); await refresh() }
@@ -486,9 +491,23 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
   const push = () => run(async () => {
     const r = await window.obsLoader.repos.push(repo.path)
     setMsg(r.status === 'pushed' ? { tone: 'good', text: 'Uploaded.' } : r.status === 'nothing' ? { tone: 'good', text: 'Nothing new to upload.' }
-      : r.status === 'no-remote' ? { tone: 'warn', text: 'This preset is not backed up online yet.' } : { tone: 'bad', text: r.message })
+      : r.status === 'no-remote' ? { tone: 'warn', text: 'This preset is not backed up online yet.' }
+      : r.rejected ? { tone: 'warn', text: 'The online copy has changes this computer does not have. See the box at the top of this preset and choose which version is right.' }
+      : { tone: 'bad', text: r.message })
   })
 
+  const keepMine = () => run(async () => {
+    const r = await window.obsLoader.repos.push(repo.path, true)
+    setSure(null)
+    setMsg(r.status === 'pushed' ? { tone: 'good', text: 'The online copy now matches this computer.' }
+      : r.status === 'error' ? { tone: 'bad', text: r.rejected ? 'Someone saved to the online copy just now, so it was not replaced. Look at the two again and choose.' : r.message }
+      : { tone: 'good', text: 'Nothing to replace.' })
+  })
+  const useOnline = () => run(async () => {
+    const r = await window.obsLoader.repos.useOnline(repo.path)
+    setSure(null)
+    setMsg(r.ok ? { tone: 'good', text: 'This computer now has the online version. Your previous one is kept in History. Load it into OBS to use it.' } : { tone: 'bad', text: r.error })
+  })
   const toggleOnline = (on: boolean) => run(async () => {
     const r = await window.obsLoader.presets.setOnline(repo.path, on, repo.name, priv)
     if (r.ok) setMsg({ tone: 'good', text: on ? (r.url ? `Backed up online at ${r.url}.` : 'Backed up online.') : 'Online backup is off for this preset. What is already on GitHub stays there.' })
@@ -518,10 +537,38 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
     >
       {msg && <Message tone={msg.tone}>{msg.text}</Message>}
 
-      {online && checked && st.behind > 0 && (
+      {online && checked && st.behind > 0 && st.ahead === 0 && (
         <Message tone="warn">
           A newer version of this preset is online ({plural(st.behind, 'change')}). Get it, then load it into OBS.
           <div className="mt-2"><button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => pull()}>Get updates</button></div>
+        </Message>
+      )}
+      {online && checked && (st.behind > 0 && st.ahead > 0 || disagree) && (
+        <Message tone="bad">
+          <strong>This computer and the online copy have both changed.</strong> Choose which one is right.
+          {cmp?.mine && cmp?.theirs && (
+            <ul className="mt-1 space-y-0.5">
+              <li>This computer: last saved {new Date(cmp.mine.date).toLocaleString()} (“{cmp.mine.subject}”), {plural(st.ahead, 'save')} the online copy does not have.</li>
+              <li>Online: last changed {new Date(cmp.theirs.date).toLocaleString()} by {cmp.theirs.author} (“{cmp.theirs.subject}”), {plural(st.behind, 'change')} this computer does not have.</li>
+              {cmp.unrelated && <li>They were started separately, so they have no saves in common.</li>}
+            </ul>
+          )}
+          <div className="mt-2 flex gap-2 flex-wrap">
+            <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => pull()}>Combine them</button>
+            <button className="btn px-3 py-1" disabled={busy} onClick={() => setSure('mine')}>Keep mine (replace the online copy)</button>
+            <button className="btn px-3 py-1" disabled={busy} onClick={() => setSure('theirs')}>Use the online one (replace mine)</button>
+          </div>
+          {sure && (
+            <div className="mt-2 space-y-1">
+              <p className="text-sm">{sure === 'mine'
+                ? 'The online copy will be replaced by this computer\'s version. Its saves stay in GitHub\'s history, but it will no longer be the current one. Sure?'
+                : 'This computer\'s version will be replaced by the online one. Yours is kept (under History, on a branch named “before-online-…”), so nothing is lost. Sure?'}</p>
+              <div className="flex gap-2">
+                <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => (sure === 'mine' ? keepMine() : useOnline())}>{sure === 'mine' ? 'Yes, replace the online copy' : 'Yes, replace mine'}</button>
+                <button className="btn btn-ghost px-3 py-1" onClick={() => setSure(null)}>Cancel</button>
+              </div>
+            </div>
+          )}
         </Message>
       )}
       {live && live.length > 0 && <Message tone="warn">OBS has changes that are not in this preset yet. Press “Save OBS to this preset” to keep them.</Message>}

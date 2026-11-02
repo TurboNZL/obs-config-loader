@@ -5,7 +5,7 @@ import * as nodePath from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
   exportBundle, planImport, applyImport, readBundleDir, captureLive, initRepo, repoStatus, fetchRepo, pullRepo, pushRepo, setRemote,
-  publicRemoteUrl, readActive, fixEncoders, availableEncoders, parseManifest, type Bundle,
+  publicRemoteUrl, readActive, fixEncoders, availableEncoders, parseManifest, onlineComparison, useOnlineVersion, type Bundle,
 } from '../src/index.js'
 import { host, install, makeSource } from './helpers.js'
 
@@ -126,5 +126,97 @@ describe('a file that knows where its preset lives online', () => {
     // an unreachable address says so instead of pretending
     git(a, 'remote', 'set-url', 'origin', nodePath.join(tmp, 'gone.git'))
     expect((await fetchRepo(a)).ok).toBe(false)
+  })
+})
+
+describe('when this computer and the online copy disagree', () => {
+  async function diverged() {
+    const home = nodePath.join(tmp, 'home'); const { cfg } = makeSource(home)
+    const bare = nodePath.join(tmp, 'bare.git'); git(tmp, 'init', '-q', '--bare', '--initial-branch=main', bare)
+    const a = nodePath.join(tmp, 'a'); await initRepo(a)
+    await captureLive({ host: host('linux', home), install: install(cfg), dir: a, name: 'Mine' })
+    await setRemote(a, bare); await pushRepo(a)
+    const other = nodePath.join(tmp, 'other'); git(tmp, 'clone', '-q', bare, other)
+    fs.appendFileSync(nodePath.join(other, 'manifest.json'), '\n'); git(other, 'commit', '-qam', 'their old edit'); git(other, 'push', '-q')
+    // this computer saved more in the meantime
+    const j = JSON.parse(fs.readFileSync(nodePath.join(cfg, 'basic/scenes/Main.json'), 'utf8')); j.sources.push({ id: 'color_source', name: 'Newer', uuid: 'u-n', settings: {} })
+    fs.writeFileSync(nodePath.join(cfg, 'basic/scenes/Main.json'), JSON.stringify(j))
+    await captureLive({ host: host('linux', home), install: install(cfg), dir: a })
+    await fetchRepo(a)
+    return { a, bare, other }
+  }
+
+  it('says what is newer where, and a normal upload is refused as a mismatch', async () => {
+    const { a } = await diverged()
+    const c = (await onlineComparison(a))!
+    expect(c).toMatchObject({ ahead: 1, behind: 1, unrelated: false })
+    expect(c.mine!.subject).toMatch(/Live edits/); expect(c.theirs!.subject).toBe('their old edit')
+    const r = await pushRepo(a)
+    expect(r).toMatchObject({ status: 'error', rejected: true })
+  })
+
+  it('"keep mine" replaces the online copy (only if nobody pushed since we looked)', async () => {
+    const { a, bare, other } = await diverged()
+    expect((await pushRepo(a, undefined, { force: true })).status).toBe('pushed')
+    expect(git(bare, 'rev-parse', 'main')).toBe(git(a, 'rev-parse', 'HEAD'))
+    // someone pushes after we last looked: forcing now would erase their work, so it refuses
+    fs.appendFileSync(nodePath.join(other, 'manifest.json'), '\n'); git(other, 'pull', '-q', '--no-rebase'); git(other, 'commit', '-qam', 'surprise'); git(other, 'push', '-q')
+    fs.appendFileSync(nodePath.join(a, 'manifest.json'), ' '); git(a, 'commit', '-qam', 'mine again')
+    const again = await pushRepo(a, undefined, { force: true })
+    expect(again.status).toBe('error')
+  })
+
+  it('"take the online version" replaces this copy but keeps it on a branch', async () => {
+    const { a, bare } = await diverged()
+    const mine = git(a, 'rev-parse', 'HEAD')
+    const r = await useOnlineVersion(a)
+    expect(r.ok).toBe(true)
+    expect(git(a, 'rev-parse', 'HEAD')).toBe(git(bare, 'rev-parse', 'main'))
+    expect(git(a, 'rev-parse', (r as { kept: string }).kept)).toBe(mine)
+    fs.appendFileSync(nodePath.join(a, 'manifest.json'), 'x')
+    expect((await useOnlineVersion(a)).ok).toBe(false) // unsaved changes: refuses
+  })
+
+  it('an online copy started separately (no shared history) can still be combined', async () => {
+    const home = nodePath.join(tmp, 'home'); const { cfg } = makeSource(home)
+    const bare = nodePath.join(tmp, 'bare.git'); git(tmp, 'init', '-q', '--bare', '--initial-branch=main', bare)
+    const first = nodePath.join(tmp, 'first'); await initRepo(first)
+    await captureLive({ host: host('linux', home), install: install(cfg), dir: first, name: 'Mine' })
+    await setRemote(first, bare); await pushRepo(first)
+    const a = nodePath.join(tmp, 'a'); await initRepo(a) // the same setup, started again from a file
+    await captureLive({ host: host('linux', home), install: { ...install(cfg), id: 'other' }, dir: a, name: 'Mine' })
+    await setRemote(a, bare); await fetchRepo(a)
+    git(a, 'branch', '--set-upstream-to=origin/main')
+    expect((await onlineComparison(a))!.unrelated).toBe(true)
+    const r = await pullRepo(a, undefined, 'keep-mine')
+    expect(['updated', 'up-to-date', 'conflict']).toContain(r.status) // never "refusing to merge unrelated histories"
+    expect(r.status === 'error').toBe(false)
+  })
+})
+
+describe('files the scenes use that are already on this computer', () => {
+  it('are found where loading a file put them, and reported where each one ended up', async () => {
+    const { locateExtracted } = await import('../src/index.js')
+    const home = nodePath.join(tmp, 'home'); const { cfg } = makeSource(home)
+    const b = exportBundle({ host: host('linux', home), install: install(cfg), name: 'x' })
+    const cfg2 = nodePath.join(tmp, 'there', 'obs-studio'); fs.mkdirSync(cfg2, { recursive: true })
+    const plan = planImport({ bundle: b, install: install(cfg2), host: host('linux', home), assetFiles: { mix: '/somewhere/mix.mp3' } })
+    applyImport(plan)
+    const overlay = b.manifest.assets.find((a) => a.filename === 'overlay.png')!
+    expect(plan.report.assetLocations[overlay.id]).toContain(nodePath.join('obs-config-loader', b.manifest.id, 'media', overlay.id, 'overlay.png'))
+    expect(plan.report.assetLocations.mix).toBe('/somewhere/mix.mp3')
+    // a preset made from that file only has placeholders, but the files are right there
+    const found = locateExtracted(b.manifest, [cfg2])
+    expect(found[overlay.id]).toBe(plan.report.assetLocations[overlay.id])
+    expect(found.mix).toBeUndefined()
+  })
+
+  it('a save tells where each one is, so the preset remembers it', async () => {
+    const home = nodePath.join(tmp, 'home'); const { cfg, media } = makeSource(home)
+    const dir = nodePath.join(tmp, 'repo'); await initRepo(dir)
+    const seen: { id: string; path: string }[] = []
+    await captureLive({ host: host('linux', home), install: install(cfg), dir, name: 'Mine', onAsset: (a) => seen.push({ id: a.id, path: a.path }) })
+    expect(seen.find((s) => s.path === media)).toBeTruthy()
+    expect(readBundleDir(dir).manifest.assets.some((a) => a.id === seen.find((s) => s.path === media)!.id)).toBe(true)
   })
 })

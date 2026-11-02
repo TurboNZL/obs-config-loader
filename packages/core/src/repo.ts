@@ -162,7 +162,9 @@ export async function pullRepo(dir: string, git: GitRunner = defaultGit, onConfl
   const id = await identity(dir, git)
   // keep-mine / keep-theirs only decide the clashing lines; everything that merges cleanly merges either way
   const strategy = onConflict === 'keep-mine' ? ['-X', 'ours'] : onConflict === 'keep-theirs' ? ['-X', 'theirs'] : []
-  const r = await git([...id, 'pull', '--no-rebase', '--no-edit', ...strategy], dir)
+  let r = await git([...id, 'pull', '--no-rebase', '--no-edit', ...strategy], dir)
+  // the online copy was started separately (no shared history): combine them anyway, as the person asked to get updates
+  if (r.code !== 0 && /unrelated histories/i.test(r.stderr + r.stdout)) r = await git([...id, 'pull', '--no-rebase', '--no-edit', '--allow-unrelated-histories', ...strategy], dir)
   if (r.code !== 0) {
     const unmerged = (await git(['diff', '--name-only', '--diff-filter=U'], dir)).stdout.split('\n').filter(Boolean)
     if (unmerged.length) {
@@ -185,16 +187,62 @@ export async function fetchRepo(dir: string, git: GitRunner = defaultGit): Promi
   return r.code === 0 ? { ok: true } : { ok: false, message: (r.stderr.trim() || r.stdout.trim() || 'Could not reach the online copy.').split('\n').slice(-2).join('\n') }
 }
 
-export type PushResult = { status: 'pushed' } | { status: 'nothing' } | { status: 'no-remote' } | { status: 'error'; message: string }
+export type PushResult = { status: 'pushed' } | { status: 'nothing' } | { status: 'no-remote' } | { status: 'error'; message: string; rejected?: boolean }
 
-export async function pushRepo(dir: string, git: GitRunner = defaultGit): Promise<PushResult> {
+/**
+ * Send saves online. `force` replaces the online copy with this one (only if nobody has pushed since the last time we looked:
+ * `--force-with-lease`), for when this computer's version is the right one and the online one is the stale one.
+ */
+export async function pushRepo(dir: string, git: GitRunner = defaultGit, opts: { force?: boolean } = {}): Promise<PushResult> {
   const st = await repoStatus(dir, git)
   if (!st.remote) return { status: 'no-remote' }
-  if (st.upstream && st.ahead === 0) return { status: 'nothing' }
-  const args = st.upstream ? ['push'] : ['push', '-u', st.remote, 'HEAD']
+  if (st.upstream && st.ahead === 0 && !opts.force) return { status: 'nothing' }
+  const lease = opts.force ? ['--force-with-lease'] : []
+  const args = st.upstream ? ['push', ...lease] : ['push', ...lease, '-u', st.remote, 'HEAD']
   const r = await git(args, dir)
-  if (r.code !== 0) return { status: 'error', message: (r.stderr.trim() || r.stdout.trim()).split('\n').slice(-3).join('\n') }
+  if (r.code !== 0) {
+    const message = (r.stderr.trim() || r.stdout.trim()).split('\n').slice(-3).join('\n')
+    return { status: 'error', message, rejected: /rejected|non-fast-forward|fetch first|stale info/i.test(r.stderr + r.stdout) }
+  }
   return { status: 'pushed' }
+}
+
+export interface OnlineComparison {
+  ahead: number
+  behind: number
+  /** Newest save on this computer and online (ISO dates, with who/what), so a person can tell which is really newer. */
+  mine?: { date: string; subject: string }
+  theirs?: { date: string; subject: string; author: string }
+  /** The two have no history in common (the online copy was started separately). */
+  unrelated: boolean
+}
+
+/** After asking the online copy (`fetchRepo`): how this computer's version and the online one relate. */
+export async function onlineComparison(dir: string, git: GitRunner = defaultGit): Promise<OnlineComparison | null> {
+  const st = await repoStatus(dir, git)
+  if (!st.remote || !st.upstream) return null
+  const one = async (rev: string) => {
+    const r = await git(['log', '-1', '--date=iso-strict', '--pretty=format:%ad%x1f%s%x1f%an', rev], dir)
+    const [date, subject, author] = r.stdout.split('\x1f')
+    return r.code === 0 && date ? { date, subject, author } : undefined
+  }
+  const base = await git(['merge-base', 'HEAD', st.upstream], dir)
+  return { ahead: st.ahead, behind: st.behind, mine: await one('HEAD'), theirs: await one(st.upstream), unrelated: base.code !== 0 }
+}
+
+/**
+ * Make this computer's copy exactly the online one. Nothing is lost: the version being replaced is kept on a branch named
+ * `before-online-<time>` (still in History, and recoverable). Refuses when there are unsaved changes.
+ */
+export async function useOnlineVersion(dir: string, git: GitRunner = defaultGit): Promise<{ ok: true; kept: string } | { ok: false; message: string }> {
+  const st = await repoStatus(dir, git)
+  if (!st.remote || !st.upstream) return { ok: false, message: 'This preset is not backed up online yet.' }
+  if (st.dirtyFiles.length) return { ok: false, message: 'This preset has changes that are not saved yet. Save them first.' }
+  const kept = `before-online-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}`
+  await git(['branch', kept, 'HEAD'], dir)
+  const r = await git(['reset', '--hard', st.upstream], dir)
+  if (r.code !== 0) return { ok: false, message: (r.stderr.trim() || 'Could not switch to the online version.').split('\n').slice(-2).join('\n') }
+  return { ok: true, kept }
 }
 
 // ── live capture ─────────────────────────────────────────────────────────────
@@ -223,6 +271,8 @@ export function preservePlatformSources(next: any, prev: any, platform: Host['pl
   return kept
 }
 
+type CaptureOptionsAsset = (a: { id: string; filename: string; path: string; size: number }) => void
+
 export interface CaptureOptions {
   host: Host
   install: ObsInstall
@@ -237,6 +287,8 @@ export interface CaptureOptions {
   appVersion?: string
   /** This computer's OBS and plugin versions, recorded in the setup (the newest ever saved is kept). */
   versions?: DetectedVersions
+  /** Told where each file the scenes use really is on this computer, so the preset can remember it. */
+  onAsset?: CaptureOptionsAsset
   /** What a brand-new preset leaves out. An existing preset's own list always wins. */
   exclude?: Manifest['exclude']
   /** When the repo and OBS changed the same lines: stop (default), or settle just those lines in favour of one side. */
@@ -289,7 +341,7 @@ function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest[
     description: typeof pm?.description === 'string' ? pm.description : undefined,
     // No name filter: OBS is the source of truth for which scenes/profiles exist. (Filtering by the names saved
     // earlier made a renamed collection or profile vanish, and the folder was then wiped.)
-    bundleBelowBytes: o.bundleBelowBytes, appVersion: o.appVersion, versions: o.versions, exclude: excludeNow ?? pm?.exclude ?? o.exclude,
+    bundleBelowBytes: o.bundleBelowBytes, appVersion: o.appVersion, versions: o.versions, exclude: excludeNow ?? pm?.exclude ?? o.exclude, onAsset: o.onAsset,
     // the repo's history is its revision list: keep these two still so they never cause a merge conflict
     revision: pm?.revision, now: pm?.exportedAt ? new Date(pm.exportedAt) : undefined,
   })
@@ -444,6 +496,22 @@ export async function assetNeeds(manifest: Manifest, locations: AssetLocations):
     }
   }
   return out
+}
+
+/**
+ * Files a setup brought with it are put in `<OBS settings folder>/obs-config-loader/<setup id>/media/<asset id>/<name>` when it is
+ * loaded, and the scenes point there. A preset made from that file has no copy of them (git never holds media), but they are
+ * on this computer: find them, so they are not asked for.
+ */
+export function locateExtracted(manifest: Manifest, configDirs: string[]): AssetLocations {
+  const found: AssetLocations = {}
+  for (const a of manifest.assets) {
+    for (const dir of configDirs) {
+      const p = nodePath.join(dir, 'obs-config-loader', manifest.id, 'media', a.id, a.filename)
+      if (fs.existsSync(p)) { found[a.id] = p; break }
+    }
+  }
+  return found
 }
 
 export { serializeManifest }

@@ -82,6 +82,15 @@ const bundlePath = path.join(root, 'test.obsbundle')
   const col = JSON.parse(fs.readFileSync(path.join(portable, 'config/obs-studio/basic/scenes/Main.json'), 'utf8'))
   console.log('overlay path:', col.sources.find((s) => s.name === 'Overlay').settings.file)
 
+  // the file was kept as a preset by default, and the pictures it brought are already on this computer: nothing is asked for
+  await page.waitForSelector('text=Kept as the preset')
+  await page.click('nav >> text=Presets')
+  await page.waitForSelector('section.card:has(h2:text-is("My OBS setup"))')
+  await page.waitForTimeout(600)
+  const presetText = await page.locator('main').innerText()
+  console.log('asks for files it already has:', presetText.includes('Big files this computer still needs'))
+  if (presetText.includes('Big files this computer still needs')) { console.error('E2E FAIL: the preset asks for files that are already here'); process.exit(1) }
+
   await page.click('nav >> text=Look')
   await page.waitForTimeout(800)
   await page.screenshot({ path: OUT + '/7-appearance.png' })
