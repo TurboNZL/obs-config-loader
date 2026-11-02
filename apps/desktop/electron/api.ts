@@ -1,4 +1,4 @@
-import type { ImportReport, ObsInstall, Manifest, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed, GithubRepo, GitInstallHelp, InstanceSupport } from '@obs-config-loader/core'
+import type { OnlineComparison, ImportReport, ObsInstall, Manifest, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed, GithubRepo, GitInstallHelp, InstanceSupport } from '@obs-config-loader/core'
 
 /** What the renderer may ask of the main process. One place, so both sides agree. */
 export interface InstallInfo extends ObsInstall {
@@ -121,7 +121,7 @@ export interface RenameRequest { path: string; installId?: string; kind: 'preset
 
 export interface Locations { assets: Record<string, string>; variables: Record<string, string> }
 
-export type { ImportReport, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed, GithubRepo, GitInstallHelp }
+export type { OnlineComparison, ImportReport, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed, GithubRepo, GitInstallHelp }
 
 export interface Api {
   platform: 'win32' | 'darwin' | 'linux'
@@ -188,7 +188,11 @@ export interface Api {
     live(path: string, installId: string): Promise<{ changed: string[] } | { error: string }>
     save(path: string, installId: string, commitDirtyFirst: boolean, onConflict?: SaveConflictChoice): Promise<SaveResult>
     pull(path: string, onConflict?: PullConflictChoice): Promise<PullResult>
-    push(path: string): Promise<PushResult>
+    /** `force`: replace the online copy with this one (refused if someone pushed since we last looked). */
+    push(path: string, force?: boolean): Promise<PushResult>
+    compare(path: string): Promise<OnlineComparison | null>
+    /** Replace this copy with the online one; the old one is kept on a branch. */
+    useOnline(path: string): Promise<Done<{ kept: string }>>
     log(path: string): Promise<LogEntry[]>
     needs(path: string): Promise<AssetNeed[]>
     setAsset(path: string, assetId: string, file: string): Promise<void>

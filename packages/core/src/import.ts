@@ -75,6 +75,8 @@ export interface Substitution {
 }
 
 export interface ImportReport {
+  /** Where each file the setup uses will be on this computer (the copies it brings, and the ones the person pointed to). */
+  assetLocations: Record<string, string>
   willWrite: { path: string; action: WriteAction }[]
   missingVariables: { name: string; kind: string; required: boolean }[]
   /** Secrets you did not type in, whose value already in OBS was left as it was (never blanked). */
@@ -486,7 +488,7 @@ export function planImport(o: ImportOptions): ImportPlan {
   return {
     writes,
     report: {
-      willWrite: writes.map((w) => ({ path: w.path, action: w.action })),
+      assetLocations: Object.fromEntries(assetPath), willWrite: writes.map((w) => ({ path: w.path, action: w.action })),
       missingVariables: missingVariables.filter((v) => !keptSecrets.has(v.name)), keptSecrets: [...keptSecrets], containsSecrets: m.containsSecrets === true,
       includedSecrets: Object.keys(included).filter((n) => (o.variables ?? {})[n] === undefined), usedDefaults, missingAssets, plugins, substitutions: subs, warnings, blockers, backupDir,
     },

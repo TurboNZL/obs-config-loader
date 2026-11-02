@@ -15,6 +15,15 @@ A **preset** is a saved copy of your OBS setup: your scenes, output settings, pl
 ## Files that know where they live
 When a preset is backed up online and you save it to a file, the file carries the GitHub address (never a password). Open that file on another computer and the app offers **Use the latest version from there**, so you never load something out of date. By default a file you open is also **kept as a preset** on that computer, linked to its online copy, so you can get updates later. A preset that is behind GitHub says so when you open it, with a **Get updates** button.
 
+## When this computer and GitHub disagree
+If you saved on this computer while the online copy was changed somewhere else, the preset shows a red box saying **both have changed**, with when each was last saved and by whom, so you can tell which is really newer. You choose:
+- **Combine them** merges the two (if they changed the same part, you are asked whose version to keep for just that part).
+- **Keep mine (replace the online copy)** makes GitHub match this computer. It only works if nobody saved online since the app last looked, so it can never silently erase someone's newer work.
+- **Use the online one (replace mine)** makes this computer match GitHub. Your version is kept (see History, a branch named “before-online-…”), so nothing is lost.
+
+## Big files a preset "still needs"
+A preset never holds big pictures, sounds or videos, so it keeps a list of the ones it uses. The app remembers where each is on this computer from three places: where you pointed to it, where a setup file put the copies it brought, and where OBS is using it each time you save. It only asks for a file it cannot find in any of them.
+
 ## Windows, Linux and Mac settings in one setup
 A setup keeps each system's own encoders and audio devices (and capture sources) side by side. Saving from Windows never overwrites what Linux saved, even if the Windows computer never uses it, and each computer loads its own. If an encoder does not exist in the OBS you load into (a hardware encoder the graphics card does not have, say), it is swapped for the standard software one and you are told, so the Settings window never opens with empty boxes.
 

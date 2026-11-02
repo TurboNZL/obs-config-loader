@@ -31,6 +31,8 @@ export interface ExportOptions {
   exclude?: Manifest['exclude']
   /** Where this setup is kept online, to write into a file made from it. */
   repository?: string
+  /** Called for every file the scenes use that exists on this computer: where it really is (so a preset can remember it). */
+  onAsset?: (a: { id: string; filename: string; path: string; size: number }) => void
   /**
    * Put the stream keys and other secrets INTO the file. Off by default, and the file is then labelled everywhere
    * (`containsSecrets`, a warning in the manifest, a README in the zip). Never allowed for the git folder form.
@@ -111,7 +113,7 @@ class Collector {
   private assetByPath = new Map<string, string>()
   private varByValue = new Map<string, string>()
   readonly warnings: string[] = []
-  constructor(private host: Host, private bundleBelow: number, private alsoBundle: Set<string> = new Set()) {}
+  constructor(private host: Host, private bundleBelow: number, private alsoBundle: Set<string> = new Set(), private onAsset?: ExportOptions['onAsset']) {}
 
   private uniqueAssetId(base: string): string {
     let id = base
@@ -137,6 +139,7 @@ class Collector {
       if (st?.isFile()) {
         asset.size = st.size
         asset.sha256 = sha256File(value)
+        this.onAsset?.({ id, filename: base, path: value, size: st.size })
         const isScript = asset.role === 'script' && st.size <= MAX_SCRIPT_BYTES
         if (isScript || st.size <= this.bundleBelow || this.alsoBundle.has(id)) {
           asset.mode = 'bundled'
@@ -227,7 +230,7 @@ export function attachSecrets(b: Bundle, values: Record<string, string>): number
 export function exportBundle(opts: ExportOptions): Bundle {
   const { host, install } = opts
   const cfg = install.configDir
-  const col = new Collector(host, opts.bundleBelowBytes ?? 5 * 1024 * 1024, new Set(opts.alsoBundle ?? []))
+  const col = new Collector(host, opts.bundleBelowBytes ?? 5 * 1024 * 1024, new Set(opts.alsoBundle ?? []), opts.onAsset)
   const ex = opts.exclude ?? {}
   const scrub = new SecretScrubber(opts.includeSecrets === true)
   const files = col.files

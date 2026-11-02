@@ -7,7 +7,7 @@ import {
   gitAvailable, gitInstallHelp, githubAuthGit, githubListRepos, githubWhoAmI, initRepo, markSynced, planImport, portableInstall, publishToGithub,
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
-  assetBundlePath, attachSecrets, commitAll, fetchRepo, publicRemoteUrl, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
+  assetBundlePath, attachSecrets, commitAll, fetchRepo, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
   renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, renameSourceInObs, RenameError,
 } from '@obs-config-loader/core'
 import { Updates } from './updater'
@@ -124,6 +124,18 @@ function readLocations(): Record<string, Locations> {
 function writeLocations(all: Record<string, Locations>) {
   fs.mkdirSync(path.dirname(locationsPath()), { recursive: true })
   fs.writeFileSync(locationsPath(), JSON.stringify(all, null, 2))
+}
+
+/** Remember where this computer keeps each file a preset's scenes use (only those the preset knows, and that really exist). */
+function rememberAssets(presetPath: string, found: { id: string; filename: string; path: string }[]) {
+  try {
+    const m = readBundleDir(presetPath).manifest
+    const all = readLocations()
+    const cur = all[m.id] ?? { assets: {}, variables: {} }
+    for (const f of found) if (m.assets.some((a) => a.id === f.id && a.filename === f.filename) && fs.existsSync(f.path)) cur.assets[f.id] = f.path
+    all[m.id] = cur
+    writeLocations(all)
+  } catch { /* the preset still works; the files are asked for instead */ }
 }
 
 // ── config repositories ──────────────────────────────────────────────────────
@@ -333,7 +345,14 @@ function registerIpc() {
   ipcMain.handle('import:plan', async (_e, r: ImportRequest) => planImport(await importOpts(r)).report)
   ipcMain.handle('import:apply', async (_e, r: ImportRequest) => {
     const opts = await importOpts(r)
-    const res = applyImport(planImport(opts))
+    const plan = planImport(opts)
+    const res = applyImport(plan)
+    {
+      const all = readLocations(); const id = opts.bundle.manifest.id
+      const cur = all[id] ?? { assets: {}, variables: {} }
+      all[id] = { ...cur, assets: { ...cur.assets, ...plan.report.assetLocations } }
+      writeLocations(all)
+    }
     // Loaded from a repository: OBS now matches its current state, so later live edits are measured from here.
     if (fs.existsSync(path.join(opts.bundle.source, '.git'))) await markSynced(opts.bundle.source, opts.install)
     return { written: res.written.length, backedUp: res.backedUp.length, backupDir: res.backupDir }
@@ -452,9 +471,11 @@ function registerIpc() {
       const git = gitRunner()
       await initRepo(r.folder, git)
       const inst = findInstall(r.installId)
-      const res = await captureLive({ host, install: inst, dir: r.folder, name: r.name, appVersion: app.getVersion(), versions: detectVersions(inst, host), exclude: r.exclude, git })
+      const seen: { id: string; filename: string; path: string }[] = []
+      const res = await captureLive({ host, install: inst, dir: r.folder, name: r.name, appVersion: app.getVersion(), versions: detectVersions(inst, host), exclude: r.exclude, onAsset: (a) => seen.push(a), git })
       if (res.status === 'error') return { ok: false, error: res.message }
       rememberKeysFrom(inst, r.folder)
+      rememberAssets(r.folder, seen)
       rememberRepo(r.folder, r.installId)
       let published: string | undefined
       if (r.github) {
@@ -554,10 +575,12 @@ function registerIpc() {
   })
   ipcMain.handle('repos:save', async (_e, p: string, installId: string, commitDirtyFirst: boolean, onConflict?: 'abort' | 'keep-repo' | 'keep-obs') => {
     const inst = findInstall(installId)
+    const seen: { id: string; filename: string; path: string }[] = []
     const r = await captureLive({
       host, install: inst, dir: p, onDirty: commitDirtyFirst ? 'commit-first' : 'refuse', onConflict,
-      appVersion: app.getVersion(), versions: detectVersions(inst, host), git: gitRunner(),
+      appVersion: app.getVersion(), versions: detectVersions(inst, host), onAsset: (a) => seen.push(a), git: gitRunner(),
     })
+    rememberAssets(p, seen)
     if (r.status === 'changes') return { status: 'unchanged' }
     if (r.status === 'committed' || r.status === 'unchanged') {
       const keys = rememberKeysFrom(inst, p)
@@ -577,11 +600,29 @@ function registerIpc() {
     return r
   })
   ipcMain.handle('repos:pull', (_e, p: string, onConflict?: 'abort' | 'keep-mine' | 'keep-theirs') => pullRepo(p, gitRunner(), onConflict))
-  ipcMain.handle('repos:push', (_e, p: string) => pushRepo(p, gitRunner()))
+  ipcMain.handle('repos:push', (_e, p: string, force?: boolean) => pushRepo(p, gitRunner(), { force: force === true }))
+  /** How this computer's copy and the online one relate: ask GitHub first, then compare. */
+  ipcMain.handle('repos:compare', async (_e, p: string) => {
+    const git = gitRunner()
+    await fetchRepo(p, git)
+    return onlineComparison(p, git)
+  })
+  ipcMain.handle('repos:useOnline', async (_e, p: string) => {
+    const git = gitRunner()
+    const r = await useOnlineVersion(p, git)
+    return r.ok ? { ok: true, kept: r.kept } : { ok: false, error: r.message }
+  })
   ipcMain.handle('repos:log', (_e, p: string) => repoLog(p, 15, gitRunner()))
   ipcMain.handle('repos:needs', async (_e, p: string) => {
     const m = readBundleDir(p).manifest
-    return assetNeeds(m, readLocations()[m.id]?.assets ?? {})
+    const all = readLocations()
+    const cur = all[m.id] ?? { assets: {}, variables: {} }
+    // files that came with a setup file are already here (in OBS's own folder): do not ask for them
+    const here = locateExtracted(m, allInstalls().map((i) => i.configDir))
+    let changed = false
+    for (const [id, f] of Object.entries(here)) if (!cur.assets[id] || !fs.existsSync(cur.assets[id])) { cur.assets[id] = f; changed = true }
+    if (changed) { all[m.id] = cur; writeLocations(all) }
+    return assetNeeds(m, cur.assets)
   })
   ipcMain.handle('repos:setAsset', (_e, p: string, assetId: string, file: string) => {
     const m = readBundleDir(p).manifest
@@ -593,7 +634,10 @@ function registerIpc() {
   })
   ipcMain.handle('locations:load', (_e, id: string) => readLocations()[id] ?? { assets: {}, variables: {} })
   ipcMain.handle('locations:save', (_e, id: string, l: Locations) => {
-    const all = readLocations(); all[id] = l; writeLocations(all)
+    // merged, never replaced: what import and save learned about where the files are must not be wiped by a screen that knows less
+    const all = readLocations(); const cur = all[id] ?? { assets: {}, variables: {} }
+    all[id] = { assets: { ...cur.assets, ...l.assets }, variables: l.variables }
+    writeLocations(all)
   })
 
   ipcMain.handle('files:pick', async (_e, title: string, folder?: boolean) => {
