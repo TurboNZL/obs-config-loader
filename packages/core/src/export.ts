@@ -11,6 +11,7 @@ import { DEFAULT_PLATFORM_MAP, isPlatformSpecific } from './sources.js'
 import { extractVariants, parseVariants, serializeVariants, variantsPathFor } from './variants.js'
 import { FILE_HINTS, installedModules, manifestPlugins, pluginReport, usedIds } from './plugins.js'
 import { applyVersions, type DetectedVersions } from './versions.js'
+import { addProfileVariants } from './profilevariants.js'
 
 export interface ExportOptions {
   host: Host
@@ -319,6 +320,7 @@ export function exportBundle(opts: ExportOptions): Bundle {
   }
   if (opts.repository) manifest.repository = { url: opts.repository }
   const bundle: Bundle = { manifest, files }
+  addProfileVariants(bundle, host.platform) // this system's own encoders and audio devices, kept apart from other systems'
   deriveManifestFields(bundle)
   applyVersions(manifest, undefined, opts.versions)
   if (opts.includeSecrets && manifest.variables.some((v) => v.kind === 'secret' && v.value)) {

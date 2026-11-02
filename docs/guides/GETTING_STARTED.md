@@ -12,6 +12,12 @@ A **preset** is a saved copy of your OBS setup: your scenes, output settings, pl
 - **Big files.** Before a file is made the app lists the pictures, music and videos your scenes use, with their sizes. Small ones (under 5 MB) go in by themselves; big ones only when you tick them, so you can see what makes the file big. Presets never keep big files, and neither does GitHub: the other computer asks for them.
 - **Back up online** keeps a copy on GitHub that is updated every time you save. Switch it on per preset; you can use the same preset on all your computers.
 
+## Files that know where they live
+When a preset is backed up online and you save it to a file, the file carries the GitHub address (never a password). Open that file on another computer and the app offers **Use the latest version from there**, so you never load something out of date. By default a file you open is also **kept as a preset** on that computer, linked to its online copy, so you can get updates later. A preset that is behind GitHub says so when you open it, with a **Get updates** button.
+
+## Windows, Linux and Mac settings in one setup
+A setup keeps each system's own encoders and audio devices (and capture sources) side by side. Saving from Windows never overwrites what Linux saved, even if the Windows computer never uses it, and each computer loads its own. If an encoder does not exist in the OBS you load into (a hardware encoder the graphics card does not have, say), it is swapped for the standard software one and you are told, so the Settings window never opens with empty boxes.
+
 ## Choosing what a preset saves
 Under **Show details**, **What this preset saves** lets you untick scene layouts, output settings, scripts or OBS's remote-control settings. Anything new you add in OBS is kept unless you leave it out. Stream keys and big files are never in a preset, so they never reach GitHub. (GitHub's own "secrets" feature cannot be used for stream keys: it can only hand a secret to GitHub's own automation, never read it back to your computer.)
 

@@ -96,14 +96,16 @@ function SaveSetup({ installs, start, gh, go, onDone, onCancel }: { installs: In
   const go_ = async () => {
     setBusy(true); setError(null)
     const done: string[] = []
+    let repoUrl: string | undefined // where the preset is kept online: the file then knows how to find the latest version
     try {
       if (asPreset) {
         const r = await window.obsLoader.repos.create({ installId, name: name.trim(), folder, exclude, github: online && gh.connected ? { private: priv } : undefined })
         if (!r.ok) { setError(r.error); setBusy(false); return }
+        repoUrl = r.remoteUrl
         done.push(`Saved the preset “${r.repo.name}”${r.published ? ` and backed it up at ${r.published}` : ''}`)
       }
       if (toFile) {
-        const r = await window.obsLoader.export.run({ installId, name: name.trim(), collections: scenes, profiles: outputs, media: 'small', includeKeys: withKeys, alsoBundle: chosen, exclude })
+        const r = await window.obsLoader.export.run({ installId, name: name.trim(), collections: scenes, profiles: outputs, media: 'small', includeKeys: withKeys, alsoBundle: chosen, exclude, repository: repoUrl })
         if (r && 'error' in r) { setError(r.error); setBusy(false); return }
         if (r) done.push(`Saved the file ${r.path}${r.containsSecrets ? ' (it contains your stream keys: keep it private)' : r.secrets.length ? `. Your stream keys are not in it, so you type them when you load it: ${r.secrets.join(', ')}` : ''}${r.assets.external ? `. ${r.assets.external} big file${r.assets.external === 1 ? ' is' : 's are'} not inside; you point to ${r.assets.external === 1 ? 'it' : 'them'} when loading it` : ''}`)
         else if (!asPreset) { setBusy(false); return } // the save window was closed and nothing else was asked for
@@ -446,6 +448,9 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
   }
   useEffect(() => { void check() }, [installId, st.dirtyFiles.length, st.commits]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void window.obsLoader.repos.needs(repo.path).then(setNeeds).catch(() => setNeeds([])) }, [repo.path, st.behind])
+  // an online preset asks what is new when it is shown, so "newer version online" is true and not last time's guess
+  const [checked, setChecked] = useState(false)
+  useEffect(() => { if (online) void window.obsLoader.repos.check(repo.path).then(async () => { setChecked(true); await refresh() }); else setChecked(true) }, [repo.path, online]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void window.obsLoader.presets.keys(repo.path).then(setKeys) }, [repo.path, st.commits])
 
   const run = async (f: () => Promise<void>) => { setBusy(true); try { await f() } catch (e) { setMsg({ tone: 'bad', text: (e as Error).message }) } setBusy(false); await refresh() }
@@ -513,6 +518,12 @@ function PresetCard({ repo, installs, gh, refresh, apply, go, notify }: { repo: 
     >
       {msg && <Message tone={msg.tone}>{msg.text}</Message>}
 
+      {online && checked && st.behind > 0 && (
+        <Message tone="warn">
+          A newer version of this preset is online ({plural(st.behind, 'change')}). Get it, then load it into OBS.
+          <div className="mt-2"><button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => pull()}>Get updates</button></div>
+        </Message>
+      )}
       {live && live.length > 0 && <Message tone="warn">OBS has changes that are not in this preset yet. Press “Save OBS to this preset” to keep them.</Message>}
       {live && live.length === 0 && installId && <p className="text-sm text-muted">This preset matches your OBS.</p>}
 

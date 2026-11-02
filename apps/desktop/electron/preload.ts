@@ -23,6 +23,8 @@ const api: Api = {
     open: () => call('bundle:open'),
     openFolder: () => call('bundle:openFolder'),
     openPath: (p) => call('bundle:openPath', p),
+    existing: (h) => call('bundle:existing', h),
+    latest: (h) => call('bundle:latest', h),
   },
   import: {
     plan: (r) => call('import:plan', r),
@@ -46,7 +48,8 @@ const api: Api = {
     addExisting: () => call('repos:addExisting'),
     clone: (url, folder) => call('repos:clone', url, folder),
     create: (r) => call('repos:create', r),
-    fromBundle: (h, f) => call('repos:fromBundle', h, f),
+    fromBundle: (h, f, i) => call('repos:fromBundle', h, f, i),
+    check: (p) => call('repos:check', p),
     remove: (p) => call('repos:remove', p),
     setInstall: (p, i) => call('repos:setInstall', p, i),
     setRemote: (p, u) => call('repos:setRemote', p, u),

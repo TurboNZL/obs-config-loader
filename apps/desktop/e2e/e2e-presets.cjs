@@ -33,7 +33,9 @@ fs.writeFileSync(path.join(cfg, 'basic/scenes/Main.json'), JSON.stringify({
 }))
 fs.writeFileSync(path.join(cfg, 'basic/profiles/Main/basic.ini'), '[General]\nName=Main\n')
 fs.writeFileSync(path.join(cfg, 'basic/profiles/Main/service.json'), JSON.stringify({ type: 'rtmp_common', settings: { service: 'Twitch', key: 'live_SECRET' } }))
-fs.writeFileSync(path.join(cfg, 'global.ini'), '[General]\nLastVersion=520093697\n\n[Basic]\nProfile=Main\nProfileDir=Main\nSceneCollection=Main\nSceneCollectionFile=Main\n')
+// OBS 31 and newer: what OBS opens with is in user.ini; global.ini only has app facts
+fs.writeFileSync(path.join(cfg, 'global.ini'), '[General]\nLastVersion=520093697\n')
+fs.writeFileSync(path.join(cfg, 'user.ini'), '[Basic]\nProfile=Main\nProfileDir=Main\nSceneCollection=Main\nSceneCollectionFile=Main\n')
 fs.mkdirSync(path.join(cfg, 'plugin_config/obs-websocket'), { recursive: true })
 fs.writeFileSync(path.join(cfg, 'plugin_config/obs-websocket/config.json'), JSON.stringify({ server_enabled: true, server_port: 4455, auth_required: true, server_password: 'ws-SECRET' }))
 // the PipeWire audio plugin as OBS 33 expects it, and OBS's own record of it (it reports no version)
@@ -87,7 +89,7 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   await show.locator('.bt-row:has-text("Scene layout"):has-text("Gameplay")').waitFor()
   check('preset has the new layout file', fs.existsSync(path.join(defaultRoot, 'Show/collections/gameplay.json')) && !fs.existsSync(path.join(defaultRoot, 'Show/collections/main.json')))
   check('OBS has it too, and the old one is gone', fs.existsSync(path.join(cfg, 'basic/scenes/Gameplay.json')) && !fs.existsSync(path.join(cfg, 'basic/scenes/Main.json')))
-  check('OBS opens the renamed layout next time', fs.readFileSync(path.join(cfg, 'global.ini'), 'utf8').includes('SceneCollection=Gameplay'))
+  check('OBS opens the renamed layout next time', fs.readFileSync(path.join(cfg, 'user.ini'), 'utf8').includes('SceneCollection=Gameplay'))
 
   await rename('Output settings', 'Main', 'High quality')
   await show.locator('.bt-row:has-text("Output settings"):has-text("High quality")').waitFor()
@@ -221,13 +223,15 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
 
   console.log('10. loading a setup made on Windows: plugins that only exist on Linux never stop it, and each swapped source can be chosen')
   const wz = new JSZip()
-  wz.file('manifest.json', JSON.stringify({ format: 'obs-config-bundle', version: 1, id: 'win-1', name: 'From Windows', source: { platform: 'win32' }, collections: [{ id: 'c', name: 'Win scenes', file: 'collections/c.json' }], profiles: [], variables: [], assets: [],
+  wz.file('manifest.json', JSON.stringify({ format: 'obs-config-bundle', version: 1, id: 'win-1', name: 'From Windows', source: { platform: 'win32' }, collections: [{ id: 'c', name: 'Win scenes', file: 'collections/c.json' }], profiles: [{ id: 'stream', name: 'Stream', dir: 'profiles/stream' }], activeProfile: 'stream', variables: [], assets: [],
     plugins: [{ id: 'obs-pipewire-audio-capture', name: 'PipeWire Audio Capture', provides: [{ kind: 'module', id: 'linux-pipewire-audio' }], platforms: ['linux'] }], platformMap: [] }))
   wz.file('collections/c.json', JSON.stringify({ name: 'Win scenes', sources: [
     { id: 'scene', name: 'S', uuid: 'u1', settings: { items: [{ name: 'Game window', source_uuid: 'u2', visible: true, id: 1 }] } },
     { id: 'window_capture', name: 'Game window', uuid: 'u2', settings: { window: 'x:y:Game.exe', capture_audio: true } },
     { id: 'wasapi_input_capture', name: 'Mic', uuid: 'u3', settings: {} },
   ] }))
+  wz.file('profiles/stream/basic.ini', '[General]\nName=Stream\n\n[AdvOut]\nEncoder=h264_texture_amf\nAudioEncoder=ffmpeg_aac\nRecAudioEncoder=CoreAudio_AAC\n')
+  wz.file('profiles/stream/streamEncoder.json', JSON.stringify({ preset: 'amf-specific' }))
   const winFile = path.join(root, 'from-windows.obsbundle'); fs.writeFileSync(winFile, await wz.generateAsync({ type: 'nodebuffer' }))
   await page.click('nav >> text=Presets')
   await app.evaluate(({ dialog }, p) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] }) }, winFile)
@@ -244,11 +248,16 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   await win.selectOption({ label: 'Window Capture (X11)' })
   await page.waitForFunction(() => document.querySelector('main').innerText.includes('Window Capture (X11)'))
   await page.screenshot({ path: OUT + '/p7-import-choices.png', fullPage: true })
+  check('the person is told about the swapped encoders before loading', (await page.locator('main').innerText()).includes('is not available in this OBS, so obs_x264 is used instead'))
   await page.click('button:has-text("Load into OBS")')
   await page.waitForSelector('text=Done.')
   const loaded = JSON.parse(fs.readFileSync(path.join(cfg, 'basic/scenes/Win scenes.json'), 'utf8'))
   check('the chosen stand-in was used', loaded.sources.find((x) => x.name === 'Game window').id === 'xcomposite_input')
   check('the hidden source stays but is hidden where it is used', loaded.sources.find((x) => x.name === 'Mic').id === 'wasapi_input_capture')
+  check('the profile that was selected is the one OBS opens with (written to user.ini, and global.ini keeps its own facts)', /ProfileDir=Stream/.test(fs.readFileSync(path.join(cfg, 'user.ini'), 'utf8')) && /LastVersion=520093697/.test(fs.readFileSync(path.join(cfg, 'global.ini'), 'utf8')))
+  const prof = fs.readFileSync(path.join(cfg, 'basic/profiles/Stream/basic.ini'), 'utf8')
+  check('encoders that do not exist here were swapped, so the Settings boxes are not empty', prof.includes('Encoder=obs_x264') && prof.includes('RecAudioEncoder=ffmpeg_aac') && !prof.includes('texture_amf') && !prof.includes('CoreAudio'))
+  check('and the old encoder\'s settings were dropped', fs.readFileSync(path.join(cfg, 'basic/profiles/Stream/streamEncoder.json'), 'utf8').trim() === '{}')
   check('capture audio still became its own audio source', loaded.sources.some((x) => x.name === 'Game window (audio)' && x.id === 'pipewire_audio_application_capture'))
 
   await app.close()

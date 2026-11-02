@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { BundleSummary, ConflictMode, ImportReport, ImportRequest, InstallInfo } from '../../../electron/api'
+import type { RepoInfo, BundleSummary, ConflictMode, ImportReport, ImportRequest, InstallInfo } from '../../../electron/api'
 import { Card, Chip, Choice, Field, KIND_LABEL, Message, Page, Step, plural } from '../ui'
 
 const FOLDER_NAMES: Record<string, string> = { home: 'your home folder', documents: 'Documents', videos: 'Videos', music: 'Music', pictures: 'Pictures', desktop: 'Desktop' }
@@ -34,6 +34,9 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
   const [preferPipewire, setPreferPipewire] = useState(true)
   const [choices, setChoices] = useState<Record<string, string | null>>({})
   const [remember, setRemember] = useState(true)
+  const [keepPreset, setKeepPreset] = useState(true) // a file is kept as a preset by default, so it can be updated and backed up
+  const [existing, setExisting] = useState<RepoInfo | null>(null)
+  const [behind, setBehind] = useState(0)
   const [report, setReport] = useState<ImportReport | null>(null)
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<{ written: number; backedUp: number; backupDir: string } | null>(null)
@@ -51,6 +54,9 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
     if ('error' in r) { setError(r.error); return }
     setError(null); setDone(null); setReport(null); setNote(null); setChoices({})
     setBundle(r)
+    setExisting(null); setBehind(0)
+    if (!r.repoDir) void window.obsLoader.bundle.existing(r.handle).then(setExisting)
+    else void window.obsLoader.repos.check(r.repoDir).then((c) => setBehind(c.repo.status.behind))
     setScenes(r.manifest.collections.map((c) => c.id))
     setOutputs(r.manifest.profiles.map((c) => c.id))
     // what this computer remembers about the file: where its big media are, folder choices, secrets
@@ -85,6 +91,27 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bundle, installId, scenes, outputs, variables, assetFiles, conflict, activate, preferPipewire, choices])
 
+  const useLatest = async () => {
+    if (!bundle) return
+    setSaving(true); setError(null)
+    const r = await window.obsLoader.bundle.latest(bundle.handle)
+    if (!r.ok) { setSaving(false); setError(r.error); return }
+    const opened = await window.obsLoader.bundle.openPath(r.path)
+    setSaving(false)
+    await load(opened)
+    setNote(r.how === 'downloaded' ? 'Downloaded the latest version.' : r.how === 'updated' ? 'Got the latest changes.' : 'Your preset is already up to date.')
+  }
+  const getUpdates = async () => {
+    if (!bundle?.repoDir) return
+    setSaving(true); setError(null)
+    const r = await window.obsLoader.repos.pull(bundle.repoDir)
+    if (r.status === 'conflict') setError('You and the online copy changed the same part. Open “Presets” to choose which to keep.')
+    else if (r.status === 'dirty') setError('This preset has changes that are not saved yet. Open “Presets” and save them first.')
+    else if (r.status === 'error') setError(r.message)
+    else { const opened = await window.obsLoader.bundle.openPath(bundle.repoDir); await load(opened) }
+    setSaving(false)
+  }
+
   const apply = async () => {
     setBusy(true); setError(null)
     try {
@@ -98,6 +125,12 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
         if (Object.keys(secrets).length) await window.obsLoader.secrets.save(bundle!.manifest.id, secrets)
       }
       setDone(r)
+      // a file is kept as a preset by default (with its online address, so it can get updates later)
+      if (keepPreset && !bundle!.repoDir && !existing) {
+        const folder = await window.obsLoader.repos.suggestFolder(m!.name)
+        const p = await window.obsLoader.repos.fromBundle(bundle!.handle, folder, installId)
+        setNote(p.ok ? `Kept as the preset “${p.repo.name}”${m!.repository?.url ? ', linked to its online copy' : ''}. Find it under “Presets”.` : `Loaded, but it could not be kept as a preset: ${p.error}`)
+      }
       await refresh()
     } catch (e) { setError((e as Error).message) }
     setBusy(false)
@@ -165,14 +198,22 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
                 <Chip>{plural(m.assets.length, 'media file')}</Chip>
                 {m.source?.platform && <Chip>made on {m.source.platform === 'win32' ? 'Windows' : m.source.platform === 'darwin' ? 'a Mac' : 'Linux'}</Chip>}
               </div>
-              {!bundle?.repoDir && (
-                <button className="btn btn-ghost px-2 py-1 text-xs" disabled={saving} onClick={async () => {
-                  setSaving(true); setError(null)
-                  const folder = await window.obsLoader.repos.suggestFolder(m.name)
-                  const r = await window.obsLoader.repos.fromBundle(bundle!.handle, folder)
-                  setSaving(false)
-                  if (r.ok) setNote(`Saved this setup as a preset at ${r.repo.path}. Find it under “Presets”.`); else setError(r.error)
-                }}>Keep this as a preset…</button>
+              {!bundle?.repoDir && m.repository?.url && (
+                <Message tone="good">
+                  This setup is kept online at <span className="mono">{m.repository.url}</span>.{existing ? <> You already have it as the preset “{existing.name}”.</> : ''} The file may be older than what is there.
+                  <div className="mt-2">
+                    <button className="btn btn-accent px-3 py-1" disabled={saving} onClick={useLatest}>{saving ? 'Getting it…' : existing ? 'Get updates and use my preset' : 'Use the latest version from there'}</button>
+                  </div>
+                </Message>
+              )}
+              {!bundle?.repoDir && !m.repository?.url && existing && <Message tone="good">You already have this as the preset “{existing.name}”.</Message>}
+              {bundle?.repoDir && behind > 0 && (
+                <Message tone="warn">
+                  A newer version of this preset is online ({plural(behind, 'change')}). Get it first so you load the latest.
+                  <div className="mt-2">
+                    <button className="btn btn-accent px-3 py-1" disabled={saving} onClick={getUpdates}>{saving ? 'Getting it…' : 'Get updates first'}</button>
+                  </div>
+                </Message>
               )}
             </div>
           )}
@@ -250,6 +291,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
                   <input className="input w-full px-2 py-1.5" value={variables[v.name] ?? ''} onChange={(e) => setVariables({ ...variables, [v.name]: e.target.value })} />
                 </Field>
               ))}
+              {!bundle?.repoDir && !existing && <Choice checked={keepPreset} onChange={setKeepPreset} title="Keep this as a preset on this computer" help={m.repository?.url ? 'Recommended. It stays linked to its online copy, so you can get updates later.' : 'Recommended. You can then load it again, update it and back it up.'} />}
               {secretVars.length > 0 && <Choice checked={remember} onChange={setRemember} title="Remember my stream keys on this computer" help="Kept encrypted by your system's keychain. Nothing is written if your system has none." />}
             </Step>
           )}

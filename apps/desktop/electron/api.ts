@@ -47,6 +47,8 @@ export interface ExportRequest {
   alsoBundle?: string[]
   /** Things left out (names as OBS has them). */
   exclude?: { collections?: string[]; profiles?: string[]; remoteControl?: boolean; scripts?: boolean }
+  /** Where the setup is kept online, to write into the file (no password in it). */
+  repository?: string
 }
 
 export interface FileChoice { id: string; filename: string; size: number; available: boolean; auto: boolean }
@@ -144,6 +146,10 @@ export interface Api {
     open(): Promise<BundleSummary | { error: string } | null>
     openFolder(): Promise<BundleSummary | { error: string } | null>
     openPath(path: string): Promise<BundleSummary | { error: string }>
+    /** The preset this computer already has for an opened file (same setup), if any. */
+    existing(handle: string): Promise<RepoInfo | null>
+    /** Fetch the latest version from the address the file carries (or get updates for the preset we have). */
+    latest(handle: string): Promise<Done<{ path: string; how: 'updated' | 'up-to-date' | 'downloaded' }>>
   }
   import: {
     plan(r: ImportRequest): Promise<ImportReport>
@@ -170,8 +176,10 @@ export interface Api {
     suggestFolder(name: string): Promise<string>
     addExisting(): Promise<Done<{ repo: RepoInfo }>>
     clone(url: string, folder: string): Promise<Done<{ repo: RepoInfo }>>
-    create(r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude'] }): Promise<Done<{ repo: RepoInfo; published?: string }>>
-    fromBundle(handle: string, folder: string): Promise<Done<{ repo: RepoInfo }>>
+    create(r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude'] }): Promise<Done<{ repo: RepoInfo; published?: string; remoteUrl?: string }>>
+    /** Ask the online copy what is new (so counts are true), then the preset's current state. */
+    check(path: string): Promise<{ ok: boolean; message?: string; repo: RepoInfo }>
+    fromBundle(handle: string, folder: string, installId?: string): Promise<Done<{ repo: RepoInfo }>>
     remove(path: string): Promise<void>
     setInstall(path: string, installId: string): Promise<void>
     setRemote(path: string, url: string): Promise<Done<object>>

@@ -7,6 +7,7 @@ import { BUILTIN_TOKENS, pathModule, resolveJson, resolveString, type BuiltinTok
 import { getIni, mapIniValues, setIni } from './ini.js'
 import { activeTargets, withActive } from './userconfig.js'
 import { availableEncoders, fixEncoders, type EncoderFix } from './encoders.js'
+import { PROFILE_VARIANTS_FILE, applyPlatformPart, parseProfileVariants } from './profilevariants.js'
 import { DEFAULT_PLATFORM_MAP, standInOptions, sourceName, PIPEWIRE_AUDIO_MODULE, PIPEWIRE_SCREEN, PIPEWIRE_UNIFIED_SINCE, availableOn, isPipewireAudioId, isPlatformSpecific, legacyPipewireId } from './sources.js'
 import { applyVariants, parseVariants, variantsPathFor } from './variants.js'
 import { KNOWN_PLUGINS, checkPlugins, installedModules, type PluginFinding } from './plugins.js'
@@ -385,6 +386,8 @@ export function planImport(o: ImportOptions): ImportPlan {
     const prefix = pr.dir.replace(/\/$/, '') + '/'
     const entries = [...bundle.files.entries()].filter(([k]) => k.startsWith(prefix))
     let encoderFixes: EncoderFix[] = []
+    // this system's own copy of the encoder and audio device settings, when the setup has one
+    const mine = parseProfileVariants(bundle.files.get(`${prefix}${PROFILE_VARIANTS_FILE}`))[target]
     let name = pr.name
     let dirName = sanitizeFileName(name)
     let action: WriteAction = fs.existsSync(p.join(profRoot, dirName)) ? 'replace' : 'create'
@@ -400,13 +403,15 @@ export function planImport(o: ImportOptions): ImportPlan {
     if (action === 'skip') continue
     for (const [key, data] of entries) {
       const fname = key.slice(prefix.length)
-      let out: Buffer = data
+      if (fname === PROFILE_VARIANTS_FILE) continue // the setup's own bookkeeping, not an OBS file
+      const src: Buffer = mine?.files?.[fname] !== undefined ? Buffer.from(mine.files[fname]) : data
+      let out: Buffer = src
       const dest = p.join(profRoot, dirName, fname)
       if (fname.endsWith('.json') && encoderFixes.some((f) => f.resets === fname)) {
         out = Buffer.from('{}\n') // settings of an encoder that is no longer used
       } else if (fname.endsWith('.json')) {
         try {
-          const json = resolveJson(JSON.parse(data.toString('utf8')), resolver, target)
+          const json = resolveJson(JSON.parse(src.toString('utf8')), resolver, target)
           // A secret you did not type in must not wipe the one OBS already has: keep what is in the file being replaced.
           let existing: unknown
           try { existing = JSON.parse(fs.readFileSync(dest, 'utf8')) } catch { /* nothing there yet */ }
@@ -419,7 +424,7 @@ export function planImport(o: ImportOptions): ImportPlan {
           out = Buffer.from(JSON.stringify(json, null, 4) + '\n')
         } catch { /* keep raw */ }
       } else if (fname === 'basic.ini') {
-        let t = mapIniValues(data.toString('utf8'), (_s, _k, v) => resolveString(v, resolver, target))
+        let t = mapIniValues(applyPlatformPart(src.toString('utf8'), mine), (_s, _k, v) => resolveString(v, resolver, target))
         t = setIni(t, 'General', 'Name', name)
         // an encoder this OBS does not have leaves the Settings window with empty boxes and no OK: swap it for one every OBS has
         const fixed = fixEncoders(t, { available: encodersHere, target })
