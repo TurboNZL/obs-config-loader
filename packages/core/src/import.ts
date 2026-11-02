@@ -9,6 +9,8 @@ import { DEFAULT_PLATFORM_MAP, availableOn, isPlatformSpecific } from './sources
 import { applyVariants, parseVariants, variantsPathFor } from './variants.js'
 import { checkPlugins, installedModules, type PluginFinding } from './plugins.js'
 import { unversioned } from './plugins.js'
+import { assetBundlePath, WEBSOCKET_FILE } from './export.js'
+import { versionNotes, type DetectedVersions } from './versions.js'
 
 export type ConflictMode = 'replace' | 'keep-both' | 'skip'
 
@@ -34,6 +36,10 @@ export interface ImportOptions {
   obsRunning?: boolean
   folders?: Partial<Record<BuiltinToken, string>>
   now?: Date
+  /** What this computer's OBS and plugins are (see `detectVersions`); used to warn when they are older than the setup's. */
+  installed?: DetectedVersions
+  /** Also put back OBS's remote-control (WebSocket) settings, when the setup has them. Default true. */
+  websocket?: boolean
 }
 
 export type WriteAction = 'create' | 'replace' | 'keep-both' | 'skip'
@@ -45,7 +51,7 @@ export interface PlannedWrite {
   action: WriteAction
   /** Existing file to copy to the backup folder first. */
   backupOf?: string
-  kind: 'collection' | 'profile-file' | 'media' | 'global'
+  kind: 'collection' | 'profile-file' | 'media' | 'global' | 'websocket'
 }
 
 export interface Substitution {
@@ -196,7 +202,7 @@ export function planImport(o: ImportOptions): ImportPlan {
   const assetPath = new Map<string, string>()
   for (const a of m.assets) {
     if (a.mode === 'bundled') {
-      const rel = `media/${a.id}/${a.filename}`
+      const rel = assetBundlePath(a)
       const data = bundle.files.get(rel)
       if (!data) { missingAssets.push({ id: a.id, filename: a.filename, hint: 'Listed as bundled but not in the bundle.' }); continue }
       const dest = p.join(mediaDir, a.id, a.filename)
@@ -347,6 +353,28 @@ export function planImport(o: ImportOptions): ImportPlan {
     const [kind, name] = k.split(/:(.*)/s)
     if (kind === 'builtin') warnings.push(`Unknown folder token {{${name}}}.`)
   }
+  // OBS's remote-control (WebSocket) settings: the same rules as a profile's JSON (typed beats the file; nothing typed keeps what is there)
+  const wsData = bundle.files.get(WEBSOCKET_FILE)
+  if (wsData && o.websocket !== false) {
+    const dest = p.join(cfg, 'plugin_config', 'obs-websocket', 'config.json')
+    try {
+      const json = resolveJson(JSON.parse(wsData.toString('utf8')), resolver, target)
+      let existing: unknown
+      try { existing = JSON.parse(fs.readFileSync(dest, 'utf8')) } catch { /* none yet */ }
+      for (const v of m.variables) {
+        if (v.kind !== 'secret' || answers[v.name] !== undefined || !v.target?.startsWith(`${WEBSOCKET_FILE}#`)) continue
+        const at = v.target.slice(WEBSOCKET_FILE.length + 1).split('.')
+        const old = getAt(existing, at)
+        if (typeof old === 'string' && old !== '' && setAt(json, at, old)) keptSecrets.add(v.name)
+      }
+      planFile(dest, Buffer.from(JSON.stringify(json, null, 4) + '\n'), 'websocket', fs.existsSync(dest) ? 'replace' : 'create')
+    } catch { warnings.push('The remote-control settings in this setup could not be read, so they were left as they are.') }
+  }
+  const scripts = m.assets.filter((a) => a.role === 'script')
+  if (scripts.length) {
+    warnings.push(`This setup runs ${scripts.length === 1 ? 'a script' : scripts.length + ' scripts'} (${scripts.map((s) => s.filename).join(', ')}). The scripts are put back, but OBS needs Python (or Lua) set up under Tools, then Scripts, for them to run.`)
+  }
+  warnings.push(...versionNotes(m, o.installed))
   const plugins = checkPlugins(m.plugins, installedModules(host, install))
   if (m.source?.platform && m.source.platform !== target) {
     warnings.push(`Made on ${m.source.platform}, importing on ${target}: capture sources and device choices need checking (see substitutions).`)

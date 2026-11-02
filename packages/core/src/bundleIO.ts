@@ -126,11 +126,11 @@ export function writeBundleDir(b: Bundle, dir: string, opts: { withMedia: boolea
   // so a later pull asks for the file instead of failing to find it.
   const manifest: Manifest = opts.withMedia ? b.manifest : {
     ...b.manifest,
-    assets: b.manifest.assets.map((a) => (a.mode === 'bundled' ? { ...a, mode: 'external' as const } : a)),
+    assets: b.manifest.assets.map((a) => (a.mode === 'bundled' && a.role !== 'script' ? { ...a, mode: 'external' as const } : a)),
   }
   fs.writeFileSync(nodePath.join(dir, MANIFEST), serializeManifest(manifest))
   // Clear previously exported content so removed collections/profiles do not linger.
-  for (const sub of ['collections', 'profiles']) fs.rmSync(nodePath.join(dir, sub), { recursive: true, force: true })
+  for (const sub of ['collections', 'profiles', 'scripts', 'global']) fs.rmSync(nodePath.join(dir, sub), { recursive: true, force: true })
   for (const [name, data] of b.files) {
     if (name.startsWith('media/') && !opts.withMedia) continue
     const target = nodePath.join(dir, safeName(name))

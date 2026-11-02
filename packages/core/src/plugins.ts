@@ -1,6 +1,7 @@
 import type { Host, ObsInstall } from './detect.js'
 import type { PluginRef } from './types.js'
 import { CROSS_PLATFORM_BUILTIN_SOURCES, SOURCE_PLATFORMS } from './sources.js'
+import { readPluginManager } from './versions.js'
 
 /** Source/filter/transition ids OBS Studio ships (from its own source tree, 2026-10-29). */
 const BUILTIN_OTHER = [
@@ -38,11 +39,12 @@ export const KNOWN_PLUGINS: PluginRef[] = [
       { kind: 'source', id: 'pipewire_audio_application_capture' },
       { kind: 'source', id: 'pipewire_audio_input_capture' },
       { kind: 'source', id: 'pipewire_audio_output_capture' },
+      { kind: 'module', id: 'linux-pipewire-audio' },
     ],
     homepage: 'https://github.com/dimtpap/obs-pipewire-audio-capture',
     install: {
-      'linux-flatpak': 'flatpak install flathub com.obsproject.Studio.Plugin.PipeWireAudioCapture',
-      'linux-native': 'Download the release archive and extract it into ~/.config/obs-studio/plugins/ (see the project page).',
+      'linux-flatpak': 'flatpak install flathub com.obsproject.Studio.Plugin.PipeWireAudioCapture (if no devices show up afterwards: flatpak override --user --filesystem=xdg-run/pipewire-0 com.obsproject.Studio)',
+      'linux-native': 'OBS 33 and newer: extract the release archive into ~/.local/share/obs-studio/plugins/ (so you get linux-pipewire-audio/linux-pipewire-audio.so). OBS 28 to 32: extract it into the plugins folder inside File, Show Settings Folder (linux-pipewire-audio/bin/64bit/linux-pipewire-audio.so). Then restart OBS.',
     },
   },
   {
@@ -91,7 +93,7 @@ export function installedModules(host: Host, install: ObsInstall): Set<string> {
   const found = new Set<string>()
   const norm = (n: string) => n.replace(/\.(so|dll|dylib)$/i, '').replace(/^lib/, '')
   const walk = (dir: string, depth: number) => {
-    if (depth > 5) return
+    if (depth > 8) return // Flatpak extensions sit deep: <ext>/<arch>/<branch>/<commit>/files/lib/obs-plugins
     for (const name of host.listDir(dir)) {
       const full = `${dir}/${name}`
       if (/\.(so|dll|dylib)$/i.test(name)) found.add(norm(name).toLowerCase())
@@ -102,6 +104,7 @@ export function installedModules(host: Host, install: ObsInstall): Set<string> {
     }
   }
   for (const d of install.pluginDirs) walk(d, 0)
+  for (const e of readPluginManager(install)) found.add(e.module_name.toLowerCase().replace(/^lib/, ''))
   return found
 }
 

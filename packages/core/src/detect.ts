@@ -89,10 +89,12 @@ export function detectInstalls(host: Host = realHost()): ObsInstall[] {
     const xdg = host.env.XDG_CONFIG_HOME || p.join(host.home, '.config')
     const nativeBin = ['/usr/bin/obs', '/usr/local/bin/obs'].find((b) => host.exists(b))
     const nativeCfg = p.join(xdg, 'obs-studio')
+    const xdgData = host.env.XDG_DATA_HOME || p.join(host.home, '.local', 'share')
     if (nativeBin) {
       out.push(mk(host, {
         kind: 'linux-native', label: 'OBS Studio (system package)', configDir: nativeCfg,
-        pluginDirs: [p.join(nativeCfg, 'plugins'), '/usr/lib/obs-plugins', '/usr/lib/x86_64-linux-gnu/obs-plugins'],
+        // OBS 33 and newer look for user plugins in the data folder; 28 to 32 in the settings folder. Both are listed.
+        pluginDirs: [p.join(nativeCfg, 'plugins'), p.join(xdgData, 'obs-studio', 'plugins'), '/usr/lib/obs-plugins', '/usr/lib/x86_64-linux-gnu/obs-plugins'],
         launch: { command: nativeBin, args: [] },
       }))
     }
@@ -108,6 +110,7 @@ export function detectInstalls(host: Host = realHost()): ObsInstall[] {
         // Flatpak plugins are either dropped into the config dir or installed as Flatpak extensions.
         pluginDirs: [
           p.join(flatpakCfg, 'plugins'),
+          p.join(host.home, '.var', 'app', FLATPAK_ID, 'data', 'obs-studio', 'plugins'),
           ...extensionDirs(host, flatpakApp ? p.dirname(flatpakApp) : undefined),
         ],
         launch: { command: 'flatpak', args: ['run', FLATPAK_ID] },
@@ -118,7 +121,7 @@ export function detectInstalls(host: Host = realHost()): ObsInstall[] {
     if (host.exists(p.join(host.home, 'snap', 'obs-studio'))) {
       out.push(mk(host, {
         kind: 'snap', label: 'OBS Studio (Snap)', configDir: snapCfg,
-        pluginDirs: [p.join(snapCfg, 'plugins')],
+        pluginDirs: [p.join(snapCfg, 'plugins'), p.join(host.home, 'snap', 'obs-studio', 'current', '.local', 'share', 'obs-studio', 'plugins')],
         launch: { command: 'snap', args: ['run', 'obs-studio'] },
       }))
     }
@@ -128,10 +131,13 @@ export function detectInstalls(host: Host = realHost()): ObsInstall[] {
 
 /** Flatpak plugin extensions are separate refs named com.obsproject.Studio.Plugin.*. */
 function extensionDirs(host: Host, appRoot: string | undefined): string[] {
+  // An extension is a "runtime"-type ref, so it lives under runtime/, not app/ (both are looked in).
   const roots = [
     appRoot,
-    '/var/lib/flatpak/app',
+    appRoot && appRoot.replace(/\/app$/, '/runtime'),
+    '/var/lib/flatpak/app', '/var/lib/flatpak/runtime',
     pathModule('linux').join(host.home, '.local/share/flatpak/app'),
+    pathModule('linux').join(host.home, '.local/share/flatpak/runtime'),
   ].filter((x): x is string => !!x)
   const dirs: string[] = []
   for (const root of new Set(roots)) {

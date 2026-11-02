@@ -54,7 +54,7 @@ export class SecretScrubber {
             if (!this.variables.some((vv) => vv.name === name)) {
               const plugin = FILE_LABEL[base]
               const what = own[own.length - 1]
-              const label = isPrimary
+              const label = base === 'obs-websocket.json' ? 'Password for controlling OBS from other programs (WebSocket)' : isPrimary
                 ? (typeof service === 'string' && service ? `Stream key for ${service}` : 'Your main stream key')
                 : plugin ? `${plugin}: ${what ? `“${what}”` : 'an output'}` : `Secret in ${base}${what ? ` (${what})` : ''}`
               this.variables.push({
