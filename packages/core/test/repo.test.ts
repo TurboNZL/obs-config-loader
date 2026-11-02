@@ -50,6 +50,39 @@ describe('captureLive', () => {
     expect((await repoLog(dir)).length).toBe(2)
   })
 
+  it('follows a renamed scene collection and profile instead of wiping the repo', async () => {
+    const { cfg, dir, h, inst } = setup()
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'Mine' })
+    expect(fs.existsSync(nodePath.join(dir, 'collections/main.json'))).toBe(true)
+
+    // rename both in OBS: the files and the Name inside them change
+    const scenes = nodePath.join(cfg, 'basic/scenes'), profs = nodePath.join(cfg, 'basic/profiles')
+    const j = JSON.parse(fs.readFileSync(nodePath.join(scenes, 'Main.json'), 'utf8')); j.name = 'Show'
+    fs.writeFileSync(nodePath.join(scenes, 'Show.json'), JSON.stringify(j)); fs.rmSync(nodePath.join(scenes, 'Main.json'))
+    fs.renameSync(nodePath.join(profs, 'Main'), nodePath.join(profs, 'Live'))
+    const ini = nodePath.join(profs, 'Live/basic.ini')
+    fs.writeFileSync(ini, fs.readFileSync(ini, 'utf8').replace('Name=Main', 'Name=Live'))
+
+    const r = await captureLive({ host: h, install: inst, dir })
+    expect(r.status).toBe('committed')
+    const m = readBundleDir(dir).manifest
+    expect(m.collections.map((c) => c.name)).toEqual(['Show'])
+    expect(m.profiles.map((p) => p.name)).toEqual(['Live'])
+    expect(fs.existsSync(nodePath.join(dir, 'collections/show.json'))).toBe(true)
+    expect(fs.existsSync(nodePath.join(dir, 'profiles/live/basic.ini'))).toBe(true)
+  })
+
+  it('refuses to save an empty OBS over a repo that has content', async () => {
+    const { cfg, dir, h, inst } = setup()
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'Mine' })
+    fs.rmSync(nodePath.join(cfg, 'basic/scenes'), { recursive: true })
+    const r = await captureLive({ host: h, install: inst, dir })
+    expect(r.status).toBe('error')
+    expect(fs.existsSync(nodePath.join(dir, 'collections/main.json'))).toBe(true)
+  })
+
   it('keeps the repo identity and name, and never puts secrets or media in git', async () => {
     const { dir, h, inst } = setup()
     await initRepo(dir)

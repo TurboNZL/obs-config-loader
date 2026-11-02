@@ -273,11 +273,17 @@ function writeLiveInto(o: CaptureOptions, target: string): void {
   const bundle = exportBundle({
     host: o.host, install: o.install, name: pm?.name ?? o.name ?? 'OBS setup', id: pm?.id,
     description: typeof pm?.description === 'string' ? pm.description : undefined,
-    collections: pm?.collections.map((c) => c.name), profiles: pm?.profiles.map((p) => p.name),
+    // No name filter: OBS is the source of truth for which scenes/profiles exist. (Filtering by the names saved
+    // earlier made a renamed collection or profile vanish, and the folder was then wiped.)
     bundleBelowBytes: o.bundleBelowBytes, appVersion: o.appVersion,
     // the repo's history is its revision list: keep these two still so they never cause a merge conflict
     revision: pm?.revision, now: pm?.exportedAt ? new Date(pm.exportedAt) : undefined,
   })
+  // Never turn a working repo into an empty one because of a name mismatch or an odd OBS state.
+  if (prev && (prev.manifest.collections.length && !bundle.manifest.collections.length
+    || prev.manifest.profiles.length && !bundle.manifest.profiles.length)) {
+    throw new Error('OBS shows no scene layouts or no output settings to save, so nothing was changed. Open OBS once and try again.')
+  }
   if (prev) {
     for (const c of bundle.manifest.collections) {
       const old = prev.manifest.collections.find((x) => x.id === c.id)
