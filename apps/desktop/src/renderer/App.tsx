@@ -4,16 +4,17 @@ import { HomePage } from './pages/Home'
 import { InstallsPage } from './pages/Installs'
 import { ImportPage } from './pages/Import'
 import { ExportPage } from './pages/Export'
-import { ReposPage } from './pages/Repos'
+import { PresetsPage } from './pages/Presets'
+import { SettingsPage } from './pages/Settings'
 import { AppearancePage } from './pages/Appearance'
 import { AboutPage } from './pages/About'
 import { GuidesPage } from './pages/Guides'
 import { WindowFrame } from './components/WindowFrame'
 
-type Tab = 'home' | 'installs' | 'import' | 'export' | 'repos' | 'guides' | 'appearance' | 'about'
+type Tab = 'home' | 'presets' | 'installs' | 'import' | 'export' | 'settings' | 'guides' | 'appearance' | 'about'
 const TABS: [Tab, string][] = [
-  ['home', 'Home'], ['export', 'Save my setup'], ['import', 'Load a setup'], ['repos', 'Online backup'],
-  ['installs', 'OBS on this computer'], ['guides', 'Help'], ['appearance', 'Look'], ['about', 'About'],
+  ['home', 'Home'], ['presets', 'Presets'], ['installs', 'OBS on this computer'], ['settings', 'Settings'],
+  ['guides', 'Help'], ['appearance', 'Look'], ['about', 'About'],
 ]
 
 export function App() {
@@ -45,7 +46,8 @@ export function App() {
         {tab === 'installs' && <InstallsPage installs={installs} refresh={refresh} go={go} />}
         {tab === 'import' && <ImportPage installs={installs} preselect={preselect} openPath={openPath} refresh={refresh} />}
         {tab === 'export' && <ExportPage installs={installs} preselect={preselect} />}
-        {tab === 'repos' && <ReposPage installs={installs} applyRepo={applyRepo} />}
+        {tab === 'presets' && <PresetsPage installs={installs} applyRepo={applyRepo} go={(t) => go(t)} />}
+        {tab === 'settings' && <SettingsPage />}
         {tab === 'appearance' && <AppearancePage />}
         {tab === 'guides' && <GuidesPage />}
         {tab === 'about' && <AboutPage />}

@@ -18,7 +18,7 @@ export interface Variable {
 }
 
 export type AssetMode = 'bundled' | 'external'
-export type AssetRole = 'image' | 'video' | 'audio' | 'font' | 'other'
+export type AssetRole = 'image' | 'video' | 'audio' | 'font' | 'script' | 'other'
 
 export interface Asset {
   id: string
@@ -40,6 +40,8 @@ export interface PluginRef {
   name: string
   provides: PluginProvides[]
   required?: boolean
+  /** Newest version any computer saved this setup with (when it could be told). */
+  version?: string
   homepage?: string
   install?: Partial<Record<'linux-flatpak' | 'linux-native' | 'windows' | 'macos', string>>
 }
@@ -64,6 +66,8 @@ export interface Manifest {
   generator?: { name: string; version: string }
   source?: { platform?: Platform; obsVersion?: string }
   obsMinVersion?: string
+  /** Newest OBS version any computer saved this setup with. Only ever goes up. */
+  savedWithObs?: string
   /** True when this file carries stream keys / secrets inside (`variables[].value`). Such a file must be treated like a password. */
   containsSecrets?: boolean
   /** Plain-words warning shown wherever the file is opened; set together with `containsSecrets`. */

@@ -69,7 +69,7 @@ export function buildInstance(base: ObsInstall, host: Host, name: string, paths:
   }
   return {
     id: `instance:${paths.configDir}`, kind: 'instance', label: `${name} (separate OBS)`, platform: host.platform,
-    configDir: paths.configDir, pluginDirs: [paths.pluginsDir], configExists: host.exists(paths.configDir), custom: true, launch,
+    configDir: paths.configDir, pluginDirs: [paths.pluginsDir, nodePath.posix.join(paths.dataHome, 'obs-studio', 'plugins')], configExists: host.exists(paths.configDir), custom: true, launch,
     instance: { name, of: base.id, baseKind: base.kind, configHome: paths.configHome, dataHome: paths.dataHome },
   }
 }

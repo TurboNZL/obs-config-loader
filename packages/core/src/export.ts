@@ -9,6 +9,7 @@ import { SecretScrubber } from './secrets.js'
 import { DEFAULT_PLATFORM_MAP, isPlatformSpecific } from './sources.js'
 import { extractVariants, parseVariants, serializeVariants, variantsPathFor } from './variants.js'
 import { FILE_HINTS, installedModules, manifestPlugins, pluginReport, usedIds } from './plugins.js'
+import { applyVersions, type DetectedVersions } from './versions.js'
 
 export interface ExportOptions {
   host: Host
@@ -30,7 +31,16 @@ export interface ExportOptions {
   revision?: number
   appVersion?: string
   now?: Date
+  /** The OBS and plugin versions of the computer saving (see `detectVersions`). */
+  versions?: DetectedVersions
 }
+
+/** Where an asset's file lives inside a bundle. Scripts are small text files that belong with the setup, so they are kept in git too. */
+export function assetBundlePath(a: Pick<Asset, 'id' | 'filename' | 'role'>): string {
+  return `${a.role === 'script' ? 'scripts' : 'media'}/${a.id}/${a.filename}`
+}
+export const WEBSOCKET_FILE = 'global/obs-websocket.json'
+const MAX_SCRIPT_BYTES = 1024 * 1024
 
 const HOME_FOLDERS: [RegExp, string][] = [
   [/^Documents$/i, 'documents'], [/^Videos$/i, 'videos'], [/^Movies$/i, 'videos'], [/^Music$/i, 'music'],
@@ -43,7 +53,7 @@ function sha256(buf: Buffer): string {
   return crypto.createHash('sha256').update(buf).digest('hex')
 }
 
-function slug(s: string): string {
+export function slug(s: string): string {
   return s.toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'file'
 }
 
@@ -53,6 +63,7 @@ function roleOf(file: string): AssetRole {
   if (['.mp4', '.mov', '.mkv', '.webm', '.avi', '.flv'].includes(e)) return 'video'
   if (['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.opus'].includes(e)) return 'audio'
   if (['.ttf', '.otf', '.woff', '.woff2'].includes(e)) return 'font'
+  if (['.py', '.lua'].includes(e)) return 'script'
   return 'other'
 }
 
@@ -112,9 +123,10 @@ class Collector {
         asset.size = st.size
         const data = fs.readFileSync(value)
         asset.sha256 = sha256(data)
-        if (st.size <= this.bundleBelow) {
+        const isScript = asset.role === 'script' && st.size <= MAX_SCRIPT_BYTES
+        if (isScript || st.size <= this.bundleBelow) {
           asset.mode = 'bundled'
-          this.files.set(`media/${id}/${base}`, data)
+          this.files.set(assetBundlePath(asset), data)
         } else asset.hint = `${base} (${(st.size / 1048576).toFixed(0)} MB) is too large to bundle; locate it on import.`
       } else asset.hint = `${base} was not found on the exporting machine; locate it on import.`
       this.assets.push(asset)
@@ -181,6 +193,25 @@ export function deriveManifestFields(b: Bundle): void {
   b.manifest.platformMap = DEFAULT_PLATFORM_MAP.filter((e) => used.sources.has(e.from) && isPlatformSpecific(e.from))
 }
 
+/**
+ * Put secret values (by variable name) into a bundle, for a file the person chose to include their keys in.
+ * Marks the bundle the way `exportBundle` does. Returns how many keys went in; names the setup does not ask for are ignored.
+ */
+export function attachSecrets(b: Bundle, values: Record<string, string>): number {
+  let n = 0
+  b.manifest.variables = b.manifest.variables.map((v) => {
+    if (v.kind !== 'secret' || !values[v.name]) return v
+    n++
+    return { ...v, value: values[v.name] }
+  })
+  if (n) {
+    b.manifest.containsSecrets = true
+    b.manifest.warning = SECRETS_WARNING
+    b.files.set(SECRETS_README_NAME, Buffer.from(SECRETS_README))
+  }
+  return n
+}
+
 export function exportBundle(opts: ExportOptions): Bundle {
   const { host, install } = opts
   const cfg = install.configDir
@@ -244,6 +275,10 @@ export function exportBundle(opts: ExportOptions): Bundle {
     profiles.push({ id, name: display, dir: base })
   }
 
+  // OBS's remote-control (WebSocket) settings: other programs (stream decks, overlays, scripts) depend on them
+  const wsJson = readJson(nodePath.join(cfg, 'plugin_config', 'obs-websocket', 'config.json'))
+  if (wsJson && typeof wsJson === 'object') files.set(WEBSOCKET_FILE, Buffer.from(JSON.stringify(scrub.scrubJson(wsJson, WEBSOCKET_FILE), null, 4) + '\n'))
+
   const active = activeFromGlobal(cfg)
   const activeCol = collections.find((c) => c.file === `collections/${slug(active.collection ?? '')}.json`) ?? collections[0]
   const activeProf = profiles.find((p) => p.dir.endsWith('/' + slug(active.profile ?? ''))) ?? profiles[0]
@@ -269,6 +304,7 @@ export function exportBundle(opts: ExportOptions): Bundle {
   }
   const bundle: Bundle = { manifest, files }
   deriveManifestFields(bundle)
+  applyVersions(manifest, undefined, opts.versions)
   if (opts.includeSecrets && manifest.variables.some((v) => v.kind === 'secret' && v.value)) {
     manifest.containsSecrets = true
     manifest.warning = SECRETS_WARNING

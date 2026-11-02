@@ -59,7 +59,7 @@ describe('starting an instance', () => {
   it('native: the same program, --multi, and its own config and data homes in the environment', () => {
     const p = instancePaths(native, linuxBoth, 'Light'); if (!p.ok) throw new Error()
     const i = buildInstance(native, linuxBoth, 'Light', p.paths)
-    expect(i).toMatchObject({ kind: 'instance', custom: true, configDir: p.paths.configDir, pluginDirs: [p.paths.pluginsDir], instance: { name: 'Light', of: native.id, baseKind: 'linux-native' } })
+    expect(i).toMatchObject({ kind: 'instance', custom: true, configDir: p.paths.configDir, pluginDirs: [p.paths.pluginsDir, `${p.paths.dataHome}/obs-studio/plugins`], instance: { name: 'Light', of: native.id, baseKind: 'linux-native' } })
     expect(i.launch).toEqual({ command: '/usr/bin/obs', args: ['--multi'], env: { XDG_CONFIG_HOME: p.paths.configHome, XDG_DATA_HOME: p.paths.dataHome } })
     expect(describeLaunch(i)).toBe('XDG_CONFIG_HOME="/home/u/.local/share/obs-config-loader/instances/light/config" XDG_DATA_HOME="/home/u/.local/share/obs-config-loader/instances/light/data" /usr/bin/obs --multi')
   })

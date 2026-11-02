@@ -9,6 +9,7 @@ import { exportBundle, deriveManifestFields } from './export.js'
 import { readBundleDir, serializeManifest, writeBundleDir, BundleError } from './bundleIO.js'
 import { availableOn, isPlatformSpecific, DEFAULT_PLATFORM_MAP } from './sources.js'
 import { unversioned } from './plugins.js'
+import { applyVersions, type DetectedVersions } from './versions.js'
 import { extractVariants, parseVariants, serializeVariants, variantsPathFor } from './variants.js'
 
 // ── git runner ───────────────────────────────────────────────────────────────
@@ -225,6 +226,8 @@ export interface CaptureOptions {
   dryRun?: boolean
   bundleBelowBytes?: number
   appVersion?: string
+  /** This computer's OBS and plugin versions, recorded in the setup (the newest ever saved is kept). */
+  versions?: DetectedVersions
   /** When the repo and OBS changed the same lines: stop (default), or settle just those lines in favour of one side. */
   onConflict?: 'abort' | 'keep-repo' | 'keep-obs'
   git?: GitRunner
@@ -273,11 +276,17 @@ function writeLiveInto(o: CaptureOptions, target: string): void {
   const bundle = exportBundle({
     host: o.host, install: o.install, name: pm?.name ?? o.name ?? 'OBS setup', id: pm?.id,
     description: typeof pm?.description === 'string' ? pm.description : undefined,
-    collections: pm?.collections.map((c) => c.name), profiles: pm?.profiles.map((p) => p.name),
-    bundleBelowBytes: o.bundleBelowBytes, appVersion: o.appVersion,
+    // No name filter: OBS is the source of truth for which scenes/profiles exist. (Filtering by the names saved
+    // earlier made a renamed collection or profile vanish, and the folder was then wiped.)
+    bundleBelowBytes: o.bundleBelowBytes, appVersion: o.appVersion, versions: o.versions,
     // the repo's history is its revision list: keep these two still so they never cause a merge conflict
     revision: pm?.revision, now: pm?.exportedAt ? new Date(pm.exportedAt) : undefined,
   })
+  // Never turn a working repo into an empty one because of a name mismatch or an odd OBS state.
+  if (prev && (prev.manifest.collections.length && !bundle.manifest.collections.length
+    || prev.manifest.profiles.length && !bundle.manifest.profiles.length)) {
+    throw new Error('OBS shows no scene layouts or no output settings to save, so nothing was changed. Open OBS once and try again.')
+  }
   if (prev) {
     for (const c of bundle.manifest.collections) {
       const old = prev.manifest.collections.find((x) => x.id === c.id)
@@ -312,9 +321,10 @@ function writeLiveInto(o: CaptureOptions, target: string): void {
     delete (bundle.manifest as Partial<Manifest>).revision
   }
   deriveManifestFields(bundle) // from the final files (canonical + every platform's variants), not from this machine alone
+  applyVersions(bundle.manifest, prev?.manifest, o.versions)
 
   // A repo never holds the media themselves, so every asset is a placeholder there (writeBundleDir records it so).
-  bundle.manifest.assets = bundle.manifest.assets.map((a) => (a.mode === 'bundled' ? { ...a, mode: 'external' as const } : a))
+  bundle.manifest.assets = bundle.manifest.assets.map((a) => (a.mode === 'bundled' && a.role !== 'script' ? { ...a, mode: 'external' as const } : a))
   writeBundleDir(bundle, target, { withMedia: false })
 }
 

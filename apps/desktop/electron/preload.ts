@@ -60,6 +60,18 @@ const api: Api = {
     setAsset: (p, a, f) => call('repos:setAsset', p, a, f),
     openFolder: (p) => call('repos:openFolder', p),
   },
+  settings: {
+    get: () => call('settings:get'),
+    setPresetsRoot: (p) => call('settings:setPresetsRoot', p),
+    setRememberKeys: (on) => call('settings:setRememberKeys', on),
+  },
+  presets: {
+    details: (p) => call('presets:details', p),
+    keys: (p) => call('presets:keys', p),
+    exportFile: (p, k) => call('presets:exportFile', p, k),
+    rename: (r) => call('presets:rename', r),
+    setOnline: (p, on, n, priv) => call('presets:setOnline', p, on, n, priv),
+  },
   locations: {
     load: (id) => call('locations:load', id),
     save: (id, l) => call('locations:save', id, l),
