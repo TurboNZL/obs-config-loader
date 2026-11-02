@@ -80,6 +80,14 @@ export interface Manifest {
   assets: Asset[]
   plugins: PluginRef[]
   platformMap: PlatformMapEntry[]
+  /**
+   * The person's own choices for how a source is translated on another system (kept as they are, never rewritten by a
+   * save): `{ "<source id>": { "<win32|darwin|linux|linux-pipewire>": "<id to use>" | null (hide it) } }`.
+   * They win over the built-in table.
+   */
+  platformOverrides?: Record<string, Partial<Record<Platform | 'linux-pipewire', string | null>>>
+  /** What this preset leaves out when saving from OBS (names as OBS has them). Everything else in OBS is kept. */
+  exclude?: { collections?: string[]; profiles?: string[]; remoteControl?: boolean; scripts?: boolean }
   /** Unknown fields are kept so a re-write does not lose them. */
   [extra: string]: unknown
 }

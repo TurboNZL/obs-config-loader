@@ -129,12 +129,14 @@ function NewInstance({ installs, refresh }: { installs: InstallInfo[]; refresh: 
   const bases = installs.filter((i) => i.kind !== 'instance')
   const [baseId, setBaseId] = useState('')
   const [name, setName] = useState('Second OBS')
-  const [copy, setCopy] = useState(true)
+  const [copy, setCopy] = useState(false) // a fresh OBS by default: nothing of the other one's settings comes along
   const [reason, setReason] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => { if (!baseId && bases[0]) setBaseId(bases[0].id) }, [installs]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Only a system or Flatpak OBS on Linux can have a second one. Others stay in the list (so the reason can be read) but cannot be picked.
+  const canBase = (b: InstallInfo) => window.obsLoader.platform === 'linux' && (b.kind === 'linux-native' || b.kind === 'flatpak')
+  useEffect(() => { if (!baseId && (bases.find(canBase) ?? bases[0])) setBaseId((bases.find(canBase) ?? bases[0]).id) }, [installs]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!baseId) return
     void window.obsLoader.instances.support(baseId, name).then((s) => setReason(s.ok ? null : s.reason))
@@ -144,21 +146,22 @@ function NewInstance({ installs, refresh }: { installs: InstallInfo[]; refresh: 
   return (
     <Card title="Make a second OBS (with its own plugins)">
       <p className="text-sm text-muted">
-        A second copy of OBS that keeps its own scenes, settings and plugins. Put a heavy plugin (like a multistream add-on) only in this one, and your everyday OBS stays quick to start. Both can be open at the same time.
+        A second copy of the same OBS program that keeps its own scenes, settings and plugins. It starts completely fresh, as if OBS had just been installed: nothing from your other OBS is copied unless you ask for it below. Put a heavy plugin (like a multistream add-on) only in this one, and your everyday OBS stays quick to start. Both can be open at the same time.
       </p>
       {error && <Message tone="bad">{error}</Message>}
       <Field label="Make it from which OBS?">
         <select className="input w-full px-2 py-1.5" value={baseId} onChange={(e) => setBaseId(e.target.value)}>
-          {bases.map((b) => <option key={b.id} value={b.id}>{b.label}: {KIND_LABEL[b.kind] ?? b.kind}</option>)}
+          {bases.map((b) => <option key={b.id} value={b.id} disabled={!canBase(b)}>{b.label}: {KIND_LABEL[b.kind] ?? b.kind}{canBase(b) ? '' : ' (cannot have a second one)'}</option>)}
         </select>
       </Field>
+      {bases.some((b) => !canBase(b)) && <p className="text-xs text-muted">Portable and Snap installs, and every OBS on Windows and macOS, cannot have a second one made here. A portable OBS is already separate from the others: copy its folder to make another.</p>}
       {reason && <Message tone="warn">{reason}</Message>}
       {!reason && base?.kind === 'flatpak' && (
         <Message tone="warn">Flatpak is new ground for this: the app starts it and then checks that it really got its own settings folder, and tells you if it did not.</Message>
       )}
       <Field label="Name"><input className="input w-full px-2 py-1.5" value={name} onChange={(e) => setName(e.target.value)} /></Field>
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={copy} onChange={(e) => setCopy(e.target.checked)} /> Start with a copy of that OBS's scenes and settings (plugins are never copied)</label>
-      <button className="btn btn-accent px-4 py-2" disabled={busy || !!reason || !name.trim() || !baseId} onClick={async () => {
+      <label className="flex items-start gap-2 text-sm"><input className="mt-1" type="checkbox" checked={copy} onChange={(e) => setCopy(e.target.checked)} /> <span>Start with a copy of that OBS's scenes and output settings instead<span className="block text-xs text-muted">This includes the stream keys saved in them. Plugins are never copied.</span></span></label>
+      <button className="btn btn-accent px-4 py-2" disabled={busy || !!reason || !name.trim() || !baseId || !(base && canBase(base))} onClick={async () => {
         setBusy(true); setError(null)
         const r = await window.obsLoader.instances.create({ baseId, name: name.trim(), copySettings: copy })
         setBusy(false)

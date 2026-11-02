@@ -23,6 +23,10 @@ export interface ExportOptions {
   profiles?: string[]
   /** Media up to this size travel inside the bundle; bigger ones are external. Default 5 MB. 0 = none, Infinity = all. */
   bundleBelowBytes?: number
+  /** Asset ids (see the assets of a first run) that travel inside the bundle whatever their size: the person chose them. */
+  alsoBundle?: string[]
+  /** Things left out of this setup (names as OBS has them). Everything else in OBS is kept. */
+  exclude?: Manifest['exclude']
   /**
    * Put the stream keys and other secrets INTO the file. Off by default, and the file is then labelled everywhere
    * (`containsSecrets`, a warning in the manifest, a README in the zip). Never allowed for the git folder form.
@@ -49,8 +53,15 @@ const HOME_FOLDERS: [RegExp, string][] = [
 /** Paths inside the OBS install or the OS itself are not ours to move. */
 const SYSTEM_PATH = /^(?:\/usr\/|\/opt\/|\/app\/|\/snap\/|\/System\/|\/Applications\/|[A-Za-z]:[\\/](?:Program Files|Windows))/i
 
-function sha256(buf: Buffer): string {
-  return crypto.createHash('sha256').update(buf).digest('hex')
+/** Hash a file in pieces, so a multi-gigabyte video is never held in memory. */
+function sha256File(p: string): string {
+  const h = crypto.createHash('sha256')
+  const fd = fs.openSync(p, 'r')
+  try {
+    const buf = Buffer.allocUnsafe(1024 * 1024)
+    for (let n = fs.readSync(fd, buf, 0, buf.length, null); n > 0; n = fs.readSync(fd, buf, 0, buf.length, null)) h.update(buf.subarray(0, n))
+  } finally { fs.closeSync(fd) }
+  return h.digest('hex')
 }
 
 export function slug(s: string): string {
@@ -96,7 +107,7 @@ class Collector {
   private assetByPath = new Map<string, string>()
   private varByValue = new Map<string, string>()
   readonly warnings: string[] = []
-  constructor(private host: Host, private bundleBelow: number) {}
+  constructor(private host: Host, private bundleBelow: number, private alsoBundle: Set<string> = new Set()) {}
 
   private uniqueAssetId(base: string): string {
     let id = base
@@ -121,12 +132,11 @@ class Collector {
       const asset: Asset = { id, filename: base, role: roleOf(base), mode: 'external' }
       if (st?.isFile()) {
         asset.size = st.size
-        const data = fs.readFileSync(value)
-        asset.sha256 = sha256(data)
+        asset.sha256 = sha256File(value)
         const isScript = asset.role === 'script' && st.size <= MAX_SCRIPT_BYTES
-        if (isScript || st.size <= this.bundleBelow) {
+        if (isScript || st.size <= this.bundleBelow || this.alsoBundle.has(id)) {
           asset.mode = 'bundled'
-          this.files.set(assetBundlePath(asset), data)
+          this.files.set(assetBundlePath(asset), fs.readFileSync(value))
         } else asset.hint = `${base} (${(st.size / 1048576).toFixed(0)} MB) is too large to bundle; locate it on import.`
       } else asset.hint = `${base} was not found on the exporting machine; locate it on import.`
       this.assets.push(asset)
@@ -215,7 +225,8 @@ export function attachSecrets(b: Bundle, values: Record<string, string>): number
 export function exportBundle(opts: ExportOptions): Bundle {
   const { host, install } = opts
   const cfg = install.configDir
-  const col = new Collector(host, opts.bundleBelowBytes ?? 5 * 1024 * 1024)
+  const col = new Collector(host, opts.bundleBelowBytes ?? 5 * 1024 * 1024, new Set(opts.alsoBundle ?? []))
+  const ex = opts.exclude ?? {}
   const scrub = new SecretScrubber(opts.includeSecrets === true)
   const files = col.files
 
@@ -230,6 +241,8 @@ export function exportBundle(opts: ExportOptions): Bundle {
     if (opts.collections && !opts.collections.includes(name)) continue
     const json = readJson(nodePath.join(scenesDir, file))
     if (!json) { col.warnings.push(`Skipped ${file}: not valid JSON.`); continue }
+    if (ex.collections?.includes(name) || (typeof json.name === 'string' && ex.collections?.includes(json.name))) continue
+    if (ex.scripts && json.modules && typeof json.modules === 'object') { json.modules = { ...json.modules }; delete json.modules['scripts-tool'] }
     const u = usedIds(json)
     u.sources.forEach((x) => used.sources.add(x)); u.filters.forEach((x) => used.filters.add(x)); u.transitions.forEach((x) => used.transitions.add(x))
     const out = mapStrings(json, (s, k) => col.tokenise(s, k))
@@ -248,6 +261,7 @@ export function exportBundle(opts: ExportOptions): Bundle {
   try { profDirs = fs.readdirSync(profRoot).filter((d) => fs.statSync(nodePath.join(profRoot, d)).isDirectory()).sort() } catch { /* none */ }
   for (const dir of profDirs) {
     if (opts.profiles && !opts.profiles.includes(dir)) continue
+    if (ex.profiles?.includes(dir)) continue
     const id = slug(dir) + (profiles.some((p) => p.id === slug(dir)) ? `-${profiles.length + 1}` : '')
     const base = `profiles/${id}`
     let display = dir
@@ -277,7 +291,7 @@ export function exportBundle(opts: ExportOptions): Bundle {
 
   // OBS's remote-control (WebSocket) settings: other programs (stream decks, overlays, scripts) depend on them
   const wsJson = readJson(nodePath.join(cfg, 'plugin_config', 'obs-websocket', 'config.json'))
-  if (wsJson && typeof wsJson === 'object') files.set(WEBSOCKET_FILE, Buffer.from(JSON.stringify(scrub.scrubJson(wsJson, WEBSOCKET_FILE), null, 4) + '\n'))
+  if (wsJson && typeof wsJson === 'object' && !ex.remoteControl) files.set(WEBSOCKET_FILE, Buffer.from(JSON.stringify(scrub.scrubJson(wsJson, WEBSOCKET_FILE), null, 4) + '\n'))
 
   const active = activeFromGlobal(cfg)
   const activeCol = collections.find((c) => c.file === `collections/${slug(active.collection ?? '')}.json`) ?? collections[0]

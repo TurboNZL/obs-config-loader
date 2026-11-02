@@ -185,8 +185,11 @@ describe('import', () => {
     const overlay = col.sources.find((s: any) => s.name === 'Overlay')
     expect(overlay.settings.file).toMatch(/^C:\\Users\\streamer\\AppData\\Roaming\\obs-studio\\obs-config-loader\\.+\\media\\overlay\\overlay\.png$/)
     const pw = col.sources.find((s: any) => s.name === 'Game audio')
-    expect(pw.id).toBe('pipewire_audio_application_capture') // a plugin source: untouched, reported
-    expect(plan.report.substitutions).toEqual([expect.objectContaining({ source: 'Window', from: 'xcomposite_input', to: 'window_capture', result: 'substituted' })])
+    expect(pw.id).toBe('wasapi_process_output_capture') // PipeWire application audio becomes Windows application audio capture
+    expect(plan.report.substitutions).toEqual([
+      expect.objectContaining({ source: 'Window', from: 'xcomposite_input', to: 'window_capture', result: 'substituted' }),
+      expect.objectContaining({ source: 'Game audio', from: 'pipewire_audio_application_capture', to: 'wasapi_process_output_capture', result: 'substituted' }),
+    ])
     const ini = plan.writes.find((w) => w.path.endsWith('basic.ini'))!.data.toString('utf8')
     expect(ini).toContain('FilePath=C:\\Users\\streamer\\Videos')
     expect(plan.report.warnings.join(' ')).toMatch(/Made on linux, importing on win32/)
@@ -199,17 +202,17 @@ describe('import', () => {
         name: 'C',
         sources: [
           { id: 'scene', name: 'S', settings: { items: [{ name: 'Game', visible: true }] } },
-          { id: 'game_capture', name: 'Game', settings: { window: 'x' } },
+          { id: 'syphon-input', name: 'Game', settings: { window: 'x' } },
         ],
       }))]]),
     }
     const home = nodePath.join(tmp, 'h')
     const plan = planImport({ bundle, install: install(nodePath.join(home, 'c')), host: host('linux', home) })
     const col = JSON.parse(plan.writes[0].data.toString('utf8'))
-    expect(col.sources[1].id).toBe('game_capture')
+    expect(col.sources[1].id).toBe('syphon-input')
     expect(col.sources[1].settings).toEqual({ window: 'x' })
     expect(col.sources[0].settings.items[0].visible).toBe(false)
-    expect(plan.report.substitutions[0]).toMatchObject({ result: 'disabled', from: 'game_capture' })
+    expect(plan.report.substitutions[0]).toMatchObject({ result: 'disabled', from: 'syphon-input' })
   })
 })
 

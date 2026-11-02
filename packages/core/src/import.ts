@@ -5,12 +5,12 @@ import type { Bundle, Manifest, Platform, PlatformMapEntry } from './types.js'
 import type { Host, ObsInstall } from './detect.js'
 import { BUILTIN_TOKENS, pathModule, resolveJson, resolveString, type BuiltinToken, type TokenResolver } from './tokens.js'
 import { getIni, mapIniValues, setIni } from './ini.js'
-import { DEFAULT_PLATFORM_MAP, availableOn, isPlatformSpecific } from './sources.js'
+import { DEFAULT_PLATFORM_MAP, PIPEWIRE_AUDIO_MODULE, PIPEWIRE_SCREEN, PIPEWIRE_UNIFIED_SINCE, availableOn, isPipewireAudioId, isPlatformSpecific, legacyPipewireId } from './sources.js'
 import { applyVariants, parseVariants, variantsPathFor } from './variants.js'
-import { checkPlugins, installedModules, type PluginFinding } from './plugins.js'
+import { KNOWN_PLUGINS, checkPlugins, installedModules, type PluginFinding } from './plugins.js'
 import { unversioned } from './plugins.js'
 import { assetBundlePath, WEBSOCKET_FILE } from './export.js'
-import { versionNotes, type DetectedVersions } from './versions.js'
+import { compareVersions, versionNotes, type DetectedVersions } from './versions.js'
 
 export type ConflictMode = 'replace' | 'keep-both' | 'skip'
 
@@ -59,7 +59,7 @@ export interface Substitution {
   from: string
   to?: string
   /** `substituted` replaced the id; `disabled` kept the id and hid the scene items. */
-  result: 'substituted' | 'disabled' | 'variant'
+  result: 'substituted' | 'disabled' | 'variant' | 'added'
   note?: string
 }
 
@@ -113,20 +113,46 @@ function defaultFolders(host: Host): Record<BuiltinToken, string> {
   }
 }
 
-function pickReplacement(entry: PlatformMapEntry, target: Platform, preferPipewire: boolean): string | undefined {
+interface AdaptContext {
+  preferPipewire: boolean
+  /** The PipeWire audio plugin is installed on the target (so its sources can stand in for generic audio sources). */
+  pipewireAudio: boolean
+  /** The target OBS's version, when known (the PipeWire capture sources changed in 30.2). */
+  obsVersion?: string
+}
+
+function pickReplacement(from: string, entry: PlatformMapEntry, target: Platform, ctx: AdaptContext): string | undefined {
   const t = entry.to as Record<string, string | undefined>
   if (target === 'linux') {
-    const order = preferPipewire ? ['linux-pipewire', 'linux'] : ['linux', 'linux-pipewire']
-    for (const k of order) if (t[k] && availableOn(t[k]!, 'linux')) return t[k]
+    const order = ctx.preferPipewire ? ['linux-pipewire', 'linux'] : ['linux', 'linux-pipewire']
+    for (const k of order) {
+      let id = t[k]
+      if (!id || !availableOn(id, 'linux')) continue
+      // generic audio only uses the PipeWire audio plugin when it is there; application audio has no other choice
+      if (isPipewireAudioId(id) && !ctx.pipewireAudio && id !== 'pipewire_audio_application_capture') continue
+      if (id === PIPEWIRE_SCREEN && ctx.obsVersion && compareVersions(ctx.obsVersion, PIPEWIRE_UNIFIED_SINCE) < 0) id = legacyPipewireId(from)
+      return id
+    }
     return undefined
   }
   return t[target] && availableOn(t[target]!, target) ? t[target] : undefined
 }
 
+const WINDOWS_AUDIO_PARENTS = new Set(['window_capture', 'game_capture'])
+
+/** `Title:Class:exe.exe` as Windows capture stores it: the program's name, for a note. */
+function programOf(window: unknown): string | undefined {
+  if (typeof window !== 'string') return undefined
+  const exe = window.split(':').pop()
+  return exe && /\.[a-z0-9]+$/i.test(exe) ? exe : undefined
+}
+
 /** Swap or disable sources that cannot exist on the target platform. Mutates the collection. */
-function adaptSources(collection: any, manifest: Manifest, target: Platform, preferPipewire: boolean, subs: Substitution[]): void {
+function adaptSources(collection: any, manifest: Manifest, target: Platform, ctx: AdaptContext, subs: Substitution[]): void {
   const table = [...manifest.platformMap, ...DEFAULT_PLATFORM_MAP]
+  const overrides = manifest.platformOverrides ?? {}
   const disabled = new Set<string>() // names and uuids of sources to hide
+  const added: any[] = []
   for (const s of collection.sources ?? []) {
     const id: string = s.id
     const base = unversioned(id)
@@ -134,17 +160,49 @@ function adaptSources(collection: any, manifest: Manifest, target: Platform, pre
     const key = isPlatformSpecific(id) ? id : base
     if (availableOn(key, target)) continue
     const entry = table.find((e) => e.from === key)
-    const to = entry ? pickReplacement(entry, target, preferPipewire) : undefined
+    // the person's own choice first, then the built-in table
+    const ownTargets = overrides[key] ?? {}
+    const ownKey = target === 'linux' ? (ctx.preferPipewire && 'linux-pipewire' in ownTargets ? 'linux-pipewire' : 'linux' in ownTargets ? 'linux' : 'linux-pipewire' in ownTargets ? 'linux-pipewire' : undefined) : (target in ownTargets ? target : undefined)
+    const own = ownKey ? ownTargets[ownKey as keyof typeof ownTargets] : undefined
+    const hasOwn = ownKey !== undefined
+    const to = hasOwn ? (own ?? undefined) : entry ? pickReplacement(key, entry, target, ctx) : undefined
+    const program = key === 'wasapi_process_output_capture' ? programOf(s.settings?.window) : undefined
+    // Windows window/game capture with "capture audio" on: that audio has to become its own source elsewhere
+    const wantsAudio = WINDOWS_AUDIO_PARENTS.has(key) && s.settings?.capture_audio === true
+    const audioEntry = wantsAudio ? table.find((e) => e.from === 'wasapi_process_output_capture') : undefined
+    const audioTo = audioEntry ? (overrides.wasapi_process_output_capture && target in overrides.wasapi_process_output_capture ? overrides.wasapi_process_output_capture[target] ?? undefined : pickReplacement('wasapi_process_output_capture', audioEntry, target, ctx)) : undefined
+    const audioProgram = wantsAudio ? programOf(s.settings?.window) : undefined
     if (to) {
       // The old settings name devices/windows of the other OS; OBS would ignore or misread them.
       s.id = to
       s.versioned_id = to
       s.settings = {}
-      subs.push({ source: s.name, from: id, to, result: 'substituted', note: entry?.note })
+      subs.push({ source: s.name, from: id, to, result: 'substituted', note: hasOwn ? 'As you set it in the preset settings.' : entry?.note })
     } else {
       if (s.name) disabled.add(`n:${s.name}`)
       if (s.uuid) disabled.add(`u:${s.uuid}`)
-      subs.push({ source: s.name, from: id, result: 'disabled', note: 'No equivalent on this platform; kept as is and hidden.' })
+      subs.push({ source: s.name, from: id, result: 'disabled', note: hasOwn ? 'Hidden, as you set it in the preset settings.' : 'No equivalent on this platform; kept as is and hidden.' })
+    }
+    if (program && to) subs[subs.length - 1].note = `${subs[subs.length - 1].note ?? ''} It was capturing ${program}.`.trim()
+    if (audioTo) {
+      const uuid = crypto.randomUUID()
+      added.push({ parent: s, source: audioSource(`${s.name} (audio)`, audioTo, uuid) })
+      subs.push({ source: `${s.name} (audio)`, from: `${id} with “capture audio” on`, to: audioTo, result: 'added', note: `The window's own audio became a separate source; pick the application again.${audioProgram ? ` It was capturing ${audioProgram}.` : ''}` })
+    } else if (wantsAudio && !audioTo) {
+      subs.push({ source: s.name, from: `${id} with “capture audio” on`, result: 'disabled', note: 'The audio of this capture has no equivalent on this computer, so it is not captured.' })
+    }
+  }
+  for (const a of added) {
+    collection.sources.push(a.source)
+    // put it in every scene that has the capture, right after it
+    for (const sc of collection.sources) {
+      const items: any[] = sc?.settings?.items
+      if (!Array.isArray(items)) continue
+      const at = items.findIndex((it) => it?.name === a.parent.name || (a.parent.uuid && it?.source_uuid === a.parent.uuid))
+      if (at < 0) continue
+      const nextId = items.reduce((m, it) => Math.max(m, Number(it?.id) || 0), 0) + 1
+      items.splice(at + 1, 0, sceneItem(a.source.name, a.source.uuid, nextId))
+      if (typeof sc.settings.id_counter === 'number') sc.settings.id_counter = Math.max(sc.settings.id_counter, nextId)
     }
   }
   if (!disabled.size) return
@@ -152,6 +210,25 @@ function adaptSources(collection: any, manifest: Manifest, target: Platform, pre
     for (const item of s?.settings?.items ?? []) {
       if (disabled.has(`n:${item.name}`) || (item.source_uuid && disabled.has(`u:${item.source_uuid}`))) item.visible = false
     }
+  }
+}
+
+/** An audio source as OBS writes one. */
+function audioSource(name: string, id: string, uuid: string) {
+  return {
+    prev_ver: 536870912, name, uuid, id, versioned_id: id, settings: {}, mixers: 255, sync: 0, flags: 0, volume: 1, balance: 0.5,
+    enabled: true, muted: false, 'push-to-mute': false, 'push-to-mute-delay': 0, 'push-to-talk': false, 'push-to-talk-delay': 0,
+    hotkeys: {}, deinterlace_mode: 0, deinterlace_field_order: 0, monitoring_type: 0, private_settings: {},
+  }
+}
+
+/** A scene item as OBS writes one (visible, untransformed). */
+function sceneItem(name: string, uuid: string, id: number) {
+  return {
+    name, source_uuid: uuid, visible: true, locked: false, rot: 0, scale_ref: { x: 1920, y: 1080 }, align: 5, bounds_type: 0, bounds_align: 0,
+    bounds_crop: false, crop_left: 0, crop_top: 0, crop_right: 0, crop_bottom: 0, id, group_item_backup: false,
+    pos: { x: 0, y: 0 }, pos_rel: { x: 0, y: 0 }, scale: { x: 1, y: 1 }, scale_rel: { x: 1, y: 1 }, bounds: { x: 0, y: 0 }, bounds_rel: { x: 0, y: 0 },
+    scale_filter: 'disable', blend_method: 'default', blend_type: 'normal', show_transition: { duration: 0 }, hide_transition: { duration: 0 }, private_settings: {},
   }
 }
 
@@ -169,6 +246,8 @@ export function planImport(o: ImportOptions): ImportPlan {
   const backupDir = p.join(cfg, 'obs-config-loader', 'backups', stamp)
   const mediaDir = o.mediaDir ?? p.join(cfg, 'obs-config-loader', m.id, 'media')
   const conflict = o.conflict ?? 'replace'
+  const installedMods = installedModules(host, install)
+  const adaptCtx: AdaptContext = { preferPipewire: o.preferPipewire ?? true, pipewireAudio: installedMods.has(PIPEWIRE_AUDIO_MODULE), obsVersion: o.installed?.obs }
 
   if (o.obsRunning) blockers.push('OBS is running. Close it first: it rewrites its files on exit and would undo the import.')
   if (m.obsMinVersion) warnings.push(`This setup was made for OBS ${m.obsMinVersion} or newer.`)
@@ -261,7 +340,7 @@ export function planImport(o: ImportOptions): ImportPlan {
     for (const u of applyVariants(json, variants, target)) {
       subs.push({ source: u.source, from: u.id, to: u.id, result: 'variant', note: `Using the ${target === 'win32' ? 'Windows' : target === 'darwin' ? 'macOS' : 'Linux'} version saved in this setup.` })
     }
-    adaptSources(json, m, target, o.preferPipewire ?? true, subs)
+    adaptSources(json, m, target, adaptCtx, subs)
     usedCollections.push(json)
     let name = c.name
     let file = p.join(scenesDir, sanitizeFileName(name) + '.json')
@@ -376,6 +455,10 @@ export function planImport(o: ImportOptions): ImportPlan {
   }
   warnings.push(...versionNotes(m, o.installed))
   const plugins = checkPlugins(m.plugins, installedModules(host, install))
+  if (target === 'linux' && subs.some((x) => x.to && isPipewireAudioId(x.to)) && !installedMods.has(PIPEWIRE_AUDIO_MODULE)) {
+    const how = KNOWN_PLUGINS.find((k) => k.id === 'obs-pipewire-audio-capture')?.install
+    warnings.push(`Some audio sources became PipeWire audio sources, which need the PipeWire Audio Capture plugin, and it is not installed in this OBS. ${(install.kind === 'flatpak' ? how?.['linux-flatpak'] : how?.['linux-native']) ?? ''}`.trim())
+  }
   if (m.source?.platform && m.source.platform !== target) {
     warnings.push(`Made on ${m.source.platform}, importing on ${target}: capture sources and device choices need checking (see substitutions).`)
   }

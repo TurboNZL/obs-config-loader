@@ -278,7 +278,7 @@ function writeLiveInto(o: CaptureOptions, target: string): void {
     description: typeof pm?.description === 'string' ? pm.description : undefined,
     // No name filter: OBS is the source of truth for which scenes/profiles exist. (Filtering by the names saved
     // earlier made a renamed collection or profile vanish, and the folder was then wiped.)
-    bundleBelowBytes: o.bundleBelowBytes, appVersion: o.appVersion, versions: o.versions,
+    bundleBelowBytes: o.bundleBelowBytes, appVersion: o.appVersion, versions: o.versions, exclude: pm?.exclude,
     // the repo's history is its revision list: keep these two still so they never cause a merge conflict
     revision: pm?.revision, now: pm?.exportedAt ? new Date(pm.exportedAt) : undefined,
   })

@@ -53,7 +53,8 @@ export function renameSceneLayout(dir: string, id: string, newName: string): str
   const vOld = nodePath.join(dir, variantsPathFor(c.file))
   if (fs.existsSync(vOld) && newFile !== c.file) fs.renameSync(vOld, nodePath.join(dir, variantsPathFor(newFile)))
   changed.push(c.file, newFile)
-  c.id = newId; c.name = name; c.file = newFile
+  c.id = newId; const oldName = c.name; c.name = name; c.file = newFile
+  if (b.manifest.exclude?.collections?.includes(oldName)) b.manifest.exclude.collections = b.manifest.exclude.collections.map((n) => (n === oldName ? name : n))
   if (b.manifest.activeCollection === id) b.manifest.activeCollection = newId
   writeManifest(dir, b.manifest)
   return changed
@@ -74,7 +75,9 @@ export function renameOutputSetting(dir: string, id: string, newName: string): s
   if (fs.existsSync(ini)) fs.writeFileSync(ini, setIni(fs.readFileSync(ini, 'utf8'), 'General', 'Name', name))
   if (newDir !== p.dir) fs.renameSync(nodePath.join(dir, p.dir), nodePath.join(dir, newDir))
   const old = p.dir
+  const oldName = p.name
   p.id = newId; p.name = name; p.dir = newDir
+  if (b.manifest.exclude?.profiles?.includes(oldName)) b.manifest.exclude.profiles = b.manifest.exclude.profiles.map((n) => (n === oldName ? name : n))
   if (b.manifest.activeProfile === id) b.manifest.activeProfile = newId
   writeManifest(dir, b.manifest)
   return ['manifest.json', old, newDir]
