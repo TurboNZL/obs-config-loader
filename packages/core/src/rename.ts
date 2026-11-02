@@ -2,7 +2,8 @@ import * as fs from 'node:fs'
 import * as nodePath from 'node:path'
 import { readBundleDir, serializeManifest } from './bundleIO.js'
 import { slug } from './export.js'
-import { getIni, setIni } from './ini.js'
+import { setIni } from './ini.js'
+import { renameActive } from './userconfig.js'
 import { variantsPathFor, type VariantsFile } from './variants.js'
 
 /**
@@ -148,13 +149,7 @@ export function renameLayoutInObs(configDir: string, from: string, newName: stri
   const json = JSON.parse(fs.readFileSync(src, 'utf8')); json.name = to
   fs.writeFileSync(dst, JSON.stringify(json, null, 4) + '\n')
   if (src !== dst) fs.rmSync(src)
-  const g = nodePath.join(configDir, 'global.ini')
-  if (fs.existsSync(g)) {
-    let t = fs.readFileSync(g, 'utf8')
-    if (getIni(t, 'Basic', 'SceneCollection') === from) t = setIni(t, 'Basic', 'SceneCollection', to)
-    if (getIni(t, 'Basic', 'SceneCollectionFile') === fileSafe(from)) t = setIni(t, 'Basic', 'SceneCollectionFile', fileSafe(to))
-    fs.writeFileSync(g, t)
-  }
+  renameActive(configDir, 'collection', from, fileSafe(from), to, fileSafe(to))
 }
 
 /** Rename output settings in an OBS settings folder (folder, the name in basic.ini, global.ini). */
@@ -167,13 +162,7 @@ export function renameOutputInObs(configDir: string, from: string, newName: stri
   if (src !== dst) fs.renameSync(src, dst)
   const ini = nodePath.join(dst, 'basic.ini')
   if (fs.existsSync(ini)) fs.writeFileSync(ini, setIni(fs.readFileSync(ini, 'utf8'), 'General', 'Name', to))
-  const g = nodePath.join(configDir, 'global.ini')
-  if (fs.existsSync(g)) {
-    let t = fs.readFileSync(g, 'utf8')
-    if (getIni(t, 'Basic', 'Profile') === from) t = setIni(t, 'Basic', 'Profile', to)
-    if (getIni(t, 'Basic', 'ProfileDir') === fileSafe(from)) t = setIni(t, 'Basic', 'ProfileDir', fileSafe(to))
-    fs.writeFileSync(g, t)
-  }
+  renameActive(configDir, 'profile', from, fileSafe(from), to, fileSafe(to))
 }
 
 /** Rename a scene or source inside one scene layout in an OBS settings folder. Returns false when OBS has no such thing. */

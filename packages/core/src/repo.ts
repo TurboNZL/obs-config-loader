@@ -176,6 +176,14 @@ export async function pullRepo(dir: string, git: GitRunner = defaultGit, onConfl
   return { status: 'updated', files }
 }
 
+/** Ask the online copy what is new (so "N to download" is true, not a guess from the last time). Never changes any file. */
+export async function fetchRepo(dir: string, git: GitRunner = defaultGit): Promise<{ ok: boolean; message?: string }> {
+  const st = await repoStatus(dir, git)
+  if (!st.isRepo || !st.remote) return { ok: true }
+  const r = await git(['fetch', '--quiet', st.remote], dir)
+  return r.code === 0 ? { ok: true } : { ok: false, message: (r.stderr.trim() || r.stdout.trim() || 'Could not reach the online copy.').split('\n').slice(-2).join('\n') }
+}
+
 export type PushResult = { status: 'pushed' } | { status: 'nothing' } | { status: 'no-remote' } | { status: 'error'; message: string }
 
 export async function pushRepo(dir: string, git: GitRunner = defaultGit): Promise<PushResult> {

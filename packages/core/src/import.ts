@@ -5,6 +5,8 @@ import type { Bundle, Manifest, Platform, PlatformMapEntry } from './types.js'
 import type { Host, ObsInstall } from './detect.js'
 import { BUILTIN_TOKENS, pathModule, resolveJson, resolveString, type BuiltinToken, type TokenResolver } from './tokens.js'
 import { getIni, mapIniValues, setIni } from './ini.js'
+import { activeTargets, withActive } from './userconfig.js'
+import { availableEncoders, fixEncoders, type EncoderFix } from './encoders.js'
 import { DEFAULT_PLATFORM_MAP, standInOptions, sourceName, PIPEWIRE_AUDIO_MODULE, PIPEWIRE_SCREEN, PIPEWIRE_UNIFIED_SINCE, availableOn, isPipewireAudioId, isPlatformSpecific, legacyPipewireId } from './sources.js'
 import { applyVariants, parseVariants, variantsPathFor } from './variants.js'
 import { KNOWN_PLUGINS, checkPlugins, installedModules, type PluginFinding } from './plugins.js'
@@ -258,6 +260,7 @@ export function planImport(o: ImportOptions): ImportPlan {
   const mediaDir = o.mediaDir ?? p.join(cfg, 'obs-config-loader', m.id, 'media')
   const conflict = o.conflict ?? 'replace'
   const installedMods = installedModules(host, install)
+  const encodersHere = availableEncoders(install)
   const adaptCtx: AdaptContext = { preferPipewire: o.preferPipewire ?? true, pipewireAudio: installedMods.has(PIPEWIRE_AUDIO_MODULE), obsVersion: o.installed?.obs, choices: o.sourceChoices }
 
   if (o.obsRunning) blockers.push('OBS is running. Close it first: it rewrites its files on exit and would undo the import.')
@@ -381,6 +384,7 @@ export function planImport(o: ImportOptions): ImportPlan {
     if (!profIds.has(pr.id)) continue
     const prefix = pr.dir.replace(/\/$/, '') + '/'
     const entries = [...bundle.files.entries()].filter(([k]) => k.startsWith(prefix))
+    let encoderFixes: EncoderFix[] = []
     let name = pr.name
     let dirName = sanitizeFileName(name)
     let action: WriteAction = fs.existsSync(p.join(profRoot, dirName)) ? 'replace' : 'create'
@@ -398,7 +402,9 @@ export function planImport(o: ImportOptions): ImportPlan {
       const fname = key.slice(prefix.length)
       let out: Buffer = data
       const dest = p.join(profRoot, dirName, fname)
-      if (fname.endsWith('.json')) {
+      if (fname.endsWith('.json') && encoderFixes.some((f) => f.resets === fname)) {
+        out = Buffer.from('{}\n') // settings of an encoder that is no longer used
+      } else if (fname.endsWith('.json')) {
         try {
           const json = resolveJson(JSON.parse(data.toString('utf8')), resolver, target)
           // A secret you did not type in must not wipe the one OBS already has: keep what is in the file being replaced.
@@ -415,7 +421,11 @@ export function planImport(o: ImportOptions): ImportPlan {
       } else if (fname === 'basic.ini') {
         let t = mapIniValues(data.toString('utf8'), (_s, _k, v) => resolveString(v, resolver, target))
         t = setIni(t, 'General', 'Name', name)
-        out = Buffer.from(t)
+        // an encoder this OBS does not have leaves the Settings window with empty boxes and no OK: swap it for one every OBS has
+        const fixed = fixEncoders(t, { available: encodersHere, target })
+        encoderFixes = fixed.fixes
+        for (const f of fixed.fixes) warnings.push(`“${name}”: the ${f.label} (${f.from}) is not available in this OBS, so ${f.to} is used instead. Check it under Settings, Output.`)
+        out = Buffer.from(fixed.text)
       }
       // Replacing a profile replaces its files one by one; each one is backed up.
       planFile(dest, out, 'profile-file', fs.existsSync(dest) ? 'replace' : action === 'keep-both' ? 'keep-both' : 'create')
@@ -423,20 +433,14 @@ export function planImport(o: ImportOptions): ImportPlan {
     if (m.activeProfile === pr.id || !activeProfileDir) { activeProfileDir = dirName; activeProfileName = name }
   }
 
-  // global.ini: make the import the active setup
+  // make the import the one OBS opens with (user.ini on OBS 31 and newer, global.ini before)
   if (o.activate && (activeCollectionFile || activeProfileDir)) {
-    const gp = p.join(cfg, 'global.ini')
-    let t = ''
-    try { t = fs.readFileSync(gp, 'utf8') } catch { /* OBS never ran */ }
-    if (activeCollectionFile) {
-      t = setIni(t, 'Basic', 'SceneCollection', activeCollectionName!)
-      t = setIni(t, 'Basic', 'SceneCollectionFile', activeCollectionFile)
+    for (const gp of activeTargets(cfg, p.join)) {
+      let t = ''
+      try { t = fs.readFileSync(gp, 'utf8') } catch { /* OBS never ran */ }
+      t = withActive(t, { collection: activeCollectionName, collectionFile: activeCollectionFile, profile: activeProfileName, profileDir: activeProfileDir })
+      planFile(gp, Buffer.from(t), 'global', fs.existsSync(gp) ? 'replace' : 'create')
     }
-    if (activeProfileDir) {
-      t = setIni(t, 'Basic', 'Profile', activeProfileName!)
-      t = setIni(t, 'Basic', 'ProfileDir', activeProfileDir)
-    }
-    planFile(gp, Buffer.from(t), 'global', fs.existsSync(gp) ? 'replace' : 'create')
   }
 
   for (const k of missingSeen) {

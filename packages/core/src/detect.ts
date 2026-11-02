@@ -160,7 +160,7 @@ export function portableInstall(host: Host, folder: string): ObsInstall | { erro
     p.join(folder, 'obs', 'config', 'obs-studio'), // this app's own Windows layout
     folder, // the config dir itself
   ]
-  const cfg = candidates.find((c) => host.isDir(p.join(c, 'basic')) || host.exists(p.join(c, 'global.ini')))
+  const cfg = candidates.find((c) => host.isDir(p.join(c, 'basic')) || host.exists(p.join(c, 'global.ini')) || host.exists(p.join(c, 'user.ini')))
   const root = cfg && cfg !== folder ? p.dirname(p.dirname(cfg)) : folder
   const cfgDir = cfg ?? candidates[0]
   const looksLikeObs =

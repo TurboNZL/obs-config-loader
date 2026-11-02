@@ -159,6 +159,15 @@ export async function publishToGithub(
 }
 
 /** A bundle someone sent (zip) becomes a repository of its own: init, write the files, commit. */
+/** A git address safe to write into a file others may open: no user name or password in it. */
+export function publicRemoteUrl(url: string): string {
+  try {
+    const u = new URL(url)
+    u.username = ''; u.password = ''
+    return u.toString().replace(/\/$/, '')
+  } catch { return url } // ssh-style (git@host:owner/repo.git) and folders carry no password
+}
+
 export async function createRepoFromBundle(dir: string, bundle: Bundle, git: GitRunner = defaultGit): Promise<void> {
   if (fs.existsSync(dir) && fs.readdirSync(dir).length) throw new Error('That folder is not empty.')
   await initRepo(dir, git)

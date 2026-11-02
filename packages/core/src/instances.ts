@@ -79,13 +79,15 @@ export function buildInstance(base: ObsInstall, host: Host, name: string, paths:
  * existing install (never its plugins, which is the point of having a separate one). Does nothing if the instance already has settings.
  */
 export function seedInstance(fromConfigDir: string, toConfigDir: string): { copied: boolean } {
-  if (fs.existsSync(nodePath.join(toConfigDir, 'basic')) || fs.existsSync(nodePath.join(toConfigDir, 'global.ini'))) return { copied: false }
+  if (fs.existsSync(nodePath.join(toConfigDir, 'basic')) || fs.existsSync(nodePath.join(toConfigDir, 'global.ini')) || fs.existsSync(nodePath.join(toConfigDir, 'user.ini'))) return { copied: false }
   fs.mkdirSync(toConfigDir, { recursive: true })
   let copied = false
   const basic = nodePath.join(fromConfigDir, 'basic')
   if (fs.existsSync(basic)) { fs.cpSync(basic, nodePath.join(toConfigDir, 'basic'), { recursive: true }); copied = true }
-  const g = nodePath.join(fromConfigDir, 'global.ini')
-  if (fs.existsSync(g)) { fs.copyFileSync(g, nodePath.join(toConfigDir, 'global.ini')); copied = true }
+  for (const name of ['global.ini', 'user.ini']) {
+    const g = nodePath.join(fromConfigDir, name)
+    if (fs.existsSync(g)) { fs.copyFileSync(g, nodePath.join(toConfigDir, name)); copied = true }
+  }
   return { copied }
 }
 
