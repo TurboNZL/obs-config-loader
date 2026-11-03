@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as nodePath from 'node:path'
 import * as crypto from 'node:crypto'
-import { FORMAT, FORMAT_VERSION, type Asset, type AssetRole, type Bundle, type Manifest, type Variable } from './types.js'
+import { FORMAT, FORMAT_VERSION, type Asset, type AssetRole, type Bundle, type Manifest, type ScriptProject, type Variable } from './types.js'
 import type { Host, ObsInstall } from './detect.js'
 import { escapeLiteral, looksLikeAbsolutePath, mapStrings, sanitizeFileName, splitPath } from './tokens.js'
 import { getIni, mapIniValues } from './ini.js'
@@ -51,6 +51,13 @@ export function assetBundlePath(a: Pick<Asset, 'id' | 'filename' | 'role'>): str
 }
 export const WEBSOCKET_FILE = 'global/obs-websocket.json'
 const MAX_SCRIPT_BYTES = 1024 * 1024
+/** Script folders: where their files are kept in a setup, and which of them are (code only, nothing hidden, nothing big). */
+export const PROJECT_DIR = 'scripts/projects'
+export const PROJECT_FILE = /\.(py|lua|sh|bat|cmd|ps1|txt)$/i
+const PROJECT_SKIP_DIRS = new Set(['venv', 'env', 'node_modules', '__pycache__', 'site-packages', 'dist', 'build', 'images', 'media', 'assets'])
+const PROJECT_DEPTH = 2
+const PROJECT_MAX_FILES = 200
+const PROJECT_MAX_BYTES = 5 * 1024 * 1024
 
 const HOME_FOLDERS: [RegExp, string][] = [
   [/^Documents$/i, 'documents'], [/^Videos$/i, 'videos'], [/^Movies$/i, 'videos'], [/^Music$/i, 'music'],
@@ -59,8 +66,16 @@ const HOME_FOLDERS: [RegExp, string][] = [
 /** Paths inside the OBS install or the OS itself are not ours to move. */
 const SYSTEM_PATH = /^(?:\/usr\/|\/opt\/|\/app\/|\/snap\/|\/System\/|\/Applications\/|[A-Za-z]:[\\/](?:Program Files|Windows))/i
 
-/** Hash a file in pieces, so a multi-gigabyte video is never held in memory. */
+const hashCache = new Map<string, string>()
+/** Hash a file in pieces, so a multi-gigabyte video is never held in memory. A file that has not changed (same size and time) is not read again. */
 function sha256File(p: string): string {
+  let key: string | undefined
+  try { const st = fs.statSync(p); key = `${p}|${st.size}|${st.mtimeMs}`; const hit = hashCache.get(key); if (hit) return hit } catch { /* hashed below, or fails there */ }
+  const out = sha256FileUncached(p)
+  if (key) { if (hashCache.size > 500) hashCache.clear(); hashCache.set(key, out) }
+  return out
+}
+function sha256FileUncached(p: string): string {
   const h = crypto.createHash('sha256')
   const fd = fs.openSync(p, 'r')
   try {
@@ -147,6 +162,38 @@ class Collector {
       name, kind: 'path', label: `Folder of the script “${base}” (it uses other files in it)`, mustContain: [base],
       default: tokenisePathPrefix(dir, this.host.home) ?? dir.replace(/\\/g, '/'),
     })
+  }
+
+  /**
+   * Keep the files of each script folder with the setup: the script itself and the code files next to it (never environments,
+   * hidden files such as `.env`, big files, or anything that is not plain code). Stored as `scripts/projects/<variable>/<file>`.
+   */
+  collectProjects(): ScriptProject[] {
+    const out: ScriptProject[] = []
+    let total = 0
+    for (const proj of this.projects) {
+      const rels: string[] = []
+      const walk = (dir: string, rel: string, depth: number) => {
+        let ents: fs.Dirent[] = []
+        try { ents = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)) } catch { return }
+        for (const e of ents) {
+          if (e.name.startsWith('.')) continue
+          const r = rel ? `${rel}/${e.name}` : e.name
+          const full = nodePath.join(dir, e.name)
+          if (e.isDirectory()) { if (depth < PROJECT_DEPTH && !PROJECT_SKIP_DIRS.has(e.name.toLowerCase())) walk(full, r, depth + 1); continue }
+          if (!e.isFile() || !PROJECT_FILE.test(e.name) || rels.length >= PROJECT_MAX_FILES) continue
+          let size = 0
+          try { size = fs.statSync(full).size } catch { continue }
+          if (size > MAX_SCRIPT_BYTES || total + size > PROJECT_MAX_BYTES) continue
+          total += size
+          this.files.set(`${PROJECT_DIR}/${proj.name}/${r}`, fs.readFileSync(full))
+          rels.push(r)
+        }
+      }
+      walk(proj.dir, '', 0)
+      if (rels.length) out.push({ variable: proj.name, files: rels })
+    }
+    return out
   }
 
   private inProject(value: string): string | undefined {
@@ -274,6 +321,25 @@ export function attachSecrets(b: Bundle, values: Record<string, string>): number
   return n
 }
 
+/**
+ * Take the stream keys OUT of a bundle that was exported with `includeSecrets`, and hand them back by variable name.
+ * What is left is safe to keep in git. Used by presets: the keys go into the preset's own local-only area instead.
+ */
+export function stripSecrets(b: Bundle): Record<string, string> {
+  const out: Record<string, string> = {}
+  b.manifest.variables = b.manifest.variables.map((v) => {
+    if (v.value === undefined) return v
+    if (v.kind === 'secret' && v.value) out[v.name] = v.value
+    const { value: _v, ...rest } = v
+    void _v
+    return rest
+  })
+  delete b.manifest.containsSecrets
+  delete b.manifest.warning
+  b.files.delete(SECRETS_README_NAME)
+  return out
+}
+
 export function exportBundle(opts: ExportOptions): Bundle {
   const { host, install } = opts
   const cfg = install.configDir
@@ -378,6 +444,8 @@ export function exportBundle(opts: ExportOptions): Bundle {
     plugins: [],
     platformMap: [],
   }
+  const projects = col.collectProjects()
+  if (projects.length) manifest.projects = projects
   if (opts.repository) manifest.repository = { url: opts.repository }
   const bundle: Bundle = { manifest, files }
   addProfileVariants(bundle, host.platform) // this system's own encoders and audio devices, kept apart from other systems'

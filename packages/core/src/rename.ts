@@ -27,7 +27,7 @@ function writeManifest(dir: string, m: unknown) {
 /** The preset's own name (what the list shows). */
 export function renamePreset(dir: string, newName: string): string[] {
   const name = need(newName)
-  const b = readBundleDir(dir)
+  const b = readBundleDir(dir, { keepMissing: true })
   if (b.manifest.name === name) return []
   b.manifest.name = name
   writeManifest(dir, b.manifest)
@@ -37,7 +37,7 @@ export function renamePreset(dir: string, newName: string): string[] {
 /** A scene layout (OBS: "Scene Collection"). Its file and the per-OS file next to it are renamed with it. */
 export function renameSceneLayout(dir: string, id: string, newName: string): string[] {
   const name = need(newName)
-  const b = readBundleDir(dir)
+  const b = readBundleDir(dir, { keepMissing: true })
   const c = b.manifest.collections.find((x) => x.id === id)
   if (!c) throw new RenameError('That scene layout is not in this preset any more.')
   if (c.name === name) return []
@@ -64,7 +64,7 @@ export function renameSceneLayout(dir: string, id: string, newName: string): str
 /** An output setting (OBS: "Profile"). Its folder is renamed and the name inside its basic.ini too. */
 export function renameOutputSetting(dir: string, id: string, newName: string): string[] {
   const name = need(newName)
-  const b = readBundleDir(dir)
+  const b = readBundleDir(dir, { keepMissing: true })
   const p = b.manifest.profiles.find((x) => x.id === id)
   if (!p) throw new RenameError('That output setting is not in this preset any more.')
   if (p.name === name) return []
@@ -99,7 +99,7 @@ export function renameSourceInJson(json: any, from: string, to: string): number 
 /** A scene or any other source inside one scene layout. Everything that uses it keeps working under the new name. */
 export function renameSceneOrSource(dir: string, collectionId: string, from: string, newName: string): string[] {
   const to = need(newName)
-  const b = readBundleDir(dir)
+  const b = readBundleDir(dir, { keepMissing: true })
   const c = b.manifest.collections.find((x) => x.id === collectionId)
   if (!c) throw new RenameError('That scene layout is not in this preset any more.')
   const full = nodePath.join(dir, c.file)
@@ -124,7 +124,7 @@ export function renameSceneOrSource(dir: string, collectionId: string, from: str
 
 /** Names of the scenes and other things in a saved scene layout, for the rename list. */
 export function listNames(dir: string, collectionId: string): { scenes: string[]; sources: string[] } {
-  const b = readBundleDir(dir)
+  const b = readBundleDir(dir, { keepMissing: true })
   const c = b.manifest.collections.find((x) => x.id === collectionId)
   if (!c) return { scenes: [], sources: [] }
   const json = JSON.parse(fs.readFileSync(nodePath.join(dir, c.file), 'utf8'))

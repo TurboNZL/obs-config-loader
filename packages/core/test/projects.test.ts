@@ -54,14 +54,41 @@ describe('a script that needs the files around it', () => {
     expect(got.modules['output-timer']).toEqual({ streamTimerSeconds: 30 })
   })
 
-  it('says so when the chosen folder does not hold the script, and follows Windows separators', () => {
+  it('keeps the script and the code files beside it with the setup, and puts them back in a new or empty folder', () => {
     const { home, cfg } = projectSetup()
     const b = exportBundle({ host: host('linux', home), install: install(cfg), name: 'x' })
+    expect(b.manifest.projects).toEqual([{ variable: 'SCRIPT_FOLDER', files: ['helper.py', 'tool.py'] }]) // images are not code: not kept
+    expect(b.files.get('scripts/projects/SCRIPT_FOLDER/tool.py')!.toString()).toContain('__file__')
+    expect([...b.files.keys()].some((k) => k.endsWith('bg.png'))).toBe(false)
+
     const plan = planImport({ bundle: b, install: { ...install('C:\\cfg'), platform: 'win32' }, host: host('win32', 'C:\\Users\\u'), variables: { SCRIPT_FOLDER: 'C:\\Tools\\stream' } })
-    expect(plan.report.warnings.join(' ')).toMatch(/tool\.py was not found in C:\\Tools\\stream/)
+    expect(plan.report.warnings.join(' ')).not.toMatch(/was not found/) // it comes with the setup
+    expect(plan.writes.filter((w) => w.kind === 'project').map((w) => w.path).sort()).toEqual(['C:\\Tools\\stream\\helper.py', 'C:\\Tools\\stream\\tool.py'])
     const col = JSON.parse(plan.writes.find((w) => w.kind === 'collection')!.data.toString())
     expect(col.modules['scripts-tool'][0].path).toBe('C:\\Tools\\stream\\tool.py')
     expect(col.sources.find((s: any) => s.name === 'Background').settings.file).toBe('C:\\Tools\\stream\\images\\bg.png')
+  })
+
+  it('never drops code into a folder that belongs to something else, and leaves identical files alone', () => {
+    const { home, cfg, proj } = projectSetup()
+    const b = exportBundle({ host: host('linux', home), install: install(cfg), name: 'x' })
+    const other = nodePath.join(tmp, 'startup'); fs.mkdirSync(other); fs.writeFileSync(nodePath.join(other, 'something.txt'), 'mine')
+    const home2 = nodePath.join(tmp, 'home2'); const cfg2 = nodePath.join(home2, '.config/obs-studio'); fs.mkdirSync(cfg2, { recursive: true })
+    const blocked = planImport({ bundle: b, install: install(cfg2), host: host('linux', home2), variables: { SCRIPT_FOLDER: other } })
+    expect(blocked.writes.some((w) => w.kind === 'project')).toBe(false)
+    expect(blocked.report.warnings.join(' ')).toMatch(/already has other things in it/)
+    // the real project folder: nothing to write when it already matches
+    const same = planImport({ bundle: b, install: install(cfg2), host: host('linux', home2), variables: { SCRIPT_FOLDER: proj } })
+    expect(same.writes.some((w) => w.kind === 'project')).toBe(false)
+    // a changed copy is replaced, and the old one is backed up
+    fs.writeFileSync(nodePath.join(proj, 'helper.py'), 'x = 2\n')
+    const changed = planImport({ bundle: b, install: install(cfg2), host: host('linux', home2), variables: { SCRIPT_FOLDER: proj } })
+    expect(changed.writes.filter((w) => w.kind === 'project').map((w) => [nodePath.basename(w.path), w.action])).toEqual([['helper.py', 'replace']])
+    // a bundle cannot reach outside the folder or write something that is not code
+    const evil: Bundle = { manifest: { ...b.manifest, projects: [{ variable: 'SCRIPT_FOLDER', files: ['../x.py', 'a.exe', '.hidden.py'] }] }, files: new Map(b.files) }
+    for (const f of ['../x.py', 'a.exe', '.hidden.py']) evil.files.set(`scripts/projects/SCRIPT_FOLDER/${f}`, Buffer.from('x'))
+    const none = planImport({ bundle: evil, install: install(cfg2), host: host('linux', home2), variables: { SCRIPT_FOLDER: nodePath.join(tmp, 'fresh') } })
+    expect(none.writes.some((w) => w.kind === 'project')).toBe(false)
   })
 
   it('a script that stands alone is still copied with the setup (nothing else to lose)', () => {

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { RepoInfo, BundleSummary, ConflictMode, ImportReport, ImportRequest, InstallInfo } from '../../../electron/api'
+import { Icon } from '../components/Icon'
 import { Card, Chip, Choice, Field, KIND_LABEL, Message, Page, Step, plural } from '../ui'
 
 const FOLDER_NAMES: Record<string, string> = { home: 'your home folder', documents: 'Documents', videos: 'Videos', music: 'Music', pictures: 'Pictures', desktop: 'Desktop' }
@@ -21,7 +22,7 @@ function replacedNames(report: ImportReport): { scenes: string[]; outputs: strin
   return { scenes: [...scenes], outputs: [...outputs] }
 }
 
-export function ImportPage({ installs, preselect, openPath, refresh }: { installs: InstallInfo[] | null; preselect?: string; openPath?: string; refresh: () => Promise<void> }) {
+export function ImportPage({ installs, preselect, openPath, refresh, onBack }: { installs: InstallInfo[] | null; preselect?: string; openPath?: string; refresh: () => Promise<void>; onBack?: () => void }) {
   const [bundle, setBundle] = useState<BundleSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [installId, setInstallId] = useState<string>(preselect ?? '')
@@ -40,6 +41,8 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
   const [report, setReport] = useState<ImportReport | null>(null)
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<{ written: number; backedUp: number; backupDir: string } | null>(null)
+  /** The preset this was applied from, when it is not linked to this OBS yet: it can be, so saving back is one button. */
+  const [linkOffer, setLinkOffer] = useState<{ name: string; path: string } | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [drag, setDrag] = useState(false)
   const [liveChanges, setLiveChanges] = useState<string[]>([])
@@ -125,6 +128,11 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
         if (Object.keys(secrets).length) await window.obsLoader.secrets.save(bundle!.manifest.id, secrets)
       }
       setDone(r)
+      setLinkOffer(null)
+      if (bundle!.repoDir) {
+        const mine = (await window.obsLoader.repos.list()).find((x) => x.path === bundle!.repoDir)
+        if (mine && mine.installId !== installId) setLinkOffer({ name: mine.name, path: mine.path })
+      }
       // a file is kept as a preset by default (with its online address, so it can get updates later)
       if (keepPreset && !bundle!.repoDir && !existing) {
         const folder = await window.obsLoader.repos.suggestFolder(m!.name)
@@ -147,7 +155,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
   let step = 0
 
   return (
-    <Page title="Apply a setup to OBS" intro="Open a setup file, choose which OBS it goes into, and check what will happen. Nothing changes until you press the button at the end.">
+    <Page title="Apply a setup to OBS" intro="Choose which OBS it goes into, and check what will happen. Nothing changes until you press the button at the end.">
       {error && <Message tone="bad">{error}</Message>}
 
       {done && install && (
@@ -159,8 +167,14 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
           <Card title="What now?">
             <div className="flex gap-2 flex-wrap">
               {install.launch && <button className="btn btn-accent px-4 py-2" onClick={() => void window.obsLoader.installs.launch(install.id).then((r) => setNote(r.ok ? 'Starting OBS…' : r.message))}>Start OBS</button>}
-              <button className="btn px-3 py-2" onClick={() => { setDone(null); setBundle(null); setReport(null) }}>Open another file</button>
+              {onBack ? <button className="btn px-3 py-2" onClick={onBack}>Back to my presets</button> : <button className="btn px-3 py-2" onClick={() => { setDone(null); setBundle(null); setReport(null) }}>Open another file</button>}
             </div>
+            {linkOffer && (
+              <div className="kind-panel kind-local p-3 space-y-1">
+                <p className="text-sm">Link “{linkOffer.name}” to {install.label}? Then one button saves changes you make in OBS back into the preset. You can unlink it any time and the preset stays as it is.</p>
+                <button className="btn btn-accent px-3 py-1.5 inline-flex items-center gap-1.5" onClick={async () => { await window.obsLoader.repos.setInstall(linkOffer.path, install.id); setLinkOffer(null); setNote(`Linked “${linkOffer.name}” to ${install.label}.`); await refresh() }}><Icon name="link" size={14} /> Link it</button>
+              </div>
+            )}
             {note && <p className="text-sm text-muted">{note}</p>}
             {report && report.plugins.some((p) => p.status === 'missing') && <p className="text-sm">Some plugins this setup uses are not installed yet: see below.</p>}
             <details>
@@ -292,7 +306,7 @@ export function ImportPage({ installs, preselect, openPath, refresh }: { install
                 </Field>
               ))}
               {!bundle?.repoDir && !existing && <Choice checked={keepPreset} onChange={setKeepPreset} title="Keep this as a preset on this computer" help={m.repository?.url ? 'Recommended. It stays linked to its online copy, so you can get updates later.' : 'Recommended. You can then load it again, update it and back it up.'} />}
-              {secretVars.length > 0 && <Choice checked={remember} onChange={setRemember} title="Remember my stream keys on this computer" help="Kept encrypted by your system's keychain. Nothing is written if your system has none." />}
+              {secretVars.length > 0 && <Choice checked={remember} onChange={setRemember} title="Remember my stream keys on this computer" help="Kept inside the preset on this computer, never uploaded. Nothing is kept if you untick this." />}
             </Step>
           )}
 

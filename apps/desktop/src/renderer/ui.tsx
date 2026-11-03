@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react'
+import { Icon, type IconName } from './components/Icon'
 
-export function Page({ title, intro, children }: { title: string; intro?: ReactNode; children: ReactNode }) {
+export function Page({ title, intro, children, wide, icon }: { title: string; intro?: ReactNode; children: ReactNode; wide?: boolean; icon?: IconName }) {
   return (
-    <div className="bt-page mx-auto max-w-3xl p-6 space-y-5">
+    <div className={'bt-page mx-auto p-6 space-y-5 ' + (wide ? 'max-w-6xl' : 'max-w-3xl')}>
       <header>
-        <h1 className="text-2xl font-bold">{title}</h1>
+        <h1 className="text-2xl font-bold flex items-center gap-2">{icon && <Icon name={icon} size={24} className="text-muted" />}{title}</h1>
         {intro && <p className="text-muted mt-1">{intro}</p>}
       </header>
       {children}
@@ -39,19 +40,20 @@ export function Step({ n, title, help, children }: { n: number; title: string; h
   )
 }
 
-export function Chip({ children, tone }: { children: ReactNode; tone?: 'good' | 'warn' | 'bad' }) {
+export function Chip({ children, tone, icon }: { children: ReactNode; tone?: 'good' | 'warn' | 'bad'; icon?: IconName }) {
   const color = tone ? { color: `hsl(var(--${tone}))` } : undefined
-  return <span className="chip text-xs px-2 py-0.5" style={color}>{children}</span>
+  return <span className="chip text-xs px-2 py-0.5 inline-flex items-center gap-1" style={color}>{icon && <Icon name={icon} size={12} />}{children}</span>
 }
 
 export function Message({ tone, children }: { tone: 'good' | 'warn' | 'bad'; children: ReactNode }) {
+  const icon: IconName = tone === 'good' ? 'checkCircle' : 'alert'
   // A tinted background and a thick coloured edge: a theme can restyle borders, and a warning must still stand out.
   return (
     <div
       className="card p-3 pl-4 text-sm" role={tone === 'bad' ? 'alert' : 'status'}
       style={{ backgroundColor: `hsl(var(--${tone}) / 0.12)`, boxShadow: `inset 5px 0 0 hsl(var(--${tone}))` }}
     >
-      {children}
+      <div className="flex gap-2 items-start"><Icon name={icon} size={16} className="mt-0.5" style={{ color: `hsl(var(--${tone}))` }} /><div className="min-w-0 flex-1">{children}</div></div>
     </div>
   )
 }
@@ -95,4 +97,33 @@ export const plural = (n: number, one: string, many = one + 's') => `${n} ${n ==
 export const KIND_LABEL: Record<string, string> = {
   windows: 'installed OBS', 'windows-portable': 'OBS in a folder', macos: 'installed OBS',
   'linux-native': 'installed OBS', flatpak: 'Flatpak OBS', snap: 'Snap OBS', 'linux-portable': 'OBS in a folder', instance: 'separate OBS',
+}
+
+/** A button that is only a picture (with its words for screen readers and as a tooltip). */
+export function IconButton({ icon, label, onClick, disabled, active, className, kind }: {
+  icon: IconName; label: string; onClick: () => void; disabled?: boolean; active?: boolean; className?: string; kind?: 'local' | 'cloud' | 'file'
+}) {
+  return (
+    <button
+      type="button" className={`btn kind-btn ${kind ? 'kind-' + kind : ''} ${active ? 'is-on' : ''} p-1.5 inline-flex items-center justify-center ${className ?? ''}`}
+      aria-label={label} title={label} aria-pressed={active} disabled={disabled} onClick={onClick}
+    >
+      <Icon name={icon} size={16} />
+    </button>
+  )
+}
+
+/** A coloured block for one of the three ways a preset is saved. */
+export function KindPanel({ kind, icon, title, children, right }: { kind: 'local' | 'cloud' | 'file'; icon: IconName; title: string; children: ReactNode; right?: ReactNode }) {
+  return (
+    <div className={`kind-panel kind-${kind} p-3 space-y-1.5`} role="group" aria-label={title}>
+      <div className="flex items-center gap-2">
+        <Icon name={icon} size={15} className="kind-text" />
+        <span className="text-xs font-semibold uppercase tracking-wide kind-text">{title}</span>
+        <span className="flex-1" />
+        {right}
+      </div>
+      {children}
+    </div>
+  )
 }

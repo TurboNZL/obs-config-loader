@@ -1,4 +1,4 @@
-import type { OnlineComparison, ImportReport, ObsInstall, Manifest, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed, GithubRepo, GitInstallHelp, InstanceSupport } from '@obs-config-loader/core'
+import type { ChangeDetail, OnlineComparison, ImportReport, ObsInstall, Manifest, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed, GithubRepo, GitInstallHelp, InstanceSupport } from '@obs-config-loader/core'
 
 /** What the renderer may ask of the main process. One place, so both sides agree. */
 export interface InstallInfo extends ObsInstall {
@@ -73,7 +73,7 @@ export interface RepoInfo {
   name: string
   /** Address of `origin`, if any. */
   remoteUrl?: string
-  /** OBS install this repo is saved from / applied to on this computer. */
+  /** The OBS this preset is linked to on this computer (saved from, applied to). Not set: the preset is on its own. */
   installId?: string
   status: RepoStatus
   /** What it is called online, and a link when it is on github.com. */
@@ -92,7 +92,7 @@ export interface GithubState { connected: boolean; login?: string; /** Token is 
 export type Done<T> = ({ ok: true } & T) | { ok: false; error: string; cancelled?: boolean }
 
 /** Extra facts about a save that went through. */
-export interface SaveExtras { keysRemembered?: number; upload?: 'uploaded' | 'failed'; uploadError?: string }
+export interface SaveExtras { keysRemembered?: number; copied?: number; upload?: 'uploaded' | 'failed'; uploadError?: string }
 export type SaveResult =
   | ({ status: 'unchanged' } & SaveExtras)
   | ({ status: 'committed'; files: string[]; commit: string; merged: boolean } & SaveExtras)
@@ -104,6 +104,32 @@ export type SaveConflictChoice = 'abort' | 'keep-repo' | 'keep-obs'
 export type PullConflictChoice = 'abort' | 'keep-mine' | 'keep-theirs'
 
 export interface AppSettings { presetsRoot: string; defaultPresetsRoot: string; isDefault: boolean; rememberKeys: boolean; canStoreKeys: boolean }
+/** Where each part of a preset lives: always on this computer; on GitHub when `cloud`. */
+export interface PresetOverview {
+  layouts: { id: string; name: string; scenes: number; sources: number; local: boolean; cloud: boolean }[]
+  outputs: { id: string; name: string; local: boolean; cloud: boolean }[]
+  files: { id: string; filename: string; size: number; available: boolean; haveCopy: boolean; keepCopy: boolean; cloud: boolean; tooBigForGithub: boolean }[]
+  scripts: { names: string[]; local: boolean; cloud: boolean }
+  remoteControl: { present: boolean; local: boolean; cloud: boolean }
+  keys: { count: number; keep: boolean }
+  /** Words for what exists only on this computer. */
+  onlyHere: string[]
+  sizeBytes: number
+  maxUploadBytes: number
+}
+export interface StoragePatch {
+  /** `layouts` / `outputs`: ids that are NOT uploaded. `media`: ids of files that ARE uploaded. */
+  cloud?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean; media?: string[] }
+  keepKeys?: boolean
+  /** Files (ids) that are not copied into the preset. */
+  skipLocalMedia?: string[]
+}
+export interface ExtrasInfo { files: string[]; media: { id: string; filename: string; size: number }[]; keys: number }
+export type ImportedFile =
+  | { kind: 'preset'; repo: RepoInfo; keys: number; files: number; online: boolean; /** The latest version was downloaded from where the file says it lives. */ latest: boolean }
+  | { kind: 'existing'; repo: RepoInfo; name: string }
+  | { kind: 'extras'; repo: RepoInfo; applied: { files: number; media: number; keys: number } }
+
 export interface TranslationRow {
   from: string
   name: string
@@ -123,7 +149,7 @@ export interface RenameRequest { path: string; installId?: string; kind: 'preset
 
 export interface Locations { assets: Record<string, string>; variables: Record<string, string> }
 
-export type { OnlineComparison, ImportReport, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed, GithubRepo, GitInstallHelp }
+export type { ChangeDetail, OnlineComparison, ImportReport, ConflictMode, PluginFinding, RepoStatus, LogEntry, PullResult, PushResult, AssetNeed, GithubRepo, GitInstallHelp }
 
 export interface Api {
   platform: 'win32' | 'darwin' | 'linux'
@@ -178,17 +204,18 @@ export interface Api {
     suggestFolder(name: string): Promise<string>
     addExisting(): Promise<Done<{ repo: RepoInfo }>>
     clone(url: string, folder: string): Promise<Done<{ repo: RepoInfo }>>
-    create(r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude'] }): Promise<Done<{ repo: RepoInfo; published?: string; remoteUrl?: string }>>
+    create(r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude']; link?: boolean; cloudSkip?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean } }): Promise<Done<{ repo: RepoInfo; published?: string; remoteUrl?: string }>>
     /** Ask the online copy what is new (so counts are true), then the preset's current state. */
     check(path: string): Promise<{ ok: boolean; message?: string; repo: RepoInfo }>
     fromBundle(handle: string, folder: string, installId?: string): Promise<Done<{ repo: RepoInfo }>>
     remove(path: string): Promise<void>
-    setInstall(path: string, installId: string): Promise<void>
+    /** Link the preset to an OBS on this computer, or (null) unlink it: the preset stays exactly as it is. */
+    setInstall(path: string, installId: string | null): Promise<void>
     setRemote(path: string, url: string): Promise<Done<object>>
     publish(path: string, name: string, priv: boolean): Promise<Done<{ url: string; pushed: boolean }>>
     /** What OBS has changed since the last save (dry run). */
     /** `changed`: what OBS has that the preset does not. `pending`: what the preset has that this OBS does not (null: not known yet). */
-    live(path: string, installId: string): Promise<{ changed: string[]; pending?: string[] | null } | { error: string }>
+    live(path: string, installId: string): Promise<{ changed: string[]; details?: ChangeDetail[]; pending?: string[] | null } | { error: string }>
     save(path: string, installId: string, commitDirtyFirst: boolean, onConflict?: SaveConflictChoice): Promise<SaveResult>
     pull(path: string, onConflict?: PullConflictChoice): Promise<PullResult>
     /** `force`: replace the online copy with this one (refused if someone pushed since we last looked). */
@@ -210,8 +237,16 @@ export interface Api {
   presets: {
     details(path: string): Promise<PresetDetails>
     keys(path: string): Promise<{ count: number; canStore: boolean }>
-    exportFile(path: string, includeKeys: boolean, alsoBundle?: string[]): Promise<Done<{ path: string; keys: number; missingMedia: string[] }>>
+    /** A setup file (.obsbundle) from a preset. `independent`: whoever opens it gets a preset of their own, with their own GitHub copy. */
+    exportFile(path: string, o: { includeKeys: boolean; bigFiles: string[]; independent: boolean }): Promise<Done<{ path: string; keys: number; missingMedia: string[]; independent: boolean }>>
     scanFile(path: string): Promise<FileChoice[]>
+    /** What only this computer has of the preset (not on GitHub), as a companion file (.obsextras). */
+    extrasInfo(path: string): Promise<ExtrasInfo>
+    exportExtras(path: string, o: { includeKeys: boolean; mediaIds: string[] }): Promise<Done<{ path: string; files: number; media: number; keys: number; bytes: number }>>
+    /** Make a preset from a setup file, or put an extras file into its preset. Without a path, asks for the file. */
+    importFile(path?: string): Promise<Done<ImportedFile>>
+    overview(path: string): Promise<PresetOverview>
+    setStorage(path: string, patch: StoragePatch): Promise<Done<{ changed: boolean; pushed: boolean }>>
     setExclude(path: string, exclude: NonNullable<ExportRequest['exclude']>): Promise<Done<object>>
     setOverrides(path: string, overrides: Record<string, Record<string, string | null>>): Promise<Done<object>>
     move(path: string, parentFolder: string): Promise<Done<{ repo: RepoInfo }>>

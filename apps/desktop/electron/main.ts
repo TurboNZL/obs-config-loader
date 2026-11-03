@@ -9,11 +9,27 @@ import {
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
   assetBundlePath, attachSecrets, commitAll, fetchRepo, githubRenameRepo, githubRepoName, parseGithubUrl, pendingForObs, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
   renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, renameSourceInObs, RenameError,
+  applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
+  readLocalKeys, readLocalSettings, writeLocalKeys, writeLocalSettings, cloudSkippedPaths, writeExclude, LOCAL_DIR, EXTRAS_EXT, type LocalSettings,
 } from '@obs-config-loader/core'
 import { Updates } from './updater'
-import type { BundleSummary, ExportRequest, ExportResult, GithubState, ImportRequest, InstallInfo, Locations, RepoInfo } from './api'
+import type { BundleSummary, ExportRequest, ExportResult, GithubState, ImportRequest, InstallInfo, Locations, PresetOverview, RepoInfo } from './api'
 
 const host = realHost()
+/** "12 MB", for words shown to a person. */
+function humanSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`
+  if (bytes < 1048576) return `${Math.round(bytes / 1024)} KB`
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0)} MB`
+  return `${(bytes / 1073741824).toFixed(1)} GB`
+}
+/** The scripts that live in a folder with their other files, named by what they are and how many files come with them. */
+function scriptFolderNames(m: Bundle['manifest']): string[] {
+  return (m.projects ?? []).map((pr) => {
+    const v = m.variables.find((x) => x.name === pr.variable)
+    return `${v?.mustContain?.[0] ?? pr.files[0]}${pr.files.length > 1 ? ` (+${pr.files.length - 1} file${pr.files.length === 2 ? '' : 's'} beside it)` : ''}`
+  })
+}
 /** Versions are asked for on every refresh of a summary; reading them once a minute per OBS is plenty. */
 const versionsCache = new Map<string, { at: number; v: ReturnType<typeof detectVersions> }>()
 function versionsOf(i: ObsInstall) {
@@ -154,11 +170,27 @@ function rememberGithub(p: string, fullName: string) {
   if (hit) hit.github = fullName; else s.repos.push({ path: p, github: fullName })
   saveSettings(s)
 }
-function rememberRepo(p: string, installId?: string) {
+/** `installId`: link the preset to this OBS; `null`: unlink it (the preset stays exactly as it is); left out: keep the link as it is. */
+function rememberRepo(p: string, installId?: string | null) {
   const s = loadSettings()
   const hit = s.repos.find((r) => r.path === p)
-  if (hit) { if (installId) hit.installId = installId } else s.repos.push({ path: p, installId })
+  if (hit) { if (installId) hit.installId = installId; else if (installId === null) delete hit.installId } else s.repos.push({ path: p, ...(installId ? { installId } : {}) })
   saveSettings(s)
+}
+/** A preset this computer already has for the same setup (same id), if any. */
+function presetFor(id: string): RepoEntry | undefined {
+  return loadSettings().repos.find((r) => {
+    try { return fs.existsSync(r.path) && readBundleDir(r.path, { keepMissing: true }).manifest.id === id } catch { return false }
+  })
+}
+/** Where this computer has each file of a setup: what was remembered, then the preset's own copies. */
+function locationsFor(id: string): Locations {
+  const cur = readLocations()[id] ?? { assets: {}, variables: {} }
+  const hit = presetFor(id)
+  if (!hit) return cur
+  let own: Record<string, string> = {}
+  try { own = localMediaLocations(hit.path, readBundleDir(hit.path).manifest) } catch { /* not readable: nothing to add */ }
+  return { ...cur, assets: { ...own, ...Object.fromEntries(Object.entries(cur.assets).filter(([, f]) => fs.existsSync(f))) } }
 }
 
 async function cloneRepoWith(url: string, folder: string) { await cloneRepo(url, folder, gitRunner()) }
@@ -182,12 +214,14 @@ const gitMissing = 'Git is not installed. Open the Git repositories page: it can
 const errText = (e: unknown) => redact((e as Error).message, loadGithubToken())
 
 /** A folder name for a new repository under Documents, never one that already has something in it. */
-/** The app's own folder for presets: ~/Documents/OBS Config Loader/Presets unless the person chose another. */
+/**
+ * The app's own folder for presets, in the place each system keeps an app's own data (not Documents):
+ * Linux ~/.local/share/obs-config-loader/presets, Windows %LOCALAPPDATA%\OBS Config Loader\Presets, macOS ~/Library/Application Support/OBS Config Loader/Presets.
+ */
 function defaultPresetsRoot(): string {
-  // Some systems report the home folder itself as "Documents" (no desktop folder settings): use ~/Documents then.
-  let docs = app.getPath('documents')
-  if (path.resolve(docs) === path.resolve(app.getPath('home'))) docs = path.join(docs, 'Documents')
-  return path.join(docs, 'OBS Config Loader', 'Presets')
+  if (process.platform === 'linux') return path.join(process.env.XDG_DATA_HOME || path.join(app.getPath('home'), '.local', 'share'), 'obs-config-loader', 'presets')
+  if (process.platform === 'win32') return path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'OBS Config Loader', 'Presets')
+  return path.join(app.getPath('appData'), 'OBS Config Loader', 'Presets')
 }
 const presetsRoot = () => loadSettings().presetsRoot || defaultPresetsRoot()
 
@@ -221,18 +255,15 @@ function writeSecrets(all: Record<string, Record<string, string>>): boolean {
   return true
 }
 
-/** After a save: keep this OBS's stream keys on this computer (encrypted), so a preset can be loaded or exported with them later. */
-function rememberKeysFrom(install: ObsInstall, presetPath: string): number {
-  if (loadSettings().rememberKeys === false || !safeStorage.isEncryptionAvailable()) return 0
+/** New presets keep stream keys inside themselves (on this computer only) unless the person turned that off in Settings. */
+const keepKeysDefault = () => loadSettings().rememberKeys !== false
+/** Older versions remembered keys in the system keychain, per setup id. A preset that has none of its own picks them up once. */
+function adoptLegacyKeys(presetPath: string): void {
   try {
-    const live = exportBundle({ host, install, name: 'keys', includeSecrets: true, bundleBelowBytes: 0 })
-    const values = Object.fromEntries(live.manifest.variables.filter((v) => v.kind === 'secret' && v.value).map((v) => [v.name, v.value!]))
-    if (!Object.keys(values).length) return 0
-    const id = readBundleDir(presetPath).manifest.id
-    const all = readSecrets()
-    all[id] = { ...(all[id] ?? {}), ...values }
-    return writeSecrets(all) ? Object.keys(values).length : 0
-  } catch { return 0 }
+    if (Object.keys(readLocalKeys(presetPath)).length) return
+    const old = readSecrets()[readBundleDir(presetPath, { keepMissing: true }).manifest.id]
+    if (old && Object.keys(old).length) writeLocalKeys(presetPath, old)
+  } catch { /* nothing to adopt */ }
 }
 
 // ── updates (electron-updater from the project's GitHub releases) ──
@@ -450,7 +481,7 @@ function registerIpc() {
     const s = loadSettings(); s.repos = s.repos.filter((r) => r.path !== p); saveSettings(s)
   })
   ipcMain.handle('repos:openFolder', async (_e, p: string) => { await shell.openPath(p) })
-  ipcMain.handle('repos:setInstall', (_e, p: string, installId: string) => rememberRepo(p, installId))
+  ipcMain.handle('repos:setInstall', (_e, p: string, installId: string | null) => rememberRepo(p, installId))
 
   ipcMain.handle('repos:addExisting', async () => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
@@ -474,7 +505,7 @@ function registerIpc() {
     return { ok: true, repo: await repoInfo({ path: folder }) }
   })
 
-  ipcMain.handle('repos:create', async (_e, r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude'] }) => {
+  ipcMain.handle('repos:create', async (_e, r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude']; link?: boolean; cloudSkip?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean } }) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     if (!emptyOrMissing(r.folder)) return { ok: false, error: 'That folder is not empty. Choose another one.' }
     try {
@@ -482,11 +513,14 @@ function registerIpc() {
       await initRepo(r.folder, git)
       const inst = findInstall(r.installId)
       const seen: { id: string; filename: string; path: string }[] = []
-      const res = await captureLive({ host, install: inst, dir: r.folder, name: r.name, appVersion: app.getVersion(), versions: detectVersions(inst, host), exclude: r.exclude, onAsset: (a) => seen.push(a), git })
+      // what is not uploaded is chosen before the first save, so it never goes up even once (names here, ids as OBS files are named)
+      if (r.cloudSkip && (r.cloudSkip.layouts?.length || r.cloudSkip.outputs?.length || r.cloudSkip.scripts || r.cloudSkip.remoteControl)) {
+        writeLocalSettings(r.folder, { cloud: { skip: { ...r.cloudSkip, layouts: (r.cloudSkip.layouts ?? []).map((n) => slug(n)), outputs: (r.cloudSkip.outputs ?? []).map((n) => slug(n)) } } })
+      }
+      const res = await captureLive({ host, install: inst, dir: r.folder, name: r.name, appVersion: app.getVersion(), versions: detectVersions(inst, host), exclude: r.exclude, onAsset: (a) => seen.push(a), keepKeysDefault: keepKeysDefault(), git })
       if (res.status === 'error') return { ok: false, error: res.message }
-      rememberKeysFrom(inst, r.folder)
       rememberAssets(r.folder, seen)
-      rememberRepo(r.folder, r.installId)
+      rememberRepo(r.folder, r.link === false ? undefined : r.installId)
       let published: string | undefined
       if (r.github) {
         const t = loadGithubToken()
@@ -498,31 +532,74 @@ function registerIpc() {
           if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but pushing failed: ${out.push.message}` }
         } catch (e) { return { ok: false, error: `The repository was created on this computer, but not on GitHub: ${errText(e)}` } }
       }
-      const info = await repoInfo({ path: r.folder, installId: r.installId })
+      const info = await repoInfo({ path: r.folder, ...(r.link === false ? {} : { installId: r.installId }) })
       return { ok: true, repo: info, published, remoteUrl: info.remoteUrl ? publicRemoteUrl(info.remoteUrl) : undefined }
     } catch (e) { return { ok: false, error: errText(e) } }
   })
 
-  ipcMain.handle('repos:fromBundle', async (_e, handle: string, folder: string, installId?: string) => {
-    if (!(await hasGit())) return { ok: false, error: gitMissing }
-    const b = bundles.get(handle)
-    if (!b) return { ok: false, error: 'That bundle is no longer open. Open it again.' }
+  /**
+   * Make a preset out of an opened setup file: its stream keys and files go into the preset's own area, never into git.
+   * A file that knows where its preset lives online (`latest`) gets the latest version from there first; if that cannot be reached,
+   * the preset is made from the file and pointed at that address, so "Get updates" can combine them later.
+   */
+  const presetFromBundle = async (b: Bundle & { source?: string }, folder: string, installId?: string, latest = false) => {
     // the address is how the file finds its preset; inside the preset folder it is the remote instead
     const url = b.manifest.repository?.url
     const { repository: _r, ...manifest } = b.manifest
     void _r
-    try { await createRepoFromBundle(folder, { ...b, manifest: manifest as typeof b.manifest }, gitRunner()) } catch (e) { return { ok: false, error: errText(e) } }
-    if (url) { try { await setRemote(folder, url, gitRunner()) } catch { /* the preset still works without it */ } }
+    const copy: Bundle = { manifest: { ...manifest, variables: manifest.variables.map((v) => ({ ...v })) } as Bundle['manifest'], files: new Map(b.files) }
+    const secrets = b.manifest.containsSecrets === true ? stripSecrets(copy) : {}
+    let fromOnline = false
+    if (latest && url) {
+      try { await cloneRepoWith(url, folder); fromOnline = true } catch { fs.rmSync(folder, { recursive: true, force: true }) }
+    }
+    if (!fromOnline) {
+      await createRepoFromBundle(folder, copy, gitRunner())
+      if (url) { try { await setRemote(folder, url, gitRunner()) } catch { /* the preset still works without it */ } }
+    }
+    const kept = keepBundleLocals(folder, copy, secrets)
     rememberRepo(folder, installId)
     // the folder holds exactly what was just loaded into OBS: later changes are measured from here
     if (installId) { try { await markSynced(folder, findInstall(installId), gitRunner()) } catch { /* not worth failing for */ } }
-    return { ok: true, repo: await repoInfo({ path: folder, installId }) }
+    return { kept, url, fromOnline }
+  }
+  ipcMain.handle('repos:fromBundle', async (_e, handle: string, folder: string, installId?: string) => {
+    if (!(await hasGit())) return { ok: false, error: gitMissing }
+    const b = bundles.get(handle)
+    if (!b) return { ok: false, error: 'That bundle is no longer open. Open it again.' }
+    try { await presetFromBundle(b, folder, installId) } catch (e) { return { ok: false, error: errText(e) } }
+    return { ok: true, repo: await repoInfo({ path: folder, ...(installId ? { installId } : {}) }) }
   })
 
-  /** A preset this computer already has for the same setup (same id), if any. */
-  const presetFor = (id: string): RepoEntry | undefined => loadSettings().repos.find((r) => {
-    try { return fs.existsSync(r.path) && readBundleDir(r.path).manifest.id === id } catch { return false }
+  /** "Import a file": a setup file becomes a preset in the presets folder; an extras file goes into the preset it belongs with. */
+  ipcMain.handle('presets:importFile', async (_e, file?: string) => {
+    if (!(await hasGit())) return { ok: false, error: gitMissing }
+    let p = file
+    if (!p) {
+      const r = await dialog.showOpenDialog({
+        title: 'Import a setup file', properties: ['openFile'],
+        filters: [{ name: 'OBS setup file', extensions: ['obsbundle', 'zip', EXTRAS_EXT] }],
+      })
+      if (r.canceled || !r.filePaths[0]) return { ok: false, cancelled: true, error: '' }
+      p = r.filePaths[0]
+    }
+    try {
+      if (p.toLowerCase().endsWith('.' + EXTRAS_EXT)) {
+        const x = await readExtras(p)
+        const hit = presetFor(x.manifest.presetId)
+        if (!hit) return { ok: false, error: `This extras file belongs with a preset called “${x.manifest.presetName}”, which is not on this computer. Download that preset from GitHub first, then import this file again.` }
+        const done = await applyExtras(hit.path, x)
+        return { ok: true, kind: 'extras' as const, repo: await repoInfo(hit), applied: done }
+      }
+      const b = await readBundle(p)
+      const have = presetFor(b.manifest.id)
+      if (have) return { ok: true, kind: 'existing' as const, repo: await repoInfo(have), name: b.manifest.name }
+      const folder = suggestFolder(b.manifest.name)
+      const made = await presetFromBundle(b, folder, undefined, true)
+      return { ok: true, kind: 'preset' as const, repo: await repoInfo({ path: folder }), keys: made.kept.keys, files: made.kept.media, online: !!made.url, latest: made.fromOnline }
+    } catch (e) { return { ok: false, error: errText(e) } }
   })
+
   ipcMain.handle('bundle:existing', async (_e, handle: string) => {
     const b = bundles.get(handle)
     const hit = b && presetFor(b.manifest.id)
@@ -582,22 +659,22 @@ function registerIpc() {
 
   ipcMain.handle('repos:live', async (_e, p: string, installId: string) => {
     const inst = findInstall(installId)
-    const r = await captureLive({ host, install: inst, dir: p, dryRun: true, git: gitRunner() })
+    const r = await captureLive({ host, install: inst, dir: p, dryRun: true, withDiff: true, keepKeysDefault: keepKeysDefault(), git: gitRunner() })
     if (r.status === 'error') return { error: r.message }
     // and the other direction: what the preset has that this OBS has not got yet (typically after getting updates)
-    return { changed: r.status === 'changes' ? r.files : [], pending: await pendingForObs(p, inst, gitRunner()) }
+    return { changed: r.status === 'changes' ? r.files : [], details: r.status === 'changes' ? r.details : undefined, pending: await pendingForObs(p, inst, gitRunner()) }
   })
   ipcMain.handle('repos:save', async (_e, p: string, installId: string, commitDirtyFirst: boolean, onConflict?: 'abort' | 'keep-repo' | 'keep-obs') => {
     const inst = findInstall(installId)
     const seen: { id: string; filename: string; path: string }[] = []
     const r = await captureLive({
       host, install: inst, dir: p, onDirty: commitDirtyFirst ? 'commit-first' : 'refuse', onConflict,
-      appVersion: app.getVersion(), versions: detectVersions(inst, host), onAsset: (a) => seen.push(a), git: gitRunner(),
+      appVersion: app.getVersion(), versions: detectVersions(inst, host), onAsset: (a) => seen.push(a), keepKeysDefault: keepKeysDefault(), git: gitRunner(),
     })
     rememberAssets(p, seen)
     if (r.status === 'changes') return { status: 'unchanged' }
     if (r.status === 'committed' || r.status === 'unchanged') {
-      const keys = rememberKeysFrom(inst, p)
+      const keys = r.status === 'committed' ? r.keys ?? 0 : 0
       // a preset that is backed up online is kept up to date: upload right after saving (a failure is reported, not hidden)
       let upload: 'uploaded' | 'failed' | undefined
       let uploadError: string | undefined
@@ -630,12 +707,11 @@ function registerIpc() {
   ipcMain.handle('repos:needs', async (_e, p: string) => {
     const m = readBundleDir(p).manifest
     const all = readLocations()
-    const cur = all[m.id] ?? { assets: {}, variables: {} }
+    const cur = locationsFor(m.id)
     // files that came with a setup file are already here (in OBS's own folder): do not ask for them
     const here = locateExtracted(m, allInstalls().map((i) => i.configDir))
-    let changed = false
-    for (const [id, f] of Object.entries(here)) if (!cur.assets[id] || !fs.existsSync(cur.assets[id])) { cur.assets[id] = f; changed = true }
-    if (changed) { all[m.id] = cur; writeLocations(all) }
+    for (const [id, f] of Object.entries(here)) if (!cur.assets[id] || !fs.existsSync(cur.assets[id])) cur.assets[id] = f
+    all[m.id] = cur; writeLocations(all)
     return assetNeeds(m, cur.assets)
   })
   ipcMain.handle('repos:setAsset', (_e, p: string, assetId: string, file: string) => {
@@ -646,7 +722,7 @@ function registerIpc() {
     all[m.id] = cur
     writeLocations(all)
   })
-  ipcMain.handle('locations:load', (_e, id: string) => readLocations()[id] ?? { assets: {}, variables: {} })
+  ipcMain.handle('locations:load', (_e, id: string) => locationsFor(id))
   ipcMain.handle('locations:save', (_e, id: string, l: Locations) => {
     // merged, never replaced: what import and save learned about where the files are must not be wiped by a screen that knows less
     const all = readLocations(); const cur = all[id] ?? { assets: {}, variables: {} }
@@ -661,8 +737,15 @@ function registerIpc() {
 
   ipcMain.handle('files:reveal', (_e, p: string) => { shell.showItemInFolder(p) })
 
-  ipcMain.handle('secrets:load', (_e, id: string) => readSecrets()[id] ?? {})
+  // answers typed when loading a setup: kept in the preset made from it (this computer only); the keychain is only for setups with no preset
+  ipcMain.handle('secrets:load', (_e, id: string) => {
+    const hit = presetFor(id)
+    if (hit) adoptLegacyKeys(hit.path)
+    return { ...readSecrets()[id], ...(hit ? readLocalKeys(hit.path) : {}) }
+  })
   ipcMain.handle('secrets:save', (_e, id: string, values: Record<string, string>) => {
+    const hit = presetFor(id)
+    if (hit && readLocalSettings(hit.path).keepKeys !== false && keepKeysDefault()) { writeLocalKeys(hit.path, values); return true }
     const all = readSecrets()
     all[id] = values
     return writeSecrets(all)
@@ -673,7 +756,7 @@ function registerIpc() {
     const s = loadSettings()
     return {
       presetsRoot: presetsRoot(), defaultPresetsRoot: defaultPresetsRoot(), isDefault: !s.presetsRoot,
-      rememberKeys: s.rememberKeys !== false, canStoreKeys: safeStorage.isEncryptionAvailable(),
+      rememberKeys: s.rememberKeys !== false, canStoreKeys: true,
     }
   })
   ipcMain.handle('settings:setPresetsRoot', (_e, p: string | null) => {
@@ -683,12 +766,12 @@ function registerIpc() {
   })
   ipcMain.handle('settings:setRememberKeys', (_e, on: boolean) => {
     const s = loadSettings(); s.rememberKeys = on === true; saveSettings(s)
-    if (!on) writeSecretsClear()
   })
 
   // ── presets (a preset is one of the saved setup folders) ──
   ipcMain.handle('presets:keys', (_e, p: string) => {
-    try { return { count: Object.keys(readSecrets()[readBundleDir(p).manifest.id] ?? {}).length, canStore: safeStorage.isEncryptionAvailable() } } catch { return { count: 0, canStore: safeStorage.isEncryptionAvailable() } }
+    adoptLegacyKeys(p)
+    return { count: Object.keys(readLocalKeys(p)).length, canStore: true }
   })
   ipcMain.handle('presets:details', (_e, p: string) => {
     const b = readBundleDir(p)
@@ -699,7 +782,7 @@ function registerIpc() {
     return {
       savedWithObs: m.savedWithObs as string | undefined,
       plugins: m.plugins.map((x) => ({ name: x.name, version: x.version, known: !x.id.startsWith('unknown:') })),
-      scripts: m.assets.filter((a) => a.role === 'script').map((a) => a.filename),
+      scripts: [...m.assets.filter((a) => a.role === 'script').map((a) => a.filename), ...scriptFolderNames(m)],
       remoteControl: b.files.has(WEBSOCKET_FILE),
       layouts: m.collections.map((c) => ({ id: c.id, name: c.name, ...listNames(p, c.id) })),
       outputs: m.profiles.map((x) => ({ id: x.id, name: x.name })),
@@ -726,7 +809,7 @@ function registerIpc() {
     const git = gitRunner()
     const st = await repoStatus(p, git)
     if (st.dirtyFiles.length) return { ok: false as const, error: 'This preset has changes that are not saved yet. Save them first.' }
-    const m = readBundleDir(p).manifest
+    const m = readBundleDir(p, { keepMissing: true }).manifest
     change(m)
     fs.writeFileSync(path.join(p, 'manifest.json'), serializeManifest(m))
     await commitAll(p, message, git)
@@ -767,45 +850,133 @@ function registerIpc() {
     const b = exportBundle({ host, install: findInstall(installId), name: 'scan', bundleBelowBytes: 0 })
     return {
       files: b.manifest.assets.filter((a) => a.role !== 'script').map((a) => ({ id: a.id, filename: a.filename, size: a.size ?? 0, available: a.size !== undefined, auto: (a.size ?? 0) <= SMALL_FILE })),
-      scripts: b.manifest.assets.filter((a) => a.role === 'script').map((a) => a.filename),
+      scripts: [...b.manifest.assets.filter((a) => a.role === 'script').map((a) => a.filename), ...scriptFolderNames(b.manifest)],
       remoteControl: b.files.has(WEBSOCKET_FILE),
       keys: b.manifest.variables.filter((v) => v.kind === 'secret').map((v) => v.label ?? v.name),
     }
   })
-  ipcMain.handle('presets:scanFile', (_e, p: string) => {
-    const m = readBundleDir(p).manifest
-    const locs = readLocations()[m.id]?.assets ?? {}
-    return m.assets.filter((a) => a.role !== 'script' && a.mode === 'external').map((a) => {
-      const f = locs[a.id]
-      const ok = !!f && fs.existsSync(f)
-      const size = ok ? fs.statSync(f).size : a.size ?? 0
-      return { id: a.id, filename: a.filename, size, available: ok, auto: ok && size <= SMALL_FILE }
-    })
-  })
-  ipcMain.handle('presets:exportFile', async (_e, p: string, includeKeys: boolean, alsoBundle: string[] = []) => {
+  ipcMain.handle('presets:scanFile', (_e, p: string) => presetFiles(p, locationsFor(readBundleDir(p).manifest.id).assets))
+
+  /** A setup file made from a preset: everything it holds, the big files that were chosen, the keys only when asked. */
+  ipcMain.handle('presets:exportFile', async (_e, p: string, o: { includeKeys: boolean; bigFiles: string[]; independent: boolean }) => {
     try {
-      const b = readBundleDir(p)
-      // bring back the files this computer knows about: small ones always, big ones only when chosen
-      const locs = readLocations()[b.manifest.id]?.assets ?? {}
-      for (const a of b.manifest.assets) {
-        const f = locs[a.id]
-        if (a.mode === 'external' && f && fs.existsSync(f) && (fs.statSync(f).size <= SMALL_FILE || alsoBundle.includes(a.id))) {
-          a.mode = 'bundled'; b.files.set(assetBundlePath(a), fs.readFileSync(f))
-        }
-      }
-      // a file made from a preset that is backed up online knows where: opening it anywhere can fetch the latest version
+      const m = readBundleDir(p).manifest
       const remote = (await repoStatus(p, gitRunner())).remote ? await getRemoteUrl(p, gitRunner()) : undefined
-      if (remote) b.manifest.repository = { url: publicRemoteUrl(remote) }
-      const kept = includeKeys ? attachSecrets(b, readSecrets()[b.manifest.id] ?? {}) : 0
+      const built = buildPresetFile({
+        dir: p, includeKeys: o.includeKeys, bigFiles: o.bigFiles, independent: o.independent, locations: locationsFor(m.id).assets,
+        repository: remote && !o.independent ? publicRemoteUrl(remote) : undefined,
+      })
+      const b = built.bundle
       const mark = b.manifest.containsSecrets ? ' (CONTAINS STREAM KEYS)' : ''
       const d = await dialog.showSaveDialog({
-        title: 'Save your setup to a file', defaultPath: `${b.manifest.name.replace(/[\\/:*?"<>|]/g, '_')}${mark}.obsbundle`,
-        filters: [{ name: 'OBS config bundle', extensions: ['obsbundle'] }],
+        title: 'Export this preset to a file', defaultPath: `${b.manifest.name.replace(/[\\/:*?"<>|]/g, '_')}${mark}.obsbundle`,
+        filters: [{ name: 'OBS setup file', extensions: ['obsbundle'] }],
       })
       if (d.canceled || !d.filePath) return { ok: false, cancelled: true, error: '' }
       fs.writeFileSync(d.filePath, await writeBundleZip(b))
-      return { ok: true, path: d.filePath, keys: kept, missingMedia: b.manifest.assets.filter((a) => a.mode === 'external').map((a) => a.filename) }
+      return { ok: true, path: d.filePath, keys: built.keys, missingMedia: built.missingMedia, independent: o.independent }
     } catch (e) { return { ok: false, error: (e as Error).message } }
+  })
+
+  /** What the companion file of a preset would hold. */
+  ipcMain.handle('presets:extrasInfo', (_e, p: string) => {
+    const c = extrasContent(p, locationsFor(readBundleDir(p).manifest.id).assets)
+    return { files: c.files, media: c.media.map(({ id, filename, size }) => ({ id, filename, size })), keys: c.keys }
+  })
+  ipcMain.handle('presets:exportExtras', async (_e, p: string, o: { includeKeys: boolean; mediaIds: string[] }) => {
+    try {
+      const m = readBundleDir(p).manifest
+      const d = await dialog.showSaveDialog({
+        title: 'Export the extras of this preset', defaultPath: `${m.name.replace(/[\\/:*?"<>|]/g, '_')}${o.includeKeys ? ' (CONTAINS STREAM KEYS)' : ''}.${EXTRAS_EXT}`,
+        filters: [{ name: 'OBS preset extras', extensions: [EXTRAS_EXT] }],
+      })
+      if (d.canceled || !d.filePath) return { ok: false, cancelled: true, error: '' }
+      const r = await writeExtras({ dir: p, includeKeys: o.includeKeys, mediaIds: o.mediaIds, locations: locationsFor(m.id).assets }, d.filePath)
+      return { ok: true, path: d.filePath, ...r }
+    } catch (e) { return { ok: false, error: (e as Error).message } }
+  })
+
+  const dirSize = (dir: string): number => {
+    let n = 0
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === '.git') continue
+      const f = path.join(dir, e.name)
+      try { n += e.isDirectory() ? dirSize(f) : fs.statSync(f).size } catch { /* gone meanwhile */ }
+    }
+    return n
+  }
+  /** What a preset holds and where each part lives: this computer, GitHub, or only here. */
+  ipcMain.handle('presets:overview', (_e, p: string): PresetOverview => {
+    const b = readBundleDir(p)
+    const m = b.manifest
+    const set = readLocalSettings(p)
+    const skip = set.cloud?.skip ?? {}
+    const up = new Set(set.cloud?.media ?? [])
+    const noCopy = new Set(set.skipLocalMedia ?? [])
+    const ex = m.exclude ?? {}
+    const files = presetFiles(p, locationsFor(m.id).assets)
+    const own = localMediaLocations(p, m)
+    const layouts = m.collections.map((c) => {
+      const n = listNames(p, c.id)
+      return { id: c.id, name: c.name, scenes: n.scenes.length, sources: n.sources.length, local: !ex.collections?.includes(c.name), cloud: !skip.layouts?.includes(c.id) }
+    })
+    const outputs = m.profiles.map((x) => ({ id: x.id, name: x.name, local: !ex.profiles?.includes(x.name), cloud: !skip.outputs?.includes(x.id) }))
+    const scriptNames = [...m.assets.filter((a) => a.role === 'script').map((a) => a.filename), ...scriptFolderNames(m)]
+    const rc = b.files.has(WEBSOCKET_FILE)
+    const keyCount = Object.keys(readLocalKeys(p)).length
+    const fileRows = files.map((f) => ({ ...f, haveCopy: !!own[f.id], keepCopy: !noCopy.has(f.id), cloud: up.has(f.id), tooBigForGithub: f.size > MAX_UPLOAD_FILE }))
+    const onlyHere: string[] = []
+    if (keyCount) onlyHere.push(`${keyCount} stream key${keyCount === 1 ? '' : 's'}`)
+    const copied = fileRows.filter((f) => f.haveCopy && !f.cloud)
+    if (copied.length) onlyHere.push(`${copied.length} file${copied.length === 1 ? '' : 's'} (${humanSize(copied.reduce((n, f) => n + f.size, 0))})`)
+    for (const l of layouts) if (!l.cloud) onlyHere.push(`scene layout “${l.name}”`)
+    for (const o of outputs) if (!o.cloud) onlyHere.push(`output settings “${o.name}”`)
+    if (skip.scripts && scriptNames.length) onlyHere.push('scripts')
+    if (skip.remoteControl && rc) onlyHere.push('remote-control settings')
+    return {
+      layouts, outputs, files: fileRows,
+      scripts: { names: scriptNames, local: !ex.scripts, cloud: !skip.scripts },
+      remoteControl: { present: rc, local: !ex.remoteControl, cloud: !skip.remoteControl },
+      keys: { count: keyCount, keep: set.keepKeys ?? keepKeysDefault() },
+      onlyHere, sizeBytes: dirSize(p), maxUploadBytes: MAX_UPLOAD_FILE,
+    }
+  })
+
+  /** Change where each part of a preset lives. Upload choices take effect at once (one saved step); keys and copies follow the choice. */
+  ipcMain.handle('presets:setStorage', async (_e, p: string, patch: { cloud?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean; media?: string[] }; keepKeys?: boolean; skipLocalMedia?: string[] }) => {
+    try {
+      const git = gitRunner()
+      const cur: LocalSettings = readLocalSettings(p)
+      const next: LocalSettings = { ...cur }
+      if (patch.cloud) {
+        next.cloud = { ...cur.cloud, skip: { ...cur.cloud?.skip }, media: cur.cloud?.media }
+        const sk = next.cloud!.skip!
+        if (patch.cloud.layouts) sk.layouts = patch.cloud.layouts
+        if (patch.cloud.outputs) sk.outputs = patch.cloud.outputs
+        if (patch.cloud.scripts !== undefined) sk.scripts = patch.cloud.scripts
+        if (patch.cloud.remoteControl !== undefined) sk.remoteControl = patch.cloud.remoteControl
+        if (patch.cloud.media) next.cloud!.media = patch.cloud.media
+      }
+      if (patch.keepKeys !== undefined) next.keepKeys = patch.keepKeys
+      if (patch.skipLocalMedia) next.skipLocalMedia = patch.skipLocalMedia
+      writeLocalSettings(p, next)
+      if (patch.keepKeys === false) fs.rmSync(path.join(p, LOCAL_DIR, 'keys.json'), { force: true })
+      if (patch.skipLocalMedia) {
+        const m = readBundleDir(p).manifest
+        for (const a of m.assets) if (patch.skipLocalMedia.includes(a.id)) fs.rmSync(path.join(p, LOCAL_DIR, 'media', a.id), { recursive: true, force: true })
+      }
+      let changed = false, pushed = false
+      if (patch.cloud) {
+        const st = await repoStatus(p, git)
+        if (st.dirtyFiles.length) { writeLocalSettings(p, cur); return { ok: false, error: 'This preset has changes that are not saved yet. Save them first, then change what is uploaded.' } }
+        const r = await applyCloudSettings(p, git, locationsFor(readBundleDir(p).manifest.id).assets)
+        if (!r.ok) { writeLocalSettings(p, cur); await applyCloudSettings(p, git); return { ok: false, error: r.message } }
+        changed = r.changed
+        // an online preset is kept up to date, so the change reaches GitHub straight away when it can
+        if (changed && st.remote && st.behind === 0) pushed = (await pushRepo(p, git)).status === 'pushed'
+      }
+      return { ok: true, changed, pushed }
+    } catch (e) { return { ok: false, error: errText(e) } }
   })
 
   ipcMain.handle('presets:rename', async (_e, r: { path: string; installId?: string; kind: 'preset' | 'layout' | 'output' | 'scene'; id?: string; layoutId?: string; from?: string; to: string }) => {
@@ -841,6 +1012,21 @@ function registerIpc() {
           if (r.kind === 'layout') renameLayoutInObs(inst!.configDir, layoutNow!.name, r.to, layoutNow!.fileName ?? layoutNow!.name)
           else if (r.kind === 'output') renameOutputInObs(inst!.configDir, outputNow!.name, r.to, outputNow!.dirName ?? outputNow!.name)
           else renameSourceInObs(inst!.configDir, layoutNow!.fileName ?? layoutNow!.name, r.from!, r.to)
+        }
+        // a layout or output keeps its place in "kept on this computer" when its id changes with its name
+        if (r.kind === 'layout' || r.kind === 'output') {
+          const set = readLocalSettings(r.path)
+          const now = readBundleDir(r.path, { keepMissing: true }).manifest
+          const oldId = r.kind === 'layout' ? layoutNow!.id : outputNow!.id
+          const newId = r.kind === 'layout' ? now.collections.find((c) => c.name === r.to.trim())?.id : now.profiles.find((x) => x.name === r.to.trim())?.id
+          const list = r.kind === 'layout' ? set.cloud?.skip?.layouts : set.cloud?.skip?.outputs
+          if (newId && newId !== oldId && list?.includes(oldId)) {
+            const swapped = list.map((x) => (x === oldId ? newId : x))
+            if (r.kind === 'layout') set.cloud!.skip!.layouts = swapped; else set.cloud!.skip!.outputs = swapped
+            set.kept = cloudSkippedPaths(set.cloud!.skip)
+            writeLocalSettings(r.path, set)
+            writeExclude(r.path, set.kept)
+          }
         }
       } catch (e) {
         // leave the preset exactly as it was

@@ -32,6 +32,14 @@ export interface Asset {
   hint?: string
 }
 
+/** A folder a script lives in together with the files it needs. The files travel with the setup (`scripts/projects/<variable>/<file>`). */
+export interface ScriptProject {
+  /** The path variable that says where the folder is on each computer. */
+  variable: string
+  /** Files inside that folder, relative to it, with `/` separators. */
+  files: string[]
+}
+
 export interface PluginProvides {
   kind: 'source' | 'filter' | 'output' | 'service' | 'encoder' | 'module'
   id: string
@@ -98,6 +106,8 @@ export interface Manifest {
    * save): `{ "<source id>": { "<win32|darwin|linux|linux-pipewire>": "<id to use>" | null (hide it) } }`.
    * They win over the built-in table.
    */
+  /** Script folders whose files are kept with the setup (see `ScriptProject`). */
+  projects?: ScriptProject[]
   platformOverrides?: Record<string, Partial<Record<Platform | 'linux-pipewire', string | null>>>
   /** What this preset leaves out when saving from OBS (names as OBS has them). Everything else in OBS is kept. */
   exclude?: { collections?: string[]; profiles?: string[]; remoteControl?: boolean; scripts?: boolean }
