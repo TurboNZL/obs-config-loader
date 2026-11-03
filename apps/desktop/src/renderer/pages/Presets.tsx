@@ -46,7 +46,7 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
       {notice && <Message tone={notice.tone}>{notice.text}</Message>}
 
       <div className="flex gap-2 flex-wrap">
-        <button className="btn btn-accent px-4 py-2 inline-flex items-center gap-2" disabled={!git?.available} onClick={() => setAdding(adding === 'new' ? null : 'new')}><Icon name="save" /> Save my OBS setup</button>
+        <button className="btn btn-accent px-4 py-2 inline-flex items-center gap-2" disabled={!git?.available} onClick={() => setAdding(adding === 'new' ? null : 'new')}><Icon name="save" /> Make a preset from my OBS</button>
         <button className="btn px-3 py-2 inline-flex items-center gap-2" disabled={!git?.available} onClick={() => setAdding(adding === 'get' ? null : 'get')}><Icon name="download" /> Get one from GitHub…</button>
         <button className="btn px-3 py-2 inline-flex items-center gap-2" disabled={!git?.available || importing} onClick={importFile}><Icon name="fileUp" className="rotate-180" /> {importing ? 'Importing…' : 'Import a file…'}</button>
       </div>
@@ -54,7 +54,7 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
       {adding === 'new' && git?.available && <SaveSetup installs={installs ?? []} start={startWith} gh={gh} go={go} onDone={done} onCancel={() => setAdding(null)} />}
       {adding === 'get' && git?.available && <GetPreset gh={gh} count={repos?.length ?? 0} go={go} onDone={done} onCancel={() => setAdding(null)} />}
 
-      {repos?.length === 0 && !adding && <Message tone="warn">You have no presets yet. Press “Save my OBS setup” to make your first one, or “Import a file…” if someone sent you one.</Message>}
+      {repos?.length === 0 && !adding && <Message tone="warn">You have no presets yet. Press “Make a preset from my OBS” to make your first one, or “Import a file…” if someone sent you one.</Message>}
       <div className="grid gap-4 grid-cols-1 min-[820px]:grid-cols-2 min-[1500px]:grid-cols-3 items-start">
         {repos?.map((r) => (
           <PresetTile
@@ -148,7 +148,7 @@ function SaveSetup({ installs, start, gh, go, onDone, onCancel }: { installs: In
   }
 
   return (
-    <Card title="Save my OBS setup">
+    <Card title="Make a preset from my OBS">
       {error && <Message tone="bad">{error}</Message>}
       <Field label="Give this setup a name"><input className="input w-full px-2 py-1.5" value={name} onChange={(e) => setName(e.target.value)} /></Field>
       {usable.length > 1 && (

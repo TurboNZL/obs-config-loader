@@ -12,7 +12,7 @@ import { DEFAULT_PLATFORM_MAP, standInOptions, sourceName, PIPEWIRE_AUDIO_MODULE
 import { applyVariants, parseVariants, variantsPathFor } from './variants.js'
 import { KNOWN_PLUGINS, checkPlugins, installedModules, type PluginFinding } from './plugins.js'
 import { unversioned } from './plugins.js'
-import { assetBundlePath, PROJECT_DIR, PROJECT_FILE, WEBSOCKET_FILE } from './export.js'
+import { assetBundlePath, PROJECT_DIR, PROJECT_KEEP, WEBSOCKET_FILE } from './export.js'
 import { compareVersions, versionNotes, type DetectedVersions } from './versions.js'
 
 export type ConflictMode = 'replace' | 'keep-both' | 'skip'
@@ -299,7 +299,7 @@ export function planImport(o: ImportOptions): ImportPlan {
     const v = m.variables.find((x) => x.name === pr.variable)
     const folder = v ? varValue.get(v.name) : undefined
     if (!v || !folder) continue
-    const files = pr.files.filter((rel) => PROJECT_FILE.test(rel) && !rel.startsWith('/') && !rel.includes('\\') && !rel.split('/').includes('..') && !rel.split('/').some((x) => x.startsWith('.')) && bundle.files.has(`${PROJECT_DIR}/${pr.variable}/${rel}`))
+    const files = pr.files.filter((rel) => PROJECT_KEEP.test(rel) && !rel.startsWith('/') && !rel.includes('\\') && !rel.split('/').includes('..') && !rel.split('/').some((x) => x.startsWith('.')) && bundle.files.has(`${PROJECT_DIR}/${pr.variable}/${rel}`))
     const main = v.mustContain ?? []
     const isEmpty = (() => { try { return fs.readdirSync(folder).length === 0 } catch { return true } })()
     const isProject = main.length > 0 && main.some((f) => host.exists(p.join(folder, f)))

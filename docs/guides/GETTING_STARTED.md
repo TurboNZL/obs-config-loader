@@ -12,7 +12,7 @@ OBS Config Loader moves your whole OBS setup between computers, and can keep it 
 ## Presets
 A **preset** is a complete copy of your OBS setup, kept on this computer: scene layouts, output settings, scripts (with the code files next to them), OBS's remote-control settings, your stream keys and the pictures, sounds and videos your scenes use. Everything lives under **Presets**, shown as tiles side by side.
 
-- **Save my OBS setup** makes a preset from an OBS on this computer. Pick what to include and where it goes.
+- **Make a preset from my OBS** makes a preset from an OBS on this computer. Pick what to include and where it goes.
 - **Import a file…** turns a setup file (.obsbundle) into a preset in the app's presets folder, or puts an extras file (.obsextras) into the preset it belongs with. Its stream keys and files go inside the preset, on this computer only.
 - **Get one from GitHub…** downloads a preset you already have there (or paste any git address).
 - The presets folder is in the place your system keeps an app's own data (on Linux `~/.local/share/obs-config-loader/presets`). You can change it under **Settings**.
@@ -24,14 +24,14 @@ Each tile shows them in their own colour:
 - **As a file** (orange): the **export** button on the tile makes a setup file, or only the extras (see below).
 
 ## Linking a preset to an OBS
-The **chain button** on a tile links the preset to one of the OBS installs on this computer. A linked preset shows how it stands against *that* OBS by name (“OBS Studio (Flatpak) has 3 changes this preset does not have yet”), and gives you **Save OBS to this preset** and **Apply to OBS…**. Press the chain again to **unlink**: the preset stays exactly as it is and keeps working on its own (you can still apply it to any OBS). Link it again any time. Applying a preset offers to link it afterwards.
+The **chain button** on a tile links the preset to one of the OBS installs on this computer. A linked preset shows how it stands against *that* OBS by name (“OBS Studio (Flatpak) has 3 changes this preset does not have yet”), and gives you **Update preset from OBS** and **Apply to OBS…**. Press the chain again to **unlink**: the preset stays exactly as it is and keeps working on its own (you can still apply it to any OBS). Link it again any time. Applying a preset offers to link it afterwards.
 
 ## What changed
 When a linked OBS has changes the preset does not, **See what changed** lists each changed part in plain words, with the lines added in green and removed in red. Changes that only affect this computer's own part (a stream key, a file) are listed too.
 
 ## Where this preset stands
 Every tile shows where it stands:
-- **On this computer**: whether the linked OBS has changes the preset does not (press **Save OBS to this preset**), or the preset has changes OBS does not (press **Apply to OBS…**), or they match. After **Get updates** the preset is newer than OBS, so this line tells you to apply it: getting updates only updates the preset, not OBS.
+- **On this computer**: whether the linked OBS has changes the preset does not (press **Update preset from OBS**), or the preset has changes OBS does not (press **Apply to OBS…**), or they match. After **Get updates** the preset is newer than OBS, so this line tells you to apply it: getting updates only updates the preset, not OBS.
 - **On GitHub** (with the name it has there): whether they match, how many saves are not uploaded yet (**Upload**), or how many newer changes GitHub has (**Get updates**).
 - **Home** shows the same things for all your presets at once, plus how much space they take and what needs a look.
 

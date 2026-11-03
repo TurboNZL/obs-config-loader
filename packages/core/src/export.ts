@@ -54,6 +54,8 @@ const MAX_SCRIPT_BYTES = 1024 * 1024
 /** Script folders: where their files are kept in a setup, and which of them are (code only, nothing hidden, nothing big). */
 export const PROJECT_DIR = 'scripts/projects'
 export const PROJECT_FILE = /\.(py|lua|sh|bat|cmd|ps1|txt)$/i
+/** What a setup may put into a script folder on import: code plus the pictures, sounds and data files the scenes use. Never programs. */
+export const PROJECT_KEEP = /\.(py|lua|sh|bat|cmd|ps1|txt|md|json|ini|cfg|yaml|yml|png|jpe?g|gif|webp|bmp|svg|mp3|wav|ogg|flac|m4a|aac|opus|mp4|mov|mkv|webm|avi|flv|ttf|otf|woff2?)$/i
 const PROJECT_SKIP_DIRS = new Set(['venv', 'env', 'node_modules', '__pycache__', 'site-packages', 'dist', 'build', 'images', 'media', 'assets'])
 const PROJECT_DEPTH = 2
 const PROJECT_MAX_FILES = 200
@@ -140,6 +142,8 @@ class Collector {
   readonly warnings: string[] = []
   /** Folders a script lives in together with files it needs (its "project"): everything inside is kept relative to one folder variable. */
   private projects: { dir: string; name: string }[] = []
+  /** Files inside a script folder that a source points at (images, music...): not code, but the scene needs them, so they travel with the folder. */
+  private projectExtras: { variable: string; rel: string; full: string; size: number }[] = []
 
   /**
    * An OBS script that finds other files by its own location (`__file__`, `script_path()`) cannot be moved on its own:
@@ -191,16 +195,35 @@ class Collector {
         }
       }
       walk(proj.dir, '', 0)
+      for (const x of this.projectExtras.filter((e) => e.variable === proj.name)) {
+        if (rels.includes(x.rel)) continue
+        const id = slug(x.rel.split('/').pop() ?? '')
+        if (x.size > this.bundleBelow && !this.alsoBundle.has(id)) { this.warnings.push(`${x.rel} (${(x.size / 1048576).toFixed(0)} MB) is too large to keep with the setup; it has to be in the script folder on the other computer.`); continue }
+        try { this.files.set(`${PROJECT_DIR}/${proj.name}/${x.rel}`, fs.readFileSync(x.full)); rels.push(x.rel) } catch { /* vanished: the report on import will say it is missing */ }
+      }
       if (rels.length) out.push({ variable: proj.name, files: rels })
     }
     return out
+  }
+
+  /** A source points at a file inside a script folder: remember it so the file is kept with the folder, whatever kind it is. */
+  private noteProjectFile(variable: string, rel: string, full: string): void {
+    if (this.projectExtras.some((e) => e.variable === variable && e.rel === rel)) return
+    if (rel.split('/').some((x) => x.startsWith('.'))) return
+    let st: fs.Stats
+    try { st = fs.statSync(full) } catch { return }
+    if (st.isFile()) this.projectExtras.push({ variable, rel, full, size: st.size })
   }
 
   private inProject(value: string): string | undefined {
     for (const p of this.projects) {
       const a = normForCompare(value, this.host.platform), b = normForCompare(p.dir, this.host.platform)
       if (a === b) return `{{var:${p.name}}}`
-      if (a.startsWith(b + '/')) return `{{var:${p.name}}}/${value.replace(/\\/g, '/').slice(b.length + 1)}`
+      if (a.startsWith(b + '/')) {
+        const rel = value.replace(/\\/g, '/').slice(b.length + 1)
+        this.noteProjectFile(p.name, rel, value)
+        return `{{var:${p.name}}}/${rel}`
+      }
     }
     return undefined
   }

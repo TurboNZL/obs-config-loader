@@ -38,7 +38,7 @@ const withKeys = path.join(root, 'with-keys.obsbundle'), noKeys = path.join(root
 
   console.log('1. save WITHOUT keys (the default)')
   await page.click('nav >> text=Presets')
-  await page.click('button:has-text("Save my OBS setup")')
+  await page.click('button:has-text("Make a preset from my OBS")')
   await page.waitForSelector('text=Give this setup a name')
   await page.uncheck('label:has-text("As a preset on this computer") input') // a file only
   check('stream keys are off by default', !(await page.locator('label:has-text("Include my stream keys") input').isChecked()))
@@ -57,7 +57,7 @@ const withKeys = path.join(root, 'with-keys.obsbundle'), noKeys = path.join(root
   check('no key anywhere inside the file', !texts1.join('\n').match(/live_SECRET123|yt-SECRET456/))
 
   console.log('2. save WITH keys: warned, labelled, still safe for git')
-  await page.click('button:has-text("Save my OBS setup")')
+  await page.click('button:has-text("Make a preset from my OBS")')
   await page.waitForSelector('text=Give this setup a name')
   await page.uncheck('label:has-text("As a preset on this computer") input')
   await page.check('label:has-text("Include my stream keys") input')
@@ -93,6 +93,7 @@ const withKeys = path.join(root, 'with-keys.obsbundle'), noKeys = path.join(root
   await page.waitForSelector('text=Apply a setup to OBS')
   await page.selectOption('select[aria-label="Which OBS"]', { label: 'OBS Studio (portable: portable) (OBS in a folder)' })
   await page.waitForSelector('text=Here is what will happen')
+  await page.click('button:has-text("Change what is applied")')
   check('the keys are filled in for you', (await page.locator('input[type=password]').first().inputValue()) === 'live_SECRET123')
   await page.evaluate(() => document.querySelector('main').scrollTo(0, 99999)); await page.waitForTimeout(300)
   await page.screenshot({ path: OUT + '/f5-load-keys.png' })

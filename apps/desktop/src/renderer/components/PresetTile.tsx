@@ -104,7 +104,7 @@ export function PresetTile({ repo, installs, gh, refresh, apply, go, notify, wid
     setConflict(null)
     if (r.status === 'updated') setMsg({ tone: 'good', text: `Got ${r.files.length} changed file${r.files.length === 1 ? '' : 's'}. Press “Apply to OBS…” to put them into OBS.` })
     else if (r.status === 'conflict') { setConflict({ kind: 'pull', files: r.conflicts }); setMsg(null) }
-    else if (r.status === 'dirty') setMsg({ tone: 'warn', text: `Save your changes first (${r.files.length} file${r.files.length === 1 ? ' was' : 's were'} changed by hand). Use “Save OBS to this preset”.` })
+    else if (r.status === 'dirty') setMsg({ tone: 'warn', text: `Save your changes first (${r.files.length} file${r.files.length === 1 ? ' was' : 's were'} changed by hand). Use “Update preset from OBS”.` })
     else if (r.status === 'error') setMsg({ tone: 'bad', text: r.message })
     else if (r.status === 'no-remote') setMsg({ tone: 'warn', text: 'This preset is not backed up online yet.' })
     else setMsg({ tone: 'good', text: 'Already up to date.' })
@@ -149,7 +149,7 @@ export function PresetTile({ repo, installs, gh, refresh, apply, go, notify, wid
     if (!linkTo) return
     await window.obsLoader.repos.setInstall(repo.path, linkTo)
     setLinking(false)
-    notify({ tone: 'good', text: `“${repo.name}” is now linked to ${usable.find((i) => i.id === linkTo)?.label ?? 'that OBS'}. Save OBS to the preset, or apply the preset to OBS, whenever you like.` })
+    notify({ tone: 'good', text: `“${repo.name}” is now linked to ${usable.find((i) => i.id === linkTo)?.label ?? 'that OBS'}. Update the preset from OBS, or apply the preset to OBS, whenever you like.` })
     await refresh()
   }
 
@@ -198,7 +198,7 @@ export function PresetTile({ repo, installs, gh, refresh, apply, go, notify, wid
           <div className="space-y-2">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm flex-1 min-w-40">{obsLine}</span>
-              <button className={'btn px-3 py-1 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy} onClick={() => save(false)}>Save OBS to this preset</button>
+              <button className={'btn px-3 py-1 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy} onClick={() => save(false)}>Update preset from OBS</button>
               <button className={'btn px-3 py-1 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => apply(repo.path, linkedId)}>Apply to OBS…</button>
             </div>
             {changes > 0 && (
@@ -286,7 +286,7 @@ export function PresetTile({ repo, installs, gh, refresh, apply, go, notify, wid
         <Message tone="warn">
           Some files in the preset were changed by hand ({dirtyAsk.join(', ')}). Saving OBS would overwrite them, so they need to be kept first.
           <div className="mt-2 flex gap-2">
-            <button className="btn btn-accent px-3 py-1" onClick={() => save(true)}>Keep those edits, then save OBS</button>
+            <button className="btn btn-accent px-3 py-1" onClick={() => save(true)}>Keep those edits, then update from OBS</button>
             <button className="btn btn-ghost px-3 py-1" onClick={() => setDirtyAsk(null)}>Cancel</button>
           </div>
         </Message>

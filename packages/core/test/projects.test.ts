@@ -57,13 +57,13 @@ describe('a script that needs the files around it', () => {
   it('keeps the script and the code files beside it with the setup, and puts them back in a new or empty folder', () => {
     const { home, cfg } = projectSetup()
     const b = exportBundle({ host: host('linux', home), install: install(cfg), name: 'x' })
-    expect(b.manifest.projects).toEqual([{ variable: 'SCRIPT_FOLDER', files: ['helper.py', 'tool.py'] }]) // images are not code: not kept
+    expect(b.manifest.projects).toEqual([{ variable: 'SCRIPT_FOLDER', files: ['helper.py', 'tool.py', 'images/bg.png'] }]) // a file a source points at travels with the folder, whatever it is
     expect(b.files.get('scripts/projects/SCRIPT_FOLDER/tool.py')!.toString()).toContain('__file__')
-    expect([...b.files.keys()].some((k) => k.endsWith('bg.png'))).toBe(false)
+    expect(b.files.get('scripts/projects/SCRIPT_FOLDER/images/bg.png')!.toString()).toBe('PNG')
 
     const plan = planImport({ bundle: b, install: { ...install('C:\\cfg'), platform: 'win32' }, host: host('win32', 'C:\\Users\\u'), variables: { SCRIPT_FOLDER: 'C:\\Tools\\stream' } })
     expect(plan.report.warnings.join(' ')).not.toMatch(/was not found/) // it comes with the setup
-    expect(plan.writes.filter((w) => w.kind === 'project').map((w) => w.path).sort()).toEqual(['C:\\Tools\\stream\\helper.py', 'C:\\Tools\\stream\\tool.py'])
+    expect(plan.writes.filter((w) => w.kind === 'project').map((w) => w.path).sort()).toEqual(['C:\\Tools\\stream\\helper.py', 'C:\\Tools\\stream\\images\\bg.png', 'C:\\Tools\\stream\\tool.py'])
     const col = JSON.parse(plan.writes.find((w) => w.kind === 'collection')!.data.toString())
     expect(col.modules['scripts-tool'][0].path).toBe('C:\\Tools\\stream\\tool.py')
     expect(col.sources.find((s: any) => s.name === 'Background').settings.file).toBe('C:\\Tools\\stream\\images\\bg.png')

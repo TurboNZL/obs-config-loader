@@ -33,7 +33,7 @@ export function App() {
     <div className="flex h-full flex-col">
       <WindowFrame />
       <div className="flex min-h-0 flex-1">
-      <nav className="bt-side w-56 shrink-0 p-3 space-y-1" aria-label="Main">
+      <nav className="bt-side bt-shell w-56 shrink-0 p-3 space-y-1" aria-label="Main">
         <div className="px-2 py-3 font-bold">OBS Config Loader</div>
         {TABS.map(([id, label, icon]) => (
           <button key={id} className="bt-nav w-full text-left px-3 py-2 flex items-center gap-2.5" aria-current={tab === id ? 'page' : undefined} onClick={() => go(id)}>
