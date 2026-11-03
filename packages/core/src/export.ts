@@ -3,7 +3,7 @@ import * as nodePath from 'node:path'
 import * as crypto from 'node:crypto'
 import { FORMAT, FORMAT_VERSION, type Asset, type AssetRole, type Bundle, type Manifest, type Variable } from './types.js'
 import type { Host, ObsInstall } from './detect.js'
-import { escapeLiteral, looksLikeAbsolutePath, mapStrings, splitPath } from './tokens.js'
+import { escapeLiteral, looksLikeAbsolutePath, mapStrings, sanitizeFileName, splitPath } from './tokens.js'
 import { getIni, mapIniValues } from './ini.js'
 import { readActive } from './userconfig.js'
 import { SecretScrubber } from './secrets.js'
@@ -106,6 +106,16 @@ function folderLabel(key: string | undefined): string {
   return `Folder for ${key ?? 'a setting'}`
 }
 
+function splitFile(p: string): { dir: string; base: string } {
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  return { dir: p.slice(0, i), base: p.slice(i + 1) }
+}
+const normForCompare = (p: string, platform: string) => {
+  const n = p.replace(/\\/g, '/').replace(/\/+$/, '')
+  return platform === 'win32' ? n.toLowerCase() : n
+}
+const samePathText = (a: string, b: string, platform: string) => normForCompare(a, platform) === normForCompare(b, platform)
+
 class Collector {
   readonly assets: Asset[] = []
   readonly variables: Variable[] = []
@@ -113,6 +123,41 @@ class Collector {
   private assetByPath = new Map<string, string>()
   private varByValue = new Map<string, string>()
   readonly warnings: string[] = []
+  /** Folders a script lives in together with files it needs (its "project"): everything inside is kept relative to one folder variable. */
+  private projects: { dir: string; name: string }[] = []
+
+  /**
+   * An OBS script that finds other files by its own location (`__file__`, `script_path()`) cannot be moved on its own:
+   * it would lose them. When its folder holds other files and the script looks around itself, the folder is a project: the setup
+   * does not copy the script, it asks where the folder is on each computer, and every path inside it is kept relative to that.
+   */
+  addScript(scriptPath: string): void {
+    if (!looksLikeAbsolutePath(scriptPath)) return
+    let text: string
+    try { if (!fs.statSync(scriptPath).isFile()) return; text = fs.readFileSync(scriptPath, 'utf8').slice(0, 256 * 1024) } catch { return }
+    const { dir, base } = splitFile(scriptPath)
+    let others: string[] = []
+    try { others = fs.readdirSync(dir).filter((n) => n !== base && !n.startsWith('.')) } catch { return }
+    if (!others.length || !/__file__|script_path\s*\(|dirname|getcwd/.test(text)) return
+    if (this.projects.some((p) => samePathText(p.dir, dir, this.host.platform))) return
+    let name = 'SCRIPT_FOLDER'
+    for (let n = 2; this.variables.some((v) => v.name === name); n++) name = `SCRIPT_FOLDER_${n}`
+    this.projects.push({ dir, name })
+    this.variables.push({
+      name, kind: 'path', label: `Folder of the script “${base}” (it uses other files in it)`, mustContain: [base],
+      default: tokenisePathPrefix(dir, this.host.home) ?? dir.replace(/\\/g, '/'),
+    })
+  }
+
+  private inProject(value: string): string | undefined {
+    for (const p of this.projects) {
+      const a = normForCompare(value, this.host.platform), b = normForCompare(p.dir, this.host.platform)
+      if (a === b) return `{{var:${p.name}}}`
+      if (a.startsWith(b + '/')) return `{{var:${p.name}}}/${value.replace(/\\/g, '/').slice(b.length + 1)}`
+    }
+    return undefined
+  }
+
   constructor(private host: Host, private bundleBelow: number, private alsoBundle: Set<string> = new Set(), private onAsset?: ExportOptions['onAsset']) {}
 
   private uniqueAssetId(base: string): string {
@@ -125,6 +170,8 @@ class Collector {
   /** Returns the replacement for a string value, or the (escaped) original. */
   tokenise(value: string, key: string | undefined): string {
     if (!looksLikeAbsolutePath(value) || SYSTEM_PATH.test(value)) return escapeLiteral(value)
+    const rel = this.inProject(value)
+    if (rel) return rel
     let st: fs.Stats | undefined
     try { st = fs.statSync(value) } catch { /* not on this machine */ }
     const base = splitPath(value).parts.at(-1) ?? 'file'
@@ -160,7 +207,7 @@ class Collector {
     while (this.variables.some((v) => v.name === name)) name = `${baseName}_${n++}`
     this.varByValue.set(value, name)
     this.variables.push({
-      name, kind: 'path', label: folderLabel(key), default: tokenisePathPrefix(value, this.host.home),
+      name, kind: 'path', label: folderLabel(key), default: tokenisePathPrefix(value, this.host.home) ?? value.replace(/\\/g, '/'),
     })
     return `{{var:${name}}}`
   }
@@ -241,6 +288,15 @@ export function exportBundle(opts: ExportOptions): Bundle {
   const used = { sources: new Set<string>(), filters: new Set<string>(), transitions: new Set<string>() }
   let sourceNames: string[] = []
   try { sourceNames = fs.readdirSync(scenesDir).filter((f) => f.endsWith('.json')).sort() } catch { /* none */ }
+  // scripts that need the files around them are found first, so every path inside their folder is kept relative to it
+  if (!ex.scripts) {
+    for (const file of sourceNames) {
+      const j = readJson(nodePath.join(scenesDir, file))
+      if (!j || ex.collections?.includes(file.replace(/\.json$/, '')) || (typeof j.name === 'string' && ex.collections?.includes(j.name))) continue
+      if (opts.collections && !opts.collections.includes(file.replace(/\.json$/, ''))) continue
+      for (const s of Array.isArray(j.modules?.['scripts-tool']) ? j.modules['scripts-tool'] : []) if (typeof s?.path === 'string') col.addScript(s.path)
+    }
+  }
   for (const file of sourceNames) {
     const name = file.replace(/\.json$/, '')
     if (opts.collections && !opts.collections.includes(name)) continue
@@ -255,7 +311,8 @@ export function exportBundle(opts: ExportOptions): Bundle {
     files.set(`collections/${id}.json`, Buffer.from(JSON.stringify(out, null, 4) + '\n'))
     const variants = extractVariants(out, host.platform)
     if (Object.keys(variants).length) files.set(variantsPathFor(`collections/${id}.json`), Buffer.from(serializeVariants(variants)))
-    collections.push({ id, name: (json.name as string) || name, file: `collections/${id}.json` })
+    const shown = (json.name as string) || name
+    collections.push({ id, name: shown, file: `collections/${id}.json`, ...(sanitizeFileName(shown) !== name ? { fileName: name } : {}) })
   }
 
   // profiles
@@ -291,7 +348,7 @@ export function exportBundle(opts: ExportOptions): Bundle {
       }
       files.set(rel, fs.readFileSync(full))
     }
-    profiles.push({ id, name: display, dir: base })
+    profiles.push({ id, name: display, dir: base, ...(sanitizeFileName(display) !== dir ? { dirName: dir } : {}) })
   }
 
   // OBS's remote-control (WebSocket) settings: other programs (stream decks, overlays, scripts) depend on them

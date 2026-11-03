@@ -55,9 +55,9 @@ export function SettingsPage() {
             checked={s.rememberKeys && s.canStoreKeys} disabled={!s.canStoreKeys}
             onChange={async (on) => { await window.obsLoader.settings.setRememberKeys(on); await load() }}
             title="Remember my stream keys on this computer"
-            help="When you save a preset, your stream keys are kept encrypted on this computer only, so you can load that preset again without typing them, or put them in a file when you choose to. They are never stored in the preset folder and never uploaded."
+            help="When you save a preset, your stream keys are kept encrypted on this computer only, so you can apply that preset again without typing them, or put them in a file when you choose to. They are never stored in the preset folder and never uploaded."
           />
-          {!s.canStoreKeys && <Message tone="warn">This computer has no system keychain to keep them safe in, so stream keys are not remembered. You can still type them when you load a preset.</Message>}
+          {!s.canStoreKeys && <Message tone="warn">This computer has no system keychain to keep them safe in, so stream keys are not remembered. You can still type them when you apply a preset.</Message>}
           {s.canStoreKeys && !s.rememberKeys && <p className="text-sm text-muted">Turning this off also forgets the keys already remembered.</p>}
         </Card>
       )}

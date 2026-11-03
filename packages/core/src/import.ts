@@ -3,7 +3,7 @@ import * as nodePath from 'node:path'
 import * as crypto from 'node:crypto'
 import type { Bundle, Manifest, Platform, PlatformMapEntry } from './types.js'
 import type { Host, ObsInstall } from './detect.js'
-import { BUILTIN_TOKENS, pathModule, resolveJson, resolveString, type BuiltinToken, type TokenResolver } from './tokens.js'
+import { BUILTIN_TOKENS, sanitizeFileName, pathModule, resolveJson, resolveString, type BuiltinToken, type TokenResolver } from './tokens.js'
 import { getIni, mapIniValues, setIni } from './ini.js'
 import { activeTargets, withActive } from './userconfig.js'
 import { availableEncoders, fixEncoders, type EncoderFix } from './encoders.js'
@@ -108,9 +108,6 @@ function setAt(o: unknown, path: string[], v: unknown): boolean {
   return true
 }
 
-function sanitizeFileName(name: string): string {
-  return name.replace(/[\\/:*?"<>|\0]/g, '_').replace(/^\.+/, '_').trim() || 'Untitled'
-}
 
 function defaultFolders(host: Host): Record<BuiltinToken, string> {
   const p = pathModule(host.platform)
@@ -293,6 +290,15 @@ export function planImport(o: ImportOptions): ImportPlan {
     }
   }
 
+  // a folder a script lives in must really hold that script: otherwise OBS shows the script as broken
+  for (const v of m.variables) {
+    const folder = v.mustContain?.length ? varValue.get(v.name) : undefined
+    if (!folder) continue
+    for (const f of v.mustContain!) {
+      if (!host.exists(p.join(folder, f))) warnings.push(`${v.label ?? v.name}: ${f} was not found in ${folder}. Choose the folder it is in, or the script will show as broken in OBS.`)
+    }
+  }
+
   // assets
   const missingAssets: ImportReport['missingAssets'] = []
   const assetPath = new Map<string, string>()
@@ -325,6 +331,7 @@ export function planImport(o: ImportOptions): ImportPlan {
   const resolver: TokenResolver = {
     asset: (id) => assetPath.get(id),
     variable: (n) => varValue.get(n),
+    isPath: (n) => m.variables.find((v) => v.name === n)?.kind === 'path',
     builtin: (n) => folders[n],
     missing: (kind, name) => missingSeen.add(`${kind}:${name}`),
   }
@@ -360,7 +367,9 @@ export function planImport(o: ImportOptions): ImportPlan {
     adaptSources(json, m, target, adaptCtx, subs)
     usedCollections.push(json)
     let name = c.name
-    let file = p.join(scenesDir, sanitizeFileName(name) + '.json')
+    // the file keeps the name OBS gave it (other tools may look for it), unless the person asked to keep both
+    const fileBase = sanitizeFileName(c.fileName ?? name)
+    let file = p.join(scenesDir, fileBase + '.json')
     let action: WriteAction = fs.existsSync(file) ? 'replace' : 'create'
     if (action === 'replace' && conflict === 'skip') action = 'skip'
     if (action === 'replace' && conflict === 'keep-both') {
@@ -374,7 +383,7 @@ export function planImport(o: ImportOptions): ImportPlan {
     json.name = name
     if (action !== 'skip') planFile(file, Buffer.from(JSON.stringify(json, null, 4) + '\n'), 'collection', action)
     if (action !== 'skip' && (m.activeCollection === c.id || !activeCollectionFile)) {
-      activeCollectionFile = sanitizeFileName(name)
+      activeCollectionFile = action === 'keep-both' ? sanitizeFileName(name) : fileBase
       activeCollectionName = name
     }
   }
@@ -391,7 +400,7 @@ export function planImport(o: ImportOptions): ImportPlan {
     // this system's own copy of the encoder and audio device settings, when the setup has one
     const mine = parseProfileVariants(bundle.files.get(`${prefix}${PROFILE_VARIANTS_FILE}`))[target]
     let name = pr.name
-    let dirName = sanitizeFileName(name)
+    let dirName = sanitizeFileName(pr.dirName ?? name)
     let action: WriteAction = fs.existsSync(p.join(profRoot, dirName)) ? 'replace' : 'create'
     if (action === 'replace' && conflict === 'skip') action = 'skip'
     if (action === 'replace' && conflict === 'keep-both') {
@@ -468,7 +477,12 @@ export function planImport(o: ImportOptions): ImportPlan {
         const old = getAt(existing, at)
         if (typeof old === 'string' && old !== '' && setAt(json, at, old)) keptSecrets.add(v.name)
       }
-      planFile(dest, Buffer.from(JSON.stringify(json, null, 4) + '\n'), 'websocket', fs.existsSync(dest) ? 'replace' : 'create')
+      const pwVar = m.variables.find((v) => v.kind === 'secret' && v.target?.startsWith(`${WEBSOCKET_FILE}#`))
+      const pw = pwVar ? getAt(json, pwVar.target!.slice(WEBSOCKET_FILE.length + 1).split('.')) : undefined
+      if (pwVar && (json as any)?.auth_required !== false && (typeof pw !== 'string' || pw === '')) {
+        // a remote-control file that demands a password and has none would lock every program out: leave OBS's own settings alone
+        warnings.push('OBS\'s remote-control settings (WebSocket) were not put back, because they need a password and none was given. Type it in the list of passwords, or set it in OBS under Tools, WebSocket Server Settings.')
+      } else planFile(dest, Buffer.from(JSON.stringify(json, null, 4) + '\n'), 'websocket', fs.existsSync(dest) ? 'replace' : 'create')
     } catch { warnings.push('The remote-control settings in this setup could not be read, so they were left as they are.') }
   }
   const scripts = m.assets.filter((a) => a.role === 'script')

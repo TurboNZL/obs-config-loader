@@ -1,6 +1,6 @@
 # OBS Config Loader
 
-A desktop app that finds your OBS Studio installs (native, Flatpak, Snap, portable, Windows, macOS) and loads a whole
+A desktop app that finds your OBS Studio installs (native, Flatpak, Snap, portable, Windows, macOS) and applies a whole
 streaming setup into any of them from one open, documented file: scenes, sources, profiles, stream settings, media and
 the list of plugins it needs. The same setup works on Linux, Windows and macOS, and can live in a git repository.
 
@@ -8,11 +8,11 @@ the list of plugins it needs. The same setup works on Linux, Windows and macOS, 
 
 ## Features
 - Detect OBS installs per platform and add portable ones by folder.
-- Save your whole setup to one `.obsbundle` file and load it into any OBS, on any system.
+- Save your whole setup to one `.obsbundle` file and apply it to any OBS, on any system.
 - Stream keys are left out by default; you can choose to include them, and the file is then clearly marked.
 - Missing media and plugins are reported in plain words (plugins with install instructions, never bundled).
 - Git-backed config repositories with large files kept outside git as placeholders.
-- Make a separate OBS with its own settings and plugins (Linux system package and Flatpak), so a heavy plugin only loads where it is needed.
+- Make a separate OBS with its own settings and plugins (Linux system package and Flatpak), so a heavy plugin only runs where it is needed.
 - One setup for several operating systems: capture sources are kept per OS.
 
 ## Install

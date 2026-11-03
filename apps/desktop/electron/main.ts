@@ -7,7 +7,7 @@ import {
   gitAvailable, gitInstallHelp, githubAuthGit, githubListRepos, githubWhoAmI, initRepo, markSynced, planImport, portableInstall, publishToGithub,
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
-  assetBundlePath, attachSecrets, commitAll, fetchRepo, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
+  assetBundlePath, attachSecrets, commitAll, fetchRepo, githubRenameRepo, githubRepoName, parseGithubUrl, pendingForObs, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
   renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, renameSourceInObs, RenameError,
 } from '@obs-config-loader/core'
 import { Updates } from './updater'
@@ -30,7 +30,7 @@ let nextHandle = 1
 
 // ── settings (user-added installs) ───────────────────────────────────────────
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json')
-interface RepoEntry { path: string; installId?: string }
+interface RepoEntry { path: string; installId?: string; /** `owner/name` on GitHub, when this preset was published or renamed from here. */ github?: string }
 interface Settings {
   customInstalls: ObsInstall[]; repos: RepoEntry[]; customFrame?: boolean
   /** Where new presets are kept. Unset = the app's own folder under Documents. */
@@ -142,7 +142,17 @@ function rememberAssets(presetPath: string, found: { id: string; filename: strin
 async function repoInfo(e: RepoEntry): Promise<RepoInfo> {
   const git = gitRunner()
   const status = await repoStatus(e.path, git)
-  return { path: e.path, name: status.manifest?.name ?? path.basename(e.path), installId: e.installId, status, remoteUrl: status.remote ? await getRemoteUrl(e.path, git) : undefined }
+  const remoteUrl = status.remote ? await getRemoteUrl(e.path, git) : undefined
+  // what it is called on GitHub (and a link, for the real github.com)
+  const full = e.github ?? (remoteUrl ? (() => { const g = parseGithubUrl(remoteUrl); return g ? `${g.owner}/${g.repo}` : undefined })() : undefined)
+  const online = remoteUrl ? { name: full ? full.split('/')[1] : path.basename(remoteUrl).replace(/\.git$/, ''), ...(full && /github\.com/i.test(remoteUrl) ? { url: `https://github.com/${full}` } : {}) } : undefined
+  return { path: e.path, name: status.manifest?.name ?? path.basename(e.path), installId: e.installId, status, remoteUrl, ...(online ? { online } : {}) }
+}
+function rememberGithub(p: string, fullName: string) {
+  const s = loadSettings()
+  const hit = s.repos.find((r) => r.path === p)
+  if (hit) hit.github = fullName; else s.repos.push({ path: p, github: fullName })
+  saveSettings(s)
 }
 function rememberRepo(p: string, installId?: string) {
   const s = loadSettings()
@@ -483,6 +493,7 @@ function registerIpc() {
         if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
         try {
           const out = await publishToGithub(r.folder, t, r.name, { private: r.github.private })
+          rememberGithub(r.folder, out.repo.fullName)
           published = out.repo.htmlUrl
           if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but pushing failed: ${out.push.message}` }
         } catch (e) { return { ok: false, error: `The repository was created on this computer, but not on GitHub: ${errText(e)}` } }
@@ -563,15 +574,18 @@ function registerIpc() {
     if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
     try {
       const out = await publishToGithub(p, t, name, { private: priv })
+      rememberGithub(p, out.repo.fullName)
       if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but pushing failed: ${out.push.message}` }
       return { ok: true, url: out.repo.htmlUrl, pushed: out.push.status === 'pushed' }
     } catch (e) { return { ok: false, error: e instanceof GithubError ? errText(e) : errText(e) } }
   })
 
   ipcMain.handle('repos:live', async (_e, p: string, installId: string) => {
-    const r = await captureLive({ host, install: findInstall(installId), dir: p, dryRun: true, git: gitRunner() })
+    const inst = findInstall(installId)
+    const r = await captureLive({ host, install: inst, dir: p, dryRun: true, git: gitRunner() })
     if (r.status === 'error') return { error: r.message }
-    return { changed: r.status === 'changes' ? r.files : [] }
+    // and the other direction: what the preset has that this OBS has not got yet (typically after getting updates)
+    return { changed: r.status === 'changes' ? r.files : [], pending: await pendingForObs(p, inst, gitRunner()) }
   })
   ipcMain.handle('repos:save', async (_e, p: string, installId: string, commitDirtyFirst: boolean, onConflict?: 'abort' | 'keep-repo' | 'keep-obs') => {
     const inst = findInstall(installId)
@@ -804,9 +818,9 @@ function registerIpc() {
       const layout = m.collections.find((c) => c.id === (r.kind === 'layout' ? r.id : r.layoutId))
       const output = m.profiles.find((x) => x.id === r.id)
       // is the same thing in the linked OBS too?
-      const inObs = !!inst && (r.kind === 'layout' ? !!layout && obsHasLayout(inst.configDir, layout.name)
-        : r.kind === 'output' ? !!output && obsHasOutput(inst.configDir, output.name)
-        : r.kind === 'scene' ? !!layout && obsHasLayout(inst.configDir, layout.name) : false)
+      const inObs = !!inst && (r.kind === 'layout' ? !!layout && obsHasLayout(inst.configDir, layout.fileName ?? layout.name)
+        : r.kind === 'output' ? !!output && obsHasOutput(inst.configDir, output.dirName ?? output.name)
+        : r.kind === 'scene' ? !!layout && obsHasLayout(inst.configDir, layout.fileName ?? layout.name) : false)
       if (inObs && (await obsRunningFor(inst!))) return { ok: false, error: 'OBS is open. Close it first, so the new name can be changed in OBS as well.' }
       if (inObs) {
         // make sure nothing done in OBS since the last save is lost
@@ -824,9 +838,9 @@ function registerIpc() {
         else if (r.kind === 'output') renameOutputSetting(r.path, outputNow!.id, r.to)
         else renameSceneOrSource(r.path, layoutNow!.id, r.from!, r.to)
         if (inObs) {
-          if (r.kind === 'layout') renameLayoutInObs(inst!.configDir, layoutNow!.name, r.to)
-          else if (r.kind === 'output') renameOutputInObs(inst!.configDir, outputNow!.name, r.to)
-          else renameSourceInObs(inst!.configDir, layoutNow!.name, r.from!, r.to)
+          if (r.kind === 'layout') renameLayoutInObs(inst!.configDir, layoutNow!.name, r.to, layoutNow!.fileName ?? layoutNow!.name)
+          else if (r.kind === 'output') renameOutputInObs(inst!.configDir, outputNow!.name, r.to, outputNow!.dirName ?? outputNow!.name)
+          else renameSourceInObs(inst!.configDir, layoutNow!.fileName ?? layoutNow!.name, r.from!, r.to)
         }
       } catch (e) {
         // leave the preset exactly as it was
@@ -842,6 +856,25 @@ function registerIpc() {
     }
   })
 
+  /** Rename the repository on GitHub (always `OBS-Config-<name>`) and point this preset at the new address. */
+  ipcMain.handle('presets:renameOnline', async (_e, p: string, name: string) => {
+    const t = loadGithubToken()
+    if (!t) return { ok: false, error: 'Sign in to GitHub first (under Settings).' }
+    try {
+      const entry = loadSettings().repos.find((r) => r.path === p) ?? { path: p }
+      const remote = await getRemoteUrl(p, gitRunner())
+      let found = entry.github ? { owner: entry.github.split('/')[0], repo: entry.github.split('/')[1] } : remote ? parseGithubUrl(remote) : null
+      // a stand-in server (tests) hands out folder paths as addresses: the repository is that folder's name, under the signed-in account
+      if (!found && remote && process.env.OBSCL_GITHUB_API && githubLogin) found = { owner: githubLogin, repo: path.basename(remote).replace(/\.git$/, '') }
+      if (!found) return { ok: false, error: 'This preset is not on GitHub under an address the app can rename.' }
+      const repo = await githubRenameRepo(t, found.owner, found.repo, name)
+      const set = await setRemote(p, repo.cloneUrl, gitRunner())
+      if (!set.ok) return { ok: false, error: set.message }
+      rememberGithub(p, repo.fullName)
+      return { ok: true, name: repo.name }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
+
   ipcMain.handle('presets:setOnline', async (_e, p: string, on: boolean, name: string, priv: boolean) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     const git = gitRunner()
@@ -855,6 +888,7 @@ function registerIpc() {
         const t = loadGithubToken()
         if (!t) return { ok: false, needsAccount: true, error: 'Sign in to GitHub first (under Settings), then switch this on.' }
         const out = await publishToGithub(p, t, name, { private: priv })
+        rememberGithub(p, out.repo.fullName)
         if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but uploading failed: ${out.push.message}` }
         return { ok: true, url: out.repo.htmlUrl }
       }

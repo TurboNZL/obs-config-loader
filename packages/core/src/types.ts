@@ -13,6 +13,8 @@ export interface Variable {
   required?: boolean
   /** Where the value goes, e.g. "profiles/main/service.json#settings.key" (informational). */
   target?: string
+  /** Files that should be inside this folder (for a folder a script lives in): the importer warns when they are not. */
+  mustContain?: string[]
   /** The secret itself. Present ONLY when the manifest says `containsSecrets` (the person exporting chose to include keys). */
   value?: string
 }
@@ -54,8 +56,12 @@ export interface PlatformMapEntry {
   note?: string
 }
 
-export interface CollectionRef { id: string; name: string; file: string }
-export interface ProfileRef { id: string; name: string; dir: string }
+/**
+ * `fileName` / `dirName`: the name OBS had for the file or folder when it differs from what OBS would call it for `name`.
+ * Other tools can depend on it (a script that re-renders `profiles/MyProfile`), so loading puts it back exactly.
+ */
+export interface CollectionRef { id: string; name: string; file: string; fileName?: string }
+export interface ProfileRef { id: string; name: string; dir: string; dirName?: string }
 
 export interface Manifest {
   format: typeof FORMAT
