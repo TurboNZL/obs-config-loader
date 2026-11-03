@@ -79,7 +79,7 @@ export function ExportPanel({ repo, onDone, onClose }: { repo: RepoInfo; onDone:
           <BigFiles files={files} chosen={chosen} setChosen={setChosen} forPreset />
           <KeysChoice
             checked={withKeys} onChange={setWithKeys} available={keys.count > 0}
-            help={keys.count ? `${keys.count} kept in this preset. Off is safest: the file is then safe to share.` : 'No stream keys are kept in this preset yet. Press “Save OBS to this preset” first.'}
+            help={keys.count ? `${keys.count} kept in this preset. Off is safest: the file is then safe to share.` : 'No stream keys are kept in this preset yet. Press “Update preset from OBS” first.'}
           />
           <Choice
             checked={independent} onChange={setIndependent}

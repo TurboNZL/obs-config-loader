@@ -996,7 +996,7 @@ function registerIpc() {
       if (inObs) {
         // make sure nothing done in OBS since the last save is lost
         const cap = await captureLive({ host, install: inst!, dir: r.path, appVersion: app.getVersion(), versions: detectVersions(inst!, host), git })
-        if (cap.status === 'conflict') return { ok: false, error: 'OBS and this preset changed the same part. Save OBS to the preset first and settle that, then rename.' }
+        if (cap.status === 'conflict') return { ok: false, error: 'OBS and this preset changed the same part. Update the preset from OBS first and settle that, then rename.' }
         if (cap.status === 'error' || cap.status === 'dirty') return { ok: false, error: cap.status === 'error' ? cap.message : 'This preset has changes that are not saved yet.' }
       }
       const fresh = readBundleDir(r.path).manifest // the save above may have changed the ids

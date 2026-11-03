@@ -64,14 +64,14 @@ export function HomePage({ installs, go }: { installs: InstallInfo[] | null; go:
   const notes: Note[] = []
   for (const f of list) {
     const n = f.repo.name
-    if (f.obsChanges) notes.push({ tone: 'warn', icon: 'monitor', text: `${f.obsLabel ?? 'Your OBS'} has ${plural(f.obsChanges, 'change')} that “${n}” does not have yet.`, action: 'Save OBS to the preset' })
+    if (f.obsChanges) notes.push({ tone: 'warn', icon: 'monitor', text: `${f.obsLabel ?? 'Your OBS'} has ${plural(f.obsChanges, 'change')} that “${n}” does not have yet.`, action: 'Update the preset from OBS' })
     if (f.repo.status.ahead > 0 && f.repo.remoteUrl) notes.push({ tone: 'warn', icon: 'cloudUp', text: `“${n}” has ${plural(f.repo.status.ahead, 'save')} that are not backed up on GitHub yet.`, action: 'Upload' })
     if (f.repo.status.behind > 0) notes.push({ tone: 'warn', icon: 'download', text: `GitHub has ${plural(f.repo.status.behind, 'newer change')} for “${n}”.`, action: 'Get updates' })
     if (f.repo.status.dirtyFiles.length) notes.push({ tone: 'warn', icon: 'pencil', text: `“${n}” has ${plural(f.repo.status.dirtyFiles.length, 'file')} changed by hand and not saved.` })
     const missing = f.ov?.files.filter((x) => !x.available).length ?? 0
     if (missing) notes.push({ tone: 'warn', icon: 'image', text: `“${n}” needs ${plural(missing, 'file')} this computer does not have yet.`, action: 'Find them' })
     if (!f.repo.remoteUrl) notes.push({ tone: 'good', icon: 'cloud', text: `“${n}” is only on this computer. Switch on online backup to keep a copy on GitHub.` })
-    if (f.ov && f.ov.keys.count === 0 && f.ov.keys.keep && f.repo.installId) notes.push({ tone: 'good', icon: 'key', text: `“${n}” has no stream keys kept in it. Save OBS to the preset to keep them.` })
+    if (f.ov && f.ov.keys.count === 0 && f.ov.keys.keep && f.repo.installId) notes.push({ tone: 'good', icon: 'key', text: `“${n}” has no stream keys kept in it. Update the preset from OBS to keep them.` })
   }
   if (installs && found.length === 0) notes.push({ tone: 'bad', icon: 'monitor', text: 'No OBS was found on this computer. Install OBS Studio, or tell this app where yours is.', action: 'OBS on this computer' })
   const urgent = notes.filter((x) => x.tone !== 'good')

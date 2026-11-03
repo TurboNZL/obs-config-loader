@@ -56,7 +56,7 @@ export function SettingsPage() {
             checked={s.rememberKeys}
             onChange={async (on) => { await window.obsLoader.settings.setRememberKeys(on); await load() }}
             title="Keep my stream keys inside my presets"
-            help="When you save OBS to a preset, your stream keys are kept in that preset's own private part on this computer (the “local” folder inside it), so applying the preset puts them back without typing. They are never uploaded to GitHub and never go into the preset's history. You can change this for one preset under its details."
+            help="When you make or update a preset from OBS, your stream keys are kept in that preset's own private part on this computer (the “local” folder inside it), so applying the preset puts them back without typing. They are never uploaded to GitHub and never go into the preset's history. You can change this for one preset under its details."
           />
           <p className="text-sm text-muted">They are stored as a plain file, the same way OBS itself keeps them, so protect the presets folder like you protect OBS's own folder. Turning this off only stops keeping keys in presets saved from now on.</p>
         </Card>

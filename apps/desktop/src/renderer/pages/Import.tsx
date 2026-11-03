@@ -152,6 +152,11 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
   const pluginKey = window.obsLoader.platform === 'win32' ? 'windows' : window.obsLoader.platform === 'darwin' ? 'macos'
     : install?.kind === 'flatpak' ? 'linux-flatpak' : 'linux-native'
   const replaced = report ? replacedNames(report) : { scenes: [], outputs: [] }
+  /** Applying a saved preset when nothing needs asking: one summary and one button. "Change what is applied" brings the full list back. */
+  const fromPreset = !!bundle?.repoDir
+  const [custom, setCustom] = useState(false)
+  useEffect(() => { setCustom(false) }, [bundle?.handle])
+  const simple = fromPreset && !custom && !!report && report.missingAssets.length === 0 && !report.missingVariables.some((v) => v.kind !== 'secret')
   let step = 0
 
   return (
@@ -186,8 +191,8 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
       )}
 
       {!done && (
-        <Step n={++step} title="Choose a setup file" help="A file ending in .obsbundle (or .zip) that you saved from this app.">
-          <div
+        <Step n={++step} title={fromPreset ? `Applying “${m?.name ?? 'preset'}”` : 'Choose a setup file'} help={fromPreset ? 'This is one of your presets. It goes into the OBS you pick below.' : 'A file ending in .obsbundle (or .zip) that you saved from this app.'}>
+          {!fromPreset && <div
             className={'p-6 text-center text-sm rounded-theme border border-dashed border-line' + (drag ? ' bg-raised' : '')}
             onDragOver={(e) => { e.preventDefault(); setDrag(true) }}
             onDragLeave={() => setDrag(false)}
@@ -198,11 +203,11 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
             }}
           >
             {m ? <span>Drop another file here to use that one instead</span> : <span>Drop the file here, or use the button</span>}
-          </div>
-          <div className="flex gap-2 flex-wrap">
+          </div>}
+          {!fromPreset && <div className="flex gap-2 flex-wrap">
             <button className="btn btn-accent px-4 py-2" onClick={async () => load(await window.obsLoader.bundle.open())}>{m ? 'Choose a different file…' : 'Choose a file…'}</button>
             <button className="btn btn-ghost px-3 py-2 text-sm" onClick={async () => load(await window.obsLoader.bundle.openFolder())}>It is a folder from git…</button>
-          </div>
+          </div>}
           {m && (
             <div className="text-sm space-y-1">
               <div><strong>{m.name}</strong>{m.description && <span className="text-muted"> — {m.description}</span>}</div>
@@ -252,7 +257,7 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
             {install?.running && <Message tone="warn">This OBS is open right now. Close it first: it saves over its files when it closes and would undo it.</Message>}
           </Step>
 
-          <Step n={++step} title="What should be applied?">
+          {!simple && <Step n={++step} title="What should be applied?">
             {m.collections.length > 0 && (
               <div>
                 <h3 className="text-sm font-semibold">Scenes</h3>
@@ -278,9 +283,9 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
                 <Choice checked={preferPipewire} onChange={setPreferPipewire} title="Capture screens and windows with PipeWire (Wayland)" help="Only matters if the setup was made on another kind of computer. Untick to use the older X11 capture." />
               </details>
             )}
-          </Step>
+          </Step>}
 
-          {(secretVars.length > 0 || otherVars.length > 0) && (
+          {!simple && (secretVars.length > 0 || otherVars.length > 0) && (
             <Step
               n={++step} title={m.containsSecrets ? 'Stream keys' : 'Your stream keys'}
               help={m.containsSecrets
@@ -310,7 +315,7 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
             </Step>
           )}
 
-          {folderVars.length > 0 && (
+          {!simple && folderVars.length > 0 && (
             <Step n={++step} title="Where should things be saved?" help="Folders this setup uses. Leave one empty to use the suggested folder.">
               {folderVars.map((v) => (
                 <Field key={v.name} label={v.label ?? v.name} hint={v.default ? `Suggested: ${prettyFolder(v.default)}` : undefined}>
@@ -323,7 +328,7 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
             </Step>
           )}
 
-          {bigFiles.length > 0 && (
+          {!simple && bigFiles.length > 0 && (
             <Step n={++step} title="Find your big files" help="These pictures, sounds or videos were too big to put in the file. Tell the app where each one is on this computer (you can also skip this and fix it in OBS later).">
               {bigFiles.map((a) => (
                 <div key={a.id} className="bt-row flex items-center gap-3 py-1">
@@ -440,6 +445,7 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
                 </ul>
               </details>
 
+              {simple && <div><button className="btn btn-ghost px-2 py-0.5 text-xs" onClick={() => setCustom(true)}>Change what is applied…</button></div>}
               <button className="btn btn-accent px-5 py-2.5 text-base" disabled={busy || report.blockers.length > 0 || report.willWrite.length === 0 || scenes.length + outputs.length === 0} onClick={apply}>
                 {busy ? 'Applying…' : liveChanges.length > 0 ? 'Apply to OBS anyway' : 'Apply to OBS'}
               </button>

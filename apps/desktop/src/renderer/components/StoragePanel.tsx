@@ -74,33 +74,33 @@ export function StoragePanel({ repo, ov, changed }: { repo: RepoInfo; ov: Preset
         <tbody>
           {ov.layouts.map((l) => (
             <Row busy={busy} key={'l' + l.id} icon="grid" label={l.name} aria={`scene layout ${l.name}`} note={`scene layout · ${l.scenes} scenes`} local={l.local} cloudOn={l.cloud}
-              onLocal={(on) => run(() => exclude('collections', l.name, on), 'Changed. It applies the next time you save OBS to this preset.')}
+              onLocal={(on) => run(() => exclude('collections', l.name, on), 'Changed. It applies the next time you update this preset from OBS.')}
               onCloud={(on) => cloud({ layouts: flip(skippedLayouts, l.id, on) })} />
           ))}
           {ov.outputs.map((o) => (
             <Row busy={busy} key={'o' + o.id} icon="settings" label={o.name} aria={`output settings ${o.name}`} note="output settings" local={o.local} cloudOn={o.cloud}
-              onLocal={(on) => run(() => exclude('profiles', o.name, on), 'Changed. It applies the next time you save OBS to this preset.')}
+              onLocal={(on) => run(() => exclude('profiles', o.name, on), 'Changed. It applies the next time you update this preset from OBS.')}
               onCloud={(on) => cloud({ outputs: flip(skippedOutputs, o.id, on) })} />
           ))}
           {(ov.scripts.names.length > 0 || !ov.scripts.local) && (
             <Row busy={busy} icon="code" label="Scripts" note={ov.scripts.names.length ? ov.scripts.names.join(', ') : 'left out of this preset'} local={ov.scripts.local} cloudOn={ov.scripts.cloud}
-              onLocal={(on) => run(() => exclude('scripts', undefined, on), 'Changed. It applies the next time you save OBS to this preset.')}
+              onLocal={(on) => run(() => exclude('scripts', undefined, on), 'Changed. It applies the next time you update this preset from OBS.')}
               onCloud={(on) => cloud({ scripts: !on })} />
           )}
           {(ov.remoteControl.present || !ov.remoteControl.local) && (
             <Row busy={busy} icon="plug" label="Remote-control settings (WebSocket)" note="the password is never kept in the preset" local={ov.remoteControl.local} cloudOn={ov.remoteControl.cloud}
-              onLocal={(on) => run(() => exclude('remoteControl', undefined, on), 'Changed. It applies the next time you save OBS to this preset.')}
+              onLocal={(on) => run(() => exclude('remoteControl', undefined, on), 'Changed. It applies the next time you update this preset from OBS.')}
               onCloud={(on) => cloud({ remoteControl: !on })} />
           )}
           {ov.files.map((f) => (
             <Row busy={busy} key={'f' + f.id} icon="image" label={f.filename} note={`${f.size ? size(f.size) : 'size unknown'}${f.available ? '' : ' · not on this computer'}`} local={f.keepCopy} cloudOn={f.cloud}
-              onLocal={(on) => run(() => window.obsLoader.presets.setStorage(repo.path, { skipLocalMedia: on ? copyOff.filter((x) => x !== f.id) : [...copyOff, f.id] }), on ? 'Changed. A copy is added the next time you save OBS to this preset.' : 'Changed. The copy inside the preset was removed.')}
+              onLocal={(on) => run(() => window.obsLoader.presets.setStorage(repo.path, { skipLocalMedia: on ? copyOff.filter((x) => x !== f.id) : [...copyOff, f.id] }), on ? 'Changed. A copy is added the next time you update this preset from OBS.' : 'Changed. The copy inside the preset was removed.')}
               onCloud={(on) => cloud({ media: on ? [...mediaUp, f.id] : mediaUp.filter((x) => x !== f.id) })}
               cloudDisabled={f.tooBigForGithub || !f.available}
               />
           ))}
           <Row busy={busy} icon="key" label="Stream keys" note={ov.keys.count ? `${ov.keys.count} kept` : 'none kept yet'} local={ov.keys.keep} cloudOn={false}
-            onLocal={(on) => run(() => window.obsLoader.presets.setStorage(repo.path, { keepKeys: on }), on ? 'Changed. Keys are kept the next time you save OBS to this preset.' : 'Changed. The keys that were kept were removed from this preset.')}
+            onLocal={(on) => run(() => window.obsLoader.presets.setStorage(repo.path, { keepKeys: on }), on ? 'Changed. Keys are kept the next time you update this preset from OBS.' : 'Changed. The keys that were kept were removed from this preset.')}
             cloudNote="never" />
         </tbody>
       </table>
