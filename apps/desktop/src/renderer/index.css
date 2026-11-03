@@ -30,3 +30,33 @@ pre.cmd { background: hsl(var(--raised)); border: 1px solid hsl(var(--line)); pa
 .guide th, .guide td { border: 1px solid hsl(var(--line)); padding: 0.3rem 0.5rem; text-align: left; vertical-align: top; }
 .guide blockquote { border-left: 3px solid hsl(var(--line)); padding-left: 0.8rem; color: hsl(var(--muted)); }
 .guide hr { border: 0; border-top: 1px solid hsl(var(--line)); margin: 1.2rem 0; }
+
+/* The three ways a preset is saved, each with its own colour (the same in every theme): this computer, GitHub, a file. */
+:root { --k-local: 152 52% 40%; --k-cloud: 212 78% 52%; --k-file: 30 88% 50%; }
+.kind-local { --k: var(--k-local); }
+.kind-cloud { --k: var(--k-cloud); }
+.kind-file  { --k: var(--k-file); }
+.kind-panel {
+  background-color: hsl(var(--k) / 0.09);
+  box-shadow: inset 4px 0 0 hsl(var(--k));
+  border-radius: var(--radius, 0.6rem);
+}
+.kind-text { color: hsl(var(--k)); }
+.kind-dot { background-color: hsl(var(--k)); }
+.kind-btn { border-color: hsl(var(--k) / 0.55); }
+.kind-btn:hover:not(:disabled) { background-color: hsl(var(--k) / 0.14); }
+.kind-btn.is-on { background-color: hsl(var(--k) / 0.2); color: hsl(var(--k)); border-color: hsl(var(--k)); }
+
+/* previews of what changed */
+.diff { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.74rem; line-height: 1.45; overflow-x: auto; max-height: 20rem; overflow-y: auto; }
+.diff div { white-space: pre; padding: 0 0.5rem; }
+.diff .add { background-color: hsl(var(--good) / 0.16); }
+.diff .del { background-color: hsl(var(--bad) / 0.16); }
+.diff .hunk { color: hsl(var(--muted)); background-color: hsl(var(--raised)); }
+
+/* a bar behind a number */
+.bar { height: 0.5rem; border-radius: 999px; background-color: hsl(var(--raised)); overflow: hidden; }
+.bar > span { display: block; height: 100%; border-radius: 999px; background-color: hsl(var(--k, var(--accent))); }
+
+input[type="checkbox"].kind-local { accent-color: hsl(var(--k-local)) !important; }
+input[type="checkbox"].kind-cloud { accent-color: hsl(var(--k-cloud)) !important; }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AppSettings, GithubState, GitState, RepoInfo } from '../../../electron/api'
 import { Card, Chip, Choice, Message, Page } from '../ui'
+import { Icon } from '../components/Icon'
 import { GitMissing, GithubCard } from '../components/Account'
 
 export function SettingsPage() {
@@ -22,10 +23,10 @@ export function SettingsPage() {
   useEffect(() => { void load(); void refreshGit(); void refreshGh() }, [])
 
   return (
-    <Page title="Settings" intro="Where your presets are kept, how stream keys are handled, and your online backup account.">
+    <Page icon="settings" title="Settings" intro="Where your presets are kept, how stream keys are handled, and your online backup account.">
       {s && (
-        <Card title="Where presets are kept">
-          <p className="text-sm text-muted">Every preset gets its own folder here. Changing this does not move presets you already have; they stay where they are.</p>
+        <Card title={<span className="inline-flex items-center gap-2"><Icon name="folder" /> Where presets are kept</span>}>
+          <p className="text-sm text-muted">Every preset gets its own folder here, in the place your system keeps an app's own data. Changing this does not move presets you already have; they stay where they are.</p>
           <p className="mono" aria-label="Presets folder">{s.presetsRoot}</p>
           {moveMsg && <Message tone={moveMsg.tone}>{moveMsg.text}</Message>}
           <div className="flex gap-2 flex-wrap">
@@ -50,15 +51,14 @@ export function SettingsPage() {
       )}
 
       {s && (
-        <Card title="Stream keys" right={s.canStoreKeys ? <Chip tone="good">kept safe</Chip> : <Chip tone="warn">not available</Chip>}>
+        <Card title={<span className="inline-flex items-center gap-2"><Icon name="key" /> Stream keys</span>} right={<Chip tone="good" icon="drive">this computer only</Chip>}>
           <Choice
-            checked={s.rememberKeys && s.canStoreKeys} disabled={!s.canStoreKeys}
+            checked={s.rememberKeys}
             onChange={async (on) => { await window.obsLoader.settings.setRememberKeys(on); await load() }}
-            title="Remember my stream keys on this computer"
-            help="When you save a preset, your stream keys are kept encrypted on this computer only, so you can apply that preset again without typing them, or put them in a file when you choose to. They are never stored in the preset folder and never uploaded."
+            title="Keep my stream keys inside my presets"
+            help="When you save OBS to a preset, your stream keys are kept in that preset's own private part on this computer (the “local” folder inside it), so applying the preset puts them back without typing. They are never uploaded to GitHub and never go into the preset's history. You can change this for one preset under its details."
           />
-          {!s.canStoreKeys && <Message tone="warn">This computer has no system keychain to keep them safe in, so stream keys are not remembered. You can still type them when you apply a preset.</Message>}
-          {s.canStoreKeys && !s.rememberKeys && <p className="text-sm text-muted">Turning this off also forgets the keys already remembered.</p>}
+          <p className="text-sm text-muted">They are stored as a plain file, the same way OBS itself keeps them, so protect the presets folder like you protect OBS's own folder. Turning this off only stops keeping keys in presets saved from now on.</p>
         </Card>
       )}
 

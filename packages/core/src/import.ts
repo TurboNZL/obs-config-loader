@@ -12,7 +12,7 @@ import { DEFAULT_PLATFORM_MAP, standInOptions, sourceName, PIPEWIRE_AUDIO_MODULE
 import { applyVariants, parseVariants, variantsPathFor } from './variants.js'
 import { KNOWN_PLUGINS, checkPlugins, installedModules, type PluginFinding } from './plugins.js'
 import { unversioned } from './plugins.js'
-import { assetBundlePath, WEBSOCKET_FILE } from './export.js'
+import { assetBundlePath, PROJECT_DIR, PROJECT_FILE, WEBSOCKET_FILE } from './export.js'
 import { compareVersions, versionNotes, type DetectedVersions } from './versions.js'
 
 export type ConflictMode = 'replace' | 'keep-both' | 'skip'
@@ -56,7 +56,7 @@ export interface PlannedWrite {
   action: WriteAction
   /** Existing file to copy to the backup folder first. */
   backupOf?: string
-  kind: 'collection' | 'profile-file' | 'media' | 'global' | 'websocket'
+  kind: 'collection' | 'profile-file' | 'media' | 'global' | 'websocket' | 'project'
 }
 
 export interface Substitution {
@@ -290,11 +290,33 @@ export function planImport(o: ImportOptions): ImportPlan {
     }
   }
 
+  // The files of a script folder come with the setup. They are put into the folder when it is a new or empty folder, or when it already
+  // is that project (holds its main script); any other folder is left alone, so a setup file can never drop code into a folder
+  // that belongs to something else (a startup folder, say).
+  const projectFiles = new Set<string>()
+  const projectWrites: { folder: string; label: string; rel: string; data: Buffer }[] = []
+  for (const pr of m.projects ?? []) {
+    const v = m.variables.find((x) => x.name === pr.variable)
+    const folder = v ? varValue.get(v.name) : undefined
+    if (!v || !folder) continue
+    const files = pr.files.filter((rel) => PROJECT_FILE.test(rel) && !rel.startsWith('/') && !rel.includes('\\') && !rel.split('/').includes('..') && !rel.split('/').some((x) => x.startsWith('.')) && bundle.files.has(`${PROJECT_DIR}/${pr.variable}/${rel}`))
+    const main = v.mustContain ?? []
+    const isEmpty = (() => { try { return fs.readdirSync(folder).length === 0 } catch { return true } })()
+    const isProject = main.length > 0 && main.some((f) => host.exists(p.join(folder, f)))
+    if (!files.length) continue
+    if (!isEmpty && !isProject) {
+      warnings.push(`${v.label ?? v.name}: ${folder} already has other things in it, so the script files kept with this setup were not put there. Choose the folder the script lives in, or an empty one.`)
+      continue
+    }
+    for (const rel of files) { projectFiles.add(`${v.name}/${rel}`); projectWrites.push({ folder, label: v.label ?? v.name, rel, data: bundle.files.get(`${PROJECT_DIR}/${pr.variable}/${rel}`)! }) }
+  }
+
   // a folder a script lives in must really hold that script: otherwise OBS shows the script as broken
   for (const v of m.variables) {
     const folder = v.mustContain?.length ? varValue.get(v.name) : undefined
     if (!folder) continue
     for (const f of v.mustContain!) {
+      if (projectFiles.has(`${v.name}/${f}`)) continue // it comes with the setup and is put there
       if (!host.exists(p.join(folder, f))) warnings.push(`${v.label ?? v.name}: ${f} was not found in ${folder}. Choose the folder it is in, or the script will show as broken in OBS.`)
     }
   }
@@ -346,6 +368,13 @@ export function planImport(o: ImportOptions): ImportPlan {
 
   const planFile = (path: string, data: Buffer, kind: PlannedWrite['kind'], action: WriteAction): void => {
     writes.push({ path, data, action, kind, backupOf: action === 'replace' && fs.existsSync(path) ? path : undefined })
+  }
+
+  for (const w of projectWrites) {
+    const dest = p.join(w.folder, ...w.rel.split('/'))
+    let same = false
+    try { same = fs.readFileSync(dest).equals(w.data) } catch { /* not there yet */ }
+    if (!same) planFile(dest, w.data, 'project', fs.existsSync(dest) ? 'replace' : 'create')
   }
 
   // collections

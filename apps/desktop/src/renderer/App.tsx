@@ -9,11 +9,12 @@ import { AppearancePage } from './pages/Appearance'
 import { AboutPage } from './pages/About'
 import { GuidesPage } from './pages/Guides'
 import { WindowFrame } from './components/WindowFrame'
+import { Icon, type IconName } from './components/Icon'
 
 type Tab = 'home' | 'presets' | 'installs' | 'import' | 'settings' | 'guides' | 'appearance' | 'about'
-const TABS: [Tab, string][] = [
-  ['home', 'Home'], ['presets', 'Presets'], ['installs', 'OBS on this computer'], ['settings', 'Settings'],
-  ['guides', 'Help'], ['appearance', 'Look'], ['about', 'About'],
+const TABS: [Tab, string, IconName][] = [
+  ['home', 'Home', 'home'], ['presets', 'Presets', 'layers'], ['installs', 'OBS on this computer', 'monitor'], ['settings', 'Settings', 'settings'],
+  ['guides', 'Help', 'help'], ['appearance', 'Look', 'palette'], ['about', 'About', 'info'],
 ]
 
 export function App() {
@@ -34,16 +35,16 @@ export function App() {
       <div className="flex min-h-0 flex-1">
       <nav className="bt-side w-56 shrink-0 p-3 space-y-1" aria-label="Main">
         <div className="px-2 py-3 font-bold">OBS Config Loader</div>
-        {TABS.map(([id, label]) => (
-          <button key={id} className="bt-nav w-full text-left px-3 py-2" aria-current={tab === id ? 'page' : undefined} onClick={() => go(id)}>
-            {label}
+        {TABS.map(([id, label, icon]) => (
+          <button key={id} className="bt-nav w-full text-left px-3 py-2 flex items-center gap-2.5" aria-current={tab === id ? 'page' : undefined} onClick={() => go(id)}>
+            <Icon name={icon} size={17} />{label}
           </button>
         ))}
       </nav>
       <main className="flex-1 overflow-y-auto">
         {tab === 'home' && <HomePage installs={installs} go={(t) => go(t)} />}
         {tab === 'installs' && <InstallsPage installs={installs} refresh={refresh} go={go} />}
-        {tab === 'import' && <ImportPage installs={installs} preselect={preselect} openPath={openPath} refresh={refresh} />}
+        {tab === 'import' && <ImportPage installs={installs} preselect={preselect} openPath={openPath} refresh={refresh} onBack={() => go('presets')} />}
         {tab === 'presets' && <PresetsPage installs={installs} applyRepo={applyRepo} go={(t) => go(t)} startWith={preselect} refreshInstalls={refresh} />}
         {tab === 'settings' && <SettingsPage />}
         {tab === 'appearance' && <AppearancePage />}

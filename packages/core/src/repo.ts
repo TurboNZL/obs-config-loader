@@ -5,12 +5,16 @@ import * as os from 'node:os'
 import { execFile } from 'node:child_process'
 import type { Bundle, Manifest } from './types.js'
 import type { Host, ObsInstall } from './detect.js'
-import { exportBundle, deriveManifestFields } from './export.js'
+import { exportBundle, deriveManifestFields, stripSecrets } from './export.js'
 import { readBundleDir, serializeManifest, writeBundleDir, BundleError } from './bundleIO.js'
 import { availableOn, isPlatformSpecific, DEFAULT_PLATFORM_MAP } from './sources.js'
 import { unversioned } from './plugins.js'
 import { applyVersions, type DetectedVersions } from './versions.js'
 import { mergeProfileVariants } from './profilevariants.js'
+import {
+  cloudSkippedPaths, copyLocalOnly, isSkipped, localOnlyDiffs, mediaToCopy, pruneLocalMedia, readLocalKeys, readLocalSettings, storeLocalMedia, writeExclude, writeLocalKeys, writeLocalSettings,
+  localMediaLocations, localMediaPath, safeSegment, type LocalSettings, type SeenAsset,
+} from './local.js'
 import { extractVariants, parseVariants, serializeVariants, variantsPathFor } from './variants.js'
 
 // ── git runner ───────────────────────────────────────────────────────────────
@@ -293,13 +297,22 @@ export interface CaptureOptions {
   exclude?: Manifest['exclude']
   /** When the repo and OBS changed the same lines: stop (default), or settle just those lines in favour of one side. */
   onConflict?: 'abort' | 'keep-repo' | 'keep-obs'
+  /** With `dryRun`: also say what changed line by line. */
+  withDiff?: boolean
+  /** Also keep this computer's own part of the preset up to date (stream keys, copies of big files, parts not uploaded). Default yes. */
+  keepLocal?: boolean
+  /** Whether a preset that has not said otherwise keeps stream keys. Default yes. */
+  keepKeysDefault?: boolean
   git?: GitRunner
 }
 
+/** One file that would change, for showing a preview. */
+export interface ChangeDetail { file: string; status: 'added' | 'modified' | 'deleted'; added: number; removed: number; patch?: string; /** Only kept on this computer (not part of what is uploaded). */ local?: boolean }
+
 export type CaptureResult =
   | { status: 'unchanged' }
-  | { status: 'changes'; files: string[] } // dry run only
-  | { status: 'committed'; files: string[]; commit: string; merged: boolean }
+  | { status: 'changes'; files: string[]; details?: ChangeDetail[]; localChanges?: string[] } // dry run only
+  | { status: 'committed'; files: string[]; commit: string; merged: boolean; keys?: number; copied?: number }
   | { status: 'conflict'; conflicts: string[] }
   | { status: 'dirty'; files: string[] }
   | { status: 'error'; message: string }
@@ -334,7 +347,8 @@ export async function pendingForObs(dir: string, install: ObsInstall, git: GitRu
   if (marked === head) return []
   if ((await git(['merge-base', '--is-ancestor', marked, head], dir)).code !== 0) return null
   const r = await git(['diff', '--name-only', marked, head], dir)
-  return r.stdout.split('\n').filter(Boolean).filter((f) => !/^(manifest\.json|assets\.lock\.json|\.gitignore)$/.test(f) || true)
+  const skipped = cloudSkippedPaths(readLocalSettings(dir).cloud?.skip)
+  return r.stdout.split('\n').filter(Boolean).filter((f) => !isSkipped(f, skipped))
 }
 
 /** Call after the repo's content has been loaded into OBS: from now on live edits are measured from here. */
@@ -344,7 +358,7 @@ export async function markSynced(dir: string, install: ObsInstall, git: GitRunne
 }
 
 /** Overlay the live OBS state onto a checkout of the repo (keeps ids, names, platform originals, unknown manifest fields). */
-function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest['exclude']): void {
+function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest['exclude'], uploadMedia: string[] = []): { secrets: Record<string, string> } {
   let prev: Bundle | undefined
   try { prev = readBundleDir(target) } catch (e) {
     if (!(e instanceof BundleError && e.code === 'not-a-bundle')) throw e
@@ -355,10 +369,13 @@ function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest[
     description: typeof pm?.description === 'string' ? pm.description : undefined,
     // No name filter: OBS is the source of truth for which scenes/profiles exist. (Filtering by the names saved
     // earlier made a renamed collection or profile vanish, and the folder was then wiped.)
-    bundleBelowBytes: o.bundleBelowBytes, appVersion: o.appVersion, versions: o.versions, exclude: excludeNow ?? pm?.exclude ?? o.exclude, onAsset: o.onAsset,
+    bundleBelowBytes: o.bundleBelowBytes, alsoBundle: uploadMedia, appVersion: o.appVersion, versions: o.versions, exclude: excludeNow ?? pm?.exclude ?? o.exclude, onAsset: o.onAsset,
+    // the stream keys are read here and kept apart: they go into the preset's own local-only area, never into what git tracks
+    includeSecrets: true,
     // the repo's history is its revision list: keep these two still so they never cause a merge conflict
     revision: pm?.revision, now: pm?.exportedAt ? new Date(pm.exportedAt) : undefined,
   })
+  const secrets = stripSecrets(bundle)
   // Never turn a working repo into an empty one because of a name mismatch or an odd OBS state.
   if (prev && (prev.manifest.collections.length && !bundle.manifest.collections.length
     || prev.manifest.profiles.length && !bundle.manifest.profiles.length)) {
@@ -407,9 +424,35 @@ function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest[
   deriveManifestFields(bundle) // from the final files (canonical + every platform's variants), not from this machine alone
   applyVersions(bundle.manifest, prev?.manifest, o.versions)
 
-  // A repo never holds the media themselves, so every asset is a placeholder there (writeBundleDir records it so).
-  bundle.manifest.assets = bundle.manifest.assets.map((a) => (a.mode === 'bundled' && a.role !== 'script' ? { ...a, mode: 'external' as const } : a))
-  writeBundleDir(bundle, target, { withMedia: false })
+  // Files are placeholders in what git tracks (this computer's own copies are in `local/`), except the ones chosen to be uploaded.
+  const up = new Set(uploadMedia)
+  bundle.manifest.assets = bundle.manifest.assets.map((a) => (a.mode === 'bundled' && a.role !== 'script' && !up.has(a.id) ? { ...a, mode: 'external' as const } : a))
+  writeBundleDir(bundle, target, { withMedia: false, mediaIds: uploadMedia })
+  return { secrets }
+}
+
+/** What changed, file by file, in the staged changes of a checkout. */
+async function describeStaged(wt: string, git: GitRunner): Promise<ChangeDetail[]> {
+  const status = (await git(['diff', '--cached', '--name-status', '--no-renames'], wt)).stdout.split('\n').filter(Boolean)
+  const num = new Map<string, [number, number]>()
+  for (const l of (await git(['diff', '--cached', '--numstat', '--no-renames'], wt)).stdout.split('\n').filter(Boolean)) {
+    const [a, r, ...f] = l.split('\t')
+    num.set(f.join('\t'), [Number(a) || 0, Number(r) || 0])
+  }
+  const out: ChangeDetail[] = []
+  for (const l of status) {
+    const [st, ...f] = l.split('\t')
+    const file = f.join('\t')
+    const [added, removed] = num.get(file) ?? [0, 0]
+    const d: ChangeDetail = { file, status: st === 'A' ? 'added' : st === 'D' ? 'deleted' : 'modified', added, removed }
+    if (out.length < 30 && added + removed > 0) {
+      const lines = (await git(['diff', '--cached', '--no-color', '-U2', '--no-renames', '--', file], wt)).stdout.split('\n')
+      const body = lines.slice(lines.findIndex((x) => x.startsWith('@@')))
+      d.patch = (body.length > 160 ? [...body.slice(0, 160), `… ${body.length - 160} more lines`] : body).join('\n')
+    }
+    out.push(d)
+  }
+  return out.sort((a, b) => a.file.localeCompare(b.file))
 }
 
 /**
@@ -418,28 +461,66 @@ function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest[
  * a pull, by an AI): live edits are committed on top of the commit OBS last matched, then merged (3-way) into HEAD.
  * A conflict is aborted and reported; nothing is left half-merged.
  */
-export async function captureLive(o: CaptureOptions): Promise<CaptureResult> {
-  const git = o.git ?? defaultGit
+export async function captureLive(o0: CaptureOptions): Promise<CaptureResult> {
+  const git = o0.git ?? defaultGit
+  const seen: SeenAsset[] = []
+  const o: CaptureOptions = { ...o0, onAsset: (a) => { seen.push(a); o0.onAsset?.(a) } }
+  // what stays on this computer: git is told first, so it never sees those parts (and `local/` is always out of its sight)
+  const settings: LocalSettings = readLocalSettings(o.dir)
+  const skipped = cloudSkippedPaths(settings.cloud?.skip)
+  const before = settings.kept ?? []
+  writeExclude(o.dir, skipped)
+  const id = await identity(o.dir, git)
+  // parts that are uploaded again from now on: they are on disk but were never tracked, so they are added as they are
+  const released = before.filter((x) => !skipped.includes(x) && fs.existsSync(nodePath.join(o.dir, x)))
+  if (released.length && !o.dryRun && (await git(['rev-parse', '--verify', '--quiet', 'HEAD'], o.dir)).code === 0) {
+    await git(['add', '-f', '--', ...released], o.dir)
+    await git([...id, 'commit', '-q', '-m', 'Upload some parts again'], o.dir)
+  }
+  if (!o.dryRun && (before.length !== skipped.length || before.some((x) => !skipped.includes(x)))) writeLocalSettings(o.dir, { ...settings, kept: skipped })
   const st = await repoStatus(o.dir, git)
   if (!st.isRepo) return { status: 'error', message: 'This folder is not a git repository.' }
+  const keepLocal = o.keepLocal !== false
+  const uploadMedia = settings.cloud?.media ?? []
   if (st.dirtyFiles.length && !o.dryRun) {
     if (o.onDirty !== 'commit-first') return { status: 'dirty', files: st.dirtyFiles }
     await commitAll(o.dir, 'Changes made outside OBS Config Loader', git)
   }
   const { head, base } = await baseFor(o.dir, o.install, git)
-  const id = await identity(o.dir, git)
   // What the preset leaves out is what it says NOW (its current files), not what it said at the commit OBS last matched.
   let excludeNow: Manifest['exclude'] | undefined
   try { excludeNow = readBundleDir(o.dir).manifest.exclude ?? {} } catch { /* first save: nothing yet */ }
+
+  /** Keys, copies of big files, pruning: this computer's part of the preset. */
+  const finishLocal = (secrets: Record<string, string>): { keys: number; copied: number } => {
+    if (!keepLocal) return { keys: 0, copied: 0 }
+    let keys = 0
+    if ((settings.keepKeys ?? o.keepKeysDefault ?? true) && Object.keys(secrets).length) keys = writeLocalKeys(o.dir, secrets)
+    const copied = storeLocalMedia(o.dir, seen, settings).length
+    try { pruneLocalMedia(o.dir, readBundleDir(o.dir).manifest, settings) } catch { /* nothing to prune against yet */ }
+    return { keys, copied }
+  }
+  /** What this computer's part would gain from a save. */
+  const localChanges = (fresh: string | undefined, secrets: Record<string, string>): string[] => {
+    if (!keepLocal) return []
+    const out = fresh ? localOnlyDiffs(fresh, o.dir, skipped) : []
+    if ((settings.keepKeys ?? o.keepKeysDefault ?? true)) {
+      const had = readLocalKeys(o.dir)
+      if (Object.entries(secrets).some(([k, v]) => had[k] !== v)) out.push('local/keys.json')
+    }
+    for (const a of mediaToCopy(o.dir, seen, settings)) out.push(`local/media/${a.id}/${a.filename}`)
+    return out
+  }
 
   try {
     // First capture into an empty repository: write straight into the working tree.
     if (!head || !base) {
       if (o.dryRun) return { status: 'changes', files: ['manifest.json'] }
-      writeLiveInto(o, o.dir)
+      const { secrets } = writeLiveInto(o, o.dir, undefined, uploadMedia)
       const commit = await commitAll(o.dir, `Live edits from ${o.install.label}`, git)
       await markSynced(o.dir, o.install, git)
-      return commit ? { status: 'committed', files: ['manifest.json'], commit, merged: false } : { status: 'unchanged' }
+      const loc = finishLocal(secrets)
+      return commit ? { status: 'committed', files: ['manifest.json'], commit, merged: false, ...loc } : { status: 'unchanged' }
     }
 
     // Everything else happens in a scratch checkout of the base commit.
@@ -447,14 +528,34 @@ export async function captureLive(o: CaptureOptions): Promise<CaptureResult> {
     try {
       const add = await git(['worktree', 'add', '--detach', wt, base], o.dir)
       if (add.code !== 0) return { status: 'error', message: `Could not prepare a scratch checkout: ${add.stderr.trim()}` }
-      writeLiveInto(o, wt, excludeNow)
+      // parts that stay on this computer may still be in older saves: stop tracking them here, so the live commit and HEAD agree
+      if (skipped.length) {
+        await git(['rm', '-rfq', '--ignore-unmatch', '--', ...skipped.map((x) => x.replace(/\/$/, ''))], wt)
+        if ((await git(['diff', '--cached', '--quiet'], wt)).code !== 0) await git([...id, 'commit', '-q', '-m', 'Keep some parts on this computer'], wt)
+      }
+      const { secrets } = writeLiveInto(o, wt, excludeNow, uploadMedia)
       await git(['add', '-A'], wt)
       const files = (await git(['diff', '--cached', '--name-only'], wt)).stdout.split('\n').filter(Boolean).sort()
-      if (!files.length) return { status: 'unchanged' }
-      if (o.dryRun) return { status: 'changes', files }
+      const local = localChanges(wt, secrets)
+      // stopping the upload of a part is a commit of its own in the scratch checkout; it has to reach the preset too
+      const stopped = skipped.length > 0 && (await git(['rev-parse', 'HEAD'], wt)).stdout.trim() !== base
+      if (!files.length && !local.length && !(stopped && !o.dryRun)) return { status: 'unchanged' }
+      if (o.dryRun) {
+        let details: ChangeDetail[] | undefined
+        if (o.withDiff) details = [...(await describeStaged(wt, git)), ...local.map((f): ChangeDetail => ({ file: f, status: 'modified', added: 0, removed: 0, local: true }))]
+        return { status: 'changes', files: [...files, ...local], ...(details ? { details } : {}), ...(local.length ? { localChanges: local } : {}) }
+      }
 
-      const c = await git([...id, 'commit', '-m', `Live edits from ${o.install.label}`], wt)
-      if (c.code !== 0) return { status: 'error', message: `git commit failed: ${c.stderr.trim() || c.stdout.trim()}` }
+      if (!files.length && !stopped) {
+        // nothing git tracks changed: only this computer's own part did
+        copyLocalOnly(wt, o.dir, skipped)
+        const loc = finishLocal(secrets)
+        return { status: 'committed', files: local, commit: (await git(['rev-parse', '--short', 'HEAD'], o.dir)).stdout.trim(), merged: false, ...loc }
+      }
+      if (files.length) {
+        const c = await git([...id, 'commit', '-m', `Live edits from ${o.install.label}`], wt)
+        if (c.code !== 0) return { status: 'error', message: `git commit failed: ${c.stderr.trim() || c.stdout.trim()}` }
+      }
       const live = (await git(['rev-parse', 'HEAD'], wt)).stdout.trim()
 
       const merged = head !== base
@@ -469,7 +570,9 @@ export async function captureLive(o: CaptureOptions): Promise<CaptureResult> {
         return { status: 'error', message: (m.stderr.trim() || m.stdout.trim()).split('\n').slice(-3).join('\n') }
       }
       await git(['update-ref', syncRef(o.install), live], o.dir)
-      return { status: 'committed', files, commit: (await git(['rev-parse', '--short', 'HEAD'], o.dir)).stdout.trim(), merged }
+      copyLocalOnly(wt, o.dir, skipped)
+      const loc = finishLocal(secrets)
+      return { status: 'committed', files: [...files, ...local], commit: (await git(['rev-parse', '--short', 'HEAD'], o.dir)).stdout.trim(), merged, ...loc }
     } finally {
       await git(['worktree', 'remove', '--force', wt], o.dir)
       await git(['worktree', 'prune'], o.dir)
@@ -531,6 +634,77 @@ export function locateExtracted(manifest: Manifest, configDirs: string[]): Asset
     }
   }
   return found
+}
+
+/** GitHub refuses files over 100 MB. */
+export const MAX_UPLOAD_FILE = 95 * 1024 * 1024
+
+/**
+ * Make the preset match the person's upload choices right now (without needing OBS): stop tracking parts that stay on this
+ * computer, start tracking parts that are uploaded again, and put the chosen files in (or take them out). One commit; the files
+ * on disk are never deleted, apart from the copies of files that are no longer uploaded.
+ */
+export async function applyCloudSettings(dir: string, git: GitRunner = defaultGit, locations: Record<string, string> = {}): Promise<{ ok: true; changed: boolean } | { ok: false; message: string }> {
+  try {
+    const settings = readLocalSettings(dir)
+    const skipped = cloudSkippedPaths(settings.cloud?.skip)
+    const before = settings.kept ?? []
+    writeExclude(dir, skipped)
+    const head = await revParse(dir, 'HEAD', git)
+    if (!head) return { ok: true, changed: false }
+    const id = await identity(dir, git)
+
+    // parts that stay here: no longer tracked
+    const tracked = skipped.length ? (await git(['ls-files', '--', ...skipped.map((x) => x.replace(/\/$/, ''))], dir)).stdout.split('\n').filter(Boolean) : []
+    if (tracked.length) await git(['rm', '-r', '--cached', '-q', '--ignore-unmatch', '--', ...skipped.map((x) => x.replace(/\/$/, ''))], dir)
+    // parts uploaded again
+    const released = before.filter((x) => !skipped.includes(x) && fs.existsSync(nodePath.join(dir, x)))
+    if (released.length) await git(['add', '-f', '--', ...released], dir)
+
+    // files that are uploaded: copied in from the preset's own copies
+    const b = readBundleDir(dir, { keepMissing: true })
+    const m = b.manifest
+    const own = localMediaLocations(dir, m)
+    const wanted = new Set(settings.cloud?.media ?? [])
+    let manifestChanged = false
+    for (const a of m.assets) {
+      if (a.role === 'script' || !safeSegment(a.id) || !safeSegment(a.filename)) continue
+      const dest = nodePath.join(dir, 'media', a.id, a.filename)
+      if (wanted.has(a.id)) {
+        const src = [own[a.id], locations[a.id]].find((x) => x && fs.existsSync(x))
+        if (!src) { if (a.mode !== 'bundled') return { ok: false, message: `“${a.filename}” is not on this computer, so it cannot be uploaded. Find it first.` } ; continue }
+        if (fs.statSync(src).size > MAX_UPLOAD_FILE) return { ok: false, message: `“${a.filename}” is bigger than 95 MB. GitHub refuses files over 100 MB, so it cannot be uploaded.` }
+        if (!fs.existsSync(dest) || fs.statSync(dest).size !== fs.statSync(src).size) { fs.mkdirSync(nodePath.dirname(dest), { recursive: true }); fs.copyFileSync(src, dest) }
+        if (a.mode !== 'bundled') { a.mode = 'bundled'; manifestChanged = true }
+      } else if (a.mode === 'bundled' || fs.existsSync(dest)) {
+        // no longer uploaded: its copy in the preset's own area is kept first, so nothing is lost
+        if (fs.existsSync(dest) && !fs.existsSync(localMediaPath(dir, a.id, a.filename))) {
+          fs.mkdirSync(nodePath.dirname(localMediaPath(dir, a.id, a.filename)), { recursive: true })
+          fs.copyFileSync(dest, localMediaPath(dir, a.id, a.filename))
+        }
+        fs.rmSync(nodePath.join(dir, 'media', a.id), { recursive: true, force: true })
+        if (a.mode === 'bundled') { a.mode = 'external'; manifestChanged = true }
+      }
+    }
+    if (manifestChanged) {
+      fs.writeFileSync(nodePath.join(dir, 'manifest.json'), serializeManifest(m))
+      const lock = Object.fromEntries(m.assets.map((a) => [a.id, { filename: a.filename, mode: a.mode, sha256: a.sha256, size: a.size, hint: a.hint }]))
+      fs.writeFileSync(nodePath.join(dir, 'assets.lock.json'), JSON.stringify(lock, null, 2) + '\n')
+    }
+    await git(['add', '-A', '--', 'manifest.json', 'assets.lock.json', 'media'], dir)
+    let changed = false
+    if ((await git(['diff', '--cached', '--quiet'], dir)).code !== 0) {
+      const c = await git([...id, 'commit', '-q', '-m', 'Changed what is uploaded'], dir)
+      if (c.code !== 0) return { ok: false, message: c.stderr.trim() || c.stdout.trim() }
+      changed = true
+      // OBS is exactly as far along as before: this only changed how the preset is stored, so what OBS last matched moves with it
+      const newHead = await revParse(dir, 'HEAD', git)
+      const refs = (await git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/obs-config-loader/synced'], dir)).stdout.split('\n').filter(Boolean)
+      for (const line of refs) { const [ref, sha] = line.split(' '); if (sha === head && newHead) await git(['update-ref', ref, newHead], dir) }
+    }
+    writeLocalSettings(dir, { ...readLocalSettings(dir), kept: skipped })
+    return { ok: true, changed }
+  } catch (e) { return { ok: false, message: (e as Error).message } }
 }
 
 export { serializeManifest }

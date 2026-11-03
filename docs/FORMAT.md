@@ -250,9 +250,16 @@ would call them for the shown `name`. Other tools can depend on them, so importe
 
 A `variables[]` entry of kind `path` may carry `mustContain` (files that should be in that folder); importers warn when they are not.
 Exporters use this for **script folders**: when an OBS script (`modules.scripts-tool[].path`) sits in a folder with other files and
-looks around itself (`__file__`, `script_path()`, `dirname`), the script is not copied; a `SCRIPT_FOLDER` variable is declared and every
+looks around itself (`__file__`, `script_path()`, `dirname`), the script is not copied as an asset; a `SCRIPT_FOLDER` variable is declared and every
 path inside that folder is written as `{{var:SCRIPT_FOLDER}}/<relative path>`. A suggested folder (`default`) is the first saver's and is
 never rewritten by a later save.
+
+The files of such a folder are kept in the setup: `projects` (optional) is a list of `{ variable, files[] }`, and each file is stored at
+`scripts/projects/<variable>/<relative path>`. Only plain code is kept (`.py .lua .sh .bat .cmd .ps1 .txt`), not hidden files or
+environment/media folders, at most two folders deep, at most 1 MB per file, 200 files and 5 MB in all. Importers write a file into the
+folder the variable resolved to **only if** that folder is new or empty or already holds one of the variable's `mustContain` files (so a
+file can never put code into an unrelated folder), only for the same allowed extensions, never outside the folder (no `..`, no hidden
+names), skip a file that is already identical, and back up one they replace.
 
 ### Profile settings per system
 
@@ -278,12 +285,24 @@ The same content unzipped, plus an `assets.lock.json`:
 ```
 my-setup/
   manifest.json
-  collections/  profiles/
+  collections/  profiles/  scripts/  global/
+  media/                    # only files the person chose to upload (mode `bundled`)
   assets.lock.json          # id -> { sha256, size, hint }: every external asset, committed
-  .gitignore                # media/ and anything marked external or secret
+  .gitignore                # local/
+  local/                    # NEVER tracked: this computer's own part of a preset (see below)
 ```
 
 - Secrets are never in the repository (`secret` variables carry only their name).
+- **The local part (`local/`).** A preset made by the app also has a `local/` folder that git never sees (`.gitignore` and the
+  repository's own `info/exclude`): `local/keys.json` (stream keys by variable name, file mode 0600), `local/media/<asset id>/<file>`
+  (this computer's copy of each file the scenes use) and `local/settings.json` (this preset's own choices: whether to keep keys,
+  which files not to copy, and which parts are **not uploaded**). Readers of the directory form ignore `local/`. It is not part of
+  the bundle format and is never written into a bundle unless the person exports with keys / chosen files.
+- **Parts kept off the upload.** Choices in `local/settings.json` (`cloud.skip`: scene layout ids, output setting ids, scripts,
+  remote control; `cloud.media`: asset ids that **are** uploaded) are applied through the repository's `info/exclude` (this computer only),
+  so such parts stay on disk and are saved from OBS as usual but are never committed. The manifest still lists them; a copy made from
+  the upload lacks their files, and readers leave an entry out of the lists when its files are not there. Files that are uploaded are
+  kept as `bundled` assets under `media/<id>/<file>`; all other assets are placeholders.
 - Large or private media are `external`: git stores the **placeholder** (`assets.lock.json`), and a
   pull asks for the files that are missing or whose hash changed.
 - The tool keeps the user's chosen locations in its own local store, not in the repository.
@@ -305,3 +324,20 @@ my-setup/
 - Additive changes (new optional fields) keep `version: 1`. Readers ignore unknown fields and
   must preserve them when re-writing.
 - Breaking changes bump `version`. Writers should write the lowest version that can hold the content.
+
+## Extras file (`.obsextras`)
+
+A zip with `extras.json` at the top: the part of a preset that is **not** on its online copy, so it can be brought to another computer
+that got the preset from there.
+
+```
+{ "format": "obs-config-extras", "version": 1, "presetId": "<the preset's manifest id>", "presetName": "...", "createdAt": "...",
+  "files": ["collections/main.json", ...],          // tracked-path files that were kept off the upload, stored at files/<path>
+  "cloudSkip": { "layouts": [...], "outputs": [...], "scripts": true, "remoteControl": true },
+  "media": [{ "id": "...", "filename": "...", "size": 0 }],   // stored at media/<id>/<filename>
+  "containsSecrets": true, "warning": "...", "keys": { "VARIABLE": "value" } }   // keys only when the person chose to include them
+```
+
+Importing refuses a preset with a different `presetId`, never overwrites a file the preset already has, only accepts safe relative
+paths, puts files under `local/media/`, merges the keys into `local/keys.json`, and records `cloudSkip` so those parts stay out of git on
+the receiving side too.

@@ -93,7 +93,11 @@ export async function writeBundleZip(b: Bundle): Promise<Buffer> {
 
 // ── directory (the git form) ─────────────────────────────────────────────────
 
-export function readBundleDir(dir: string): Bundle {
+/** The folder inside a preset that never leaves this computer (stream keys, copies of big files, this preset's own upload choices). */
+export const LOCAL_DIR = 'local'
+
+/** `keepMissing`: keep the manifest exactly as written, even for things whose files are not here (for code that writes the manifest back). */
+export function readBundleDir(dir: string, opts: { keepMissing?: boolean } = {}): Bundle {
   const mp = nodePath.join(dir, MANIFEST)
   if (!fs.existsSync(mp)) throw new BundleError('No manifest.json in this folder.', 'not-a-bundle')
   let raw: unknown
@@ -103,12 +107,17 @@ export function readBundleDir(dir: string): Bundle {
   const walk = (rel: string) => {
     for (const ent of fs.readdirSync(nodePath.join(dir, rel), { withFileTypes: true })) {
       const r = rel ? `${rel}/${ent.name}` : ent.name
-      if (r === '.git' || r.startsWith('.git/') || r === 'assets.lock.json' || r === '.gitignore') continue
+      if (r === '.git' || r.startsWith('.git/') || r === LOCAL_DIR || r === 'assets.lock.json' || r === '.gitignore') continue
       if (ent.isDirectory()) walk(r)
       else if (r !== MANIFEST) files.set(r, fs.readFileSync(nodePath.join(dir, r)))
     }
   }
   walk('')
+  // Things the person chose not to upload are not in a copy that came from online: leave them out of the lists, so nothing asks for a missing file
+  if (!opts.keepMissing) {
+    manifest.collections = manifest.collections.filter((c) => files.has(c.file))
+    manifest.profiles = manifest.profiles.filter((pr) => [...files.keys()].some((f) => f.startsWith(pr.dir + '/')))
+  }
   return { manifest, files }
 }
 
@@ -116,7 +125,7 @@ export function readBundleDir(dir: string): Bundle {
  * Write the directory form. Bundled media are written only when `withMedia` (git keeps them out).
  * Existing files that are not part of the bundle are left alone (the folder may be a git checkout).
  */
-export function writeBundleDir(b: Bundle, dir: string, opts: { withMedia: boolean } = { withMedia: false }): void {
+export function writeBundleDir(b: Bundle, dir: string, opts: { withMedia: boolean; /** Media (by asset id) that are kept in the folder even though `withMedia` is off. */ mediaIds?: string[] } = { withMedia: false }): void {
   // A folder is meant for git, and git keeps history forever: stream keys must never be written there.
   if (b.manifest.containsSecrets || b.manifest.variables.some((v) => v.value !== undefined)) {
     throw new BundleError('A setup that has stream keys inside can only be saved as a single file, never into a folder for git.', 'invalid')
@@ -124,15 +133,16 @@ export function writeBundleDir(b: Bundle, dir: string, opts: { withMedia: boolea
   fs.mkdirSync(dir, { recursive: true })
   // Without the media in the folder, a "bundled" asset is a placeholder: record it as external (hash kept)
   // so a later pull asks for the file instead of failing to find it.
+  const keep = new Set(opts.mediaIds ?? [])
   const manifest: Manifest = opts.withMedia ? b.manifest : {
     ...b.manifest,
-    assets: b.manifest.assets.map((a) => (a.mode === 'bundled' && a.role !== 'script' ? { ...a, mode: 'external' as const } : a)),
+    assets: b.manifest.assets.map((a) => (a.mode === 'bundled' && a.role !== 'script' && !keep.has(a.id) ? { ...a, mode: 'external' as const } : a)),
   }
   fs.writeFileSync(nodePath.join(dir, MANIFEST), serializeManifest(manifest))
   // Clear previously exported content so removed collections/profiles do not linger.
-  for (const sub of ['collections', 'profiles', 'scripts', 'global']) fs.rmSync(nodePath.join(dir, sub), { recursive: true, force: true })
+  for (const sub of ['collections', 'profiles', 'scripts', 'global', 'media']) fs.rmSync(nodePath.join(dir, sub), { recursive: true, force: true })
   for (const [name, data] of b.files) {
-    if (name.startsWith('media/') && !opts.withMedia) continue
+    if (name.startsWith('media/') && !opts.withMedia && !keep.has(name.split('/')[1])) continue
     const target = nodePath.join(dir, safeName(name))
     fs.mkdirSync(nodePath.dirname(target), { recursive: true })
     fs.writeFileSync(target, data)
@@ -141,8 +151,13 @@ export function writeBundleDir(b: Bundle, dir: string, opts: { withMedia: boolea
     manifest.assets.map((a) => [a.id, { filename: a.filename, mode: a.mode, sha256: a.sha256, size: a.size, hint: a.hint }]),
   )
   fs.writeFileSync(nodePath.join(dir, 'assets.lock.json'), JSON.stringify(lock, null, 2) + '\n')
+  // `local/` is this computer's own part of a preset (stream keys, copies of big files): git never sees it.
+  // (Presets made earlier ignored `media/`; chosen files are kept there now, so that line goes.)
   const gi = nodePath.join(dir, '.gitignore')
-  if (!fs.existsSync(gi)) fs.writeFileSync(gi, 'media/\n')
+  const lines = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8').split(/\r?\n/).filter((l) => l !== '') : []
+  const wanted = lines.filter((l) => l.trim() !== 'media/')
+  if (!wanted.includes(`${LOCAL_DIR}/`)) wanted.push(`${LOCAL_DIR}/`)
+  if (wanted.join('\n') !== lines.join('\n') || !fs.existsSync(gi)) fs.writeFileSync(gi, wanted.join('\n') + '\n')
 }
 
 /** Open a bundle from a path: a zip/.obsbundle file or a directory. */
