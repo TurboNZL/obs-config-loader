@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
-import { exportBundle, planImport, parseManifest, captureLive, initRepo, readBundleDir, type Bundle } from '../src/index.js'
+import { exportBundle, planImport, parseManifest, captureLive, initRepo, readBundleDir, listPlatformSources, type Bundle } from '../src/index.js'
 import { host, install, makeSource } from './helpers.js'
 
 let tmp: string
@@ -135,6 +135,45 @@ describe('editing how sources are translated', () => {
     fs.writeFileSync(nodePath.join(cfg, 'basic/scenes/Main.json'), JSON.stringify(j))
     expect((await captureLive({ host: host('linux', home), install: install(cfg), dir })).status).toBe('committed')
     expect(readBundleDir(dir).manifest.platformOverrides).toEqual({ window_capture: { linux: null } })
+  })
+})
+
+describe('choosing for one source, not for every source of its kind', () => {
+  const twoCaptures = (extra: Record<string, unknown> = {}) => {
+    const b = windowsSetup(extra)
+    const j = JSON.parse(b.files.get('collections/c.json')!.toString())
+    j.sources.push({ id: 'window_capture', name: 'Browser window', uuid: 'u-b', settings: { window: 'Chrome:Chrome_WidgetWin_1:chrome.exe' } })
+    b.files.set('collections/c.json', Buffer.from(JSON.stringify(j)))
+    return b
+  }
+  it('a saved choice for one source leaves the other of the same kind alone, and beats the choice for the kind', () => {
+    const { byName, plan } = toLinux(twoCaptures({ sourceOverrides: { 'u:u-b': { linux: null, 'linux-pipewire': null } } }))
+    expect(byName('Game window').id).toBe('pipewire-screen-capture-source') // the built-in choice
+    expect(byName('Browser window').id).toBe('window_capture') // hidden, kept as it is
+    expect(plan.report.substitutions.find((x) => x.source === 'Browser window')).toMatchObject({ result: 'disabled', sourceKey: 'u:u-b', key: 'window_capture' })
+    // the kind-wide choice is still used by sources without their own
+    const both = toLinux(twoCaptures({ platformOverrides: { window_capture: { linux: 'xcomposite_input', 'linux-pipewire': 'xcomposite_input' } }, sourceOverrides: { 'u:u-b': { 'linux-pipewire': 'pipewire-window-capture-source' } } }))
+    expect(both.byName('Game window').id).toBe('xcomposite_input')
+    expect(both.byName('Browser window').id).toBe('pipewire-window-capture-source')
+  })
+  it('on the import screen a choice for one source changes only that source', () => {
+    const plain = toLinux(twoCaptures(), { sourceChoices: { 'u:u-b': null } })
+    expect(plain.byName('Game window').id).toBe('pipewire-screen-capture-source')
+    expect(plain.byName('Browser window').id).toBe('window_capture')
+    // a choice keyed by the kind still works for everything of that kind (older callers)
+    expect(toLinux(twoCaptures(), { sourceChoices: { window_capture: 'xcomposite_input' } }).byName('Browser window').id).toBe('xcomposite_input')
+  })
+  it('lists the sources a person can choose for, per layout', async () => {
+    const home = nodePath.join(tmp, 'home'); const { cfg } = makeSource(home)
+    const dir = nodePath.join(tmp, 'repo'); await initRepo(dir)
+    const b = twoCaptures(); const j = JSON.parse(b.files.get('collections/c.json')!.toString())
+    fs.mkdirSync(nodePath.join(dir, 'collections'), { recursive: true })
+    fs.writeFileSync(nodePath.join(dir, 'collections/c.json'), JSON.stringify(j))
+    fs.writeFileSync(nodePath.join(dir, 'manifest.json'), JSON.stringify({ ...b.manifest }))
+    expect(listPlatformSources(dir, 'c').map((x) => [x.name, x.kind, x.key])).toEqual([
+      ['Game window', 'window_capture', 'u:u-w'], ['Music app', 'wasapi_process_output_capture', 'u:u-m'], ['Mic', 'wasapi_input_capture', 'u:u-mic'], ['Desktop', 'wasapi_output_capture', 'u:u-d'], ['Browser window', 'window_capture', 'u:u-b'],
+    ])
+    void cfg
   })
 })
 

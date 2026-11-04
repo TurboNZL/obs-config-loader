@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { PresetDetails, RenameRequest, RepoInfo } from '../../../electron/api'
 import { Field, Message } from '../ui'
+import { PresetIdentity } from './Identity'
 
 export type Msg = { tone: 'good' | 'warn' | 'bad'; text: string }
 
@@ -72,6 +73,7 @@ export function Details({ repo, installId, refresh, obsNote, notify }: { repo: R
       </div>
 
       <Translations repo={repo} d={d} reload={load} />
+      <PresetIdentity repo={repo} refresh={refresh} />
       <MoveIt repo={repo} refresh={refresh} notify={notify} />
 
       <div>
@@ -92,7 +94,7 @@ export function Details({ repo, installId, refresh, obsNote, notify }: { repo: R
 
 function Translations({ repo, d, reload }: { repo: RepoInfo; d: PresetDetails; reload: () => Promise<void> }) {
   const [msg, setMsg] = useState<Msg | null>(null)
-  if (d.translations.length === 0) return null
+  if (d.translations.length === 0 && d.sourceTranslations.length === 0) return null
   const current = () => {
     const o: Record<string, Record<string, string | null>> = {}
     for (const row of d.translations) for (const t of row.targets) {
@@ -117,6 +119,7 @@ function Translations({ repo, d, reload }: { repo: RepoInfo; d: PresetDetails; r
       <h3 className="font-semibold text-sm">How sources change on other computers</h3>
       <p className="text-xs text-muted mb-1">Some sources only exist on one system. When this preset is applied on another, the app swaps each for the closest one. Change a choice here if it guessed wrong. You pick the window, screen or device again either way.</p>
       {msg && <Message tone={msg.tone}>{msg.text}</Message>}
+      {d.translations.length > 0 && <p className="text-xs text-muted">These choices apply to every source of a kind.</p>}
       {d.translations.map((row) => (
         <div key={row.from} className="bt-row py-1 space-y-1">
           <div className="text-sm font-medium">{row.name}</div>
@@ -136,7 +139,66 @@ function Translations({ repo, d, reload }: { repo: RepoInfo; d: PresetDetails; r
           ))}
         </div>
       ))}
+      <PerSource repo={repo} d={d} reload={reload} setMsg={setMsg} />
     </div>
+  )
+}
+
+/** The same choices for one source on its own: two window captures can become different things. A source's own choice beats the one for its kind. */
+function PerSource({ repo, d, reload, setMsg }: { repo: RepoInfo; d: PresetDetails; reload: () => Promise<void>; setMsg: (m: Msg) => void }) {
+  if (d.sourceTranslations.length === 0) return null
+  const current = () => {
+    const o: Record<string, Record<string, string | null>> = {}
+    for (const row of d.sourceTranslations) for (const t of row.targets) {
+      if (t.chosen === undefined) continue
+      for (const k of t.platform === 'linux' ? ['linux', 'linux-pipewire'] : [t.platform]) (o[row.key] ??= {})[k] = t.chosen
+    }
+    return o
+  }
+  const change = async (key: string, platform: string, value: string) => {
+    const o = current()
+    for (const k of platform === 'linux' ? ['linux', 'linux-pipewire'] : [platform]) {
+      if (value === '') { if (o[key]) { delete o[key][k]; if (!Object.keys(o[key]).length) delete o[key] } } else (o[key] ??= {})[k] = value === '__hide__' ? null : value
+    }
+    const r = await window.obsLoader.presets.setSourceOverrides(repo.path, o)
+    setMsg(r.ok ? { tone: 'good', text: 'Saved for that source. It is used the next time this preset is applied on another kind of computer.' } : { tone: 'bad', text: r.error })
+    await reload()
+  }
+  const layouts = [...new Set(d.sourceTranslations.map((r) => r.layout))]
+  const own = d.sourceTranslations.filter((r) => r.targets.some((t) => t.chosen !== undefined)).length
+  return (
+    <details className="mt-2" open={own > 0}>
+      <summary className="cursor-pointer text-sm font-medium">Choose for one source at a time{own > 0 ? ` (${own} set)` : ''}</summary>
+      <p className="text-xs text-muted my-1">Leave a source on “Same as its kind” to follow the choice above. Pick something here to treat just that source differently.</p>
+      {layouts.map((layout) => (
+        <div key={layout} className="space-y-1">
+          {layouts.length > 1 && <div className="text-xs text-muted pt-1">In “{layout}”</div>}
+          {d.sourceTranslations.filter((r) => r.layout === layout).map((row) => (
+            <div key={row.key} className="bt-row py-1 space-y-1">
+              <div className="text-sm"><span className="font-medium">{row.name}</span> <span className="text-muted">· {row.fromName}</span></div>
+              {row.targets.map((t) => {
+                const kind = d.translations.find((x) => x.from === row.from)?.targets.find((x) => x.platform === t.platform)
+                const kindText = kind?.chosen === undefined ? (t.defaultName ? `Automatic: ${t.defaultName}` : 'Automatic: hide it') : kind.chosen === null ? 'Hide it' : (t.options.find((o) => o.id === kind.chosen)?.name ?? kind.chosen)
+                return (
+                  <label key={t.platform} className="flex items-center gap-2 pl-3 text-sm">
+                    <span className="w-16 text-muted shrink-0">On {t.label}:</span>
+                    <select
+                      className="input flex-1 px-2 py-1" aria-label={`${row.name} on ${t.label}`}
+                      value={t.chosen === undefined ? '' : t.chosen === null ? '__hide__' : t.chosen}
+                      onChange={(e) => void change(row.key, t.platform, e.target.value)}
+                    >
+                      <option value="">Same as its kind ({kindText})</option>
+                      <option value="__hide__">Hide it</option>
+                      {t.options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                    </select>
+                  </label>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+      ))}
+    </details>
   )
 }
 

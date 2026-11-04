@@ -66,8 +66,10 @@ export interface Substitution {
   /** `substituted` replaced the id; `disabled` kept the id and hid the scene items. */
   result: 'substituted' | 'disabled' | 'variant' | 'added'
   note?: string
-  /** The source id a choice for this row is keyed by (`ImportOptions.sourceChoices`). */
+  /** The source id (its kind) that a choice for all sources of that kind is keyed by (`ImportOptions.sourceChoices`). */
   key?: string
+  /** This particular source (`u:<uuid>` or `n:<name>`): a choice keyed by it applies to this source alone and beats the one for its kind. */
+  sourceKey?: string
   /** For a swapped or hidden source: the plain names, and what else could stand in (for the choice on the import screen). */
   fromName?: string
   toName?: string
@@ -159,6 +161,9 @@ function programOf(window: unknown): string | undefined {
   return exe && /\.[a-z0-9]+$/i.test(exe) ? exe : undefined
 }
 
+/** What a choice for one particular source is stored under: its uuid when OBS gave it one, else its name. */
+export const sourceKeyOf = (s: { uuid?: string; name?: string }) => (s.uuid ? `u:${s.uuid}` : `n:${s.name ?? ''}`)
+
 /** Swap or disable sources that cannot exist on the target platform. Mutates the collection. */
 function adaptSources(collection: any, manifest: Manifest, target: Platform, ctx: AdaptContext, subs: Substitution[]): void {
   const table = [...manifest.platformMap, ...DEFAULT_PLATFORM_MAP]
@@ -173,10 +178,13 @@ function adaptSources(collection: any, manifest: Manifest, target: Platform, ctx
     if (availableOn(key, target)) continue
     const entry = table.find((e) => e.from === key)
     // the person's own choice first, then the built-in table
-    const ownTargets = overrides[key] ?? {}
+    const srcKey = sourceKeyOf(s)
+    const pick_ = (t: Partial<Record<string, string | null>>) => target === 'linux' ? ('linux-pipewire' in t || 'linux' in t) : target in t
+    // a source's own saved choice beats the one for its whole kind
+    const ownTargets = (manifest.sourceOverrides?.[srcKey] && pick_(manifest.sourceOverrides[srcKey]!) ? manifest.sourceOverrides[srcKey] : overrides[key]) ?? {}
     const ownKey = target === 'linux' ? (ctx.preferPipewire && 'linux-pipewire' in ownTargets ? 'linux-pipewire' : 'linux' in ownTargets ? 'linux' : 'linux-pipewire' in ownTargets ? 'linux-pipewire' : undefined) : (target in ownTargets ? target : undefined)
     const own = ownKey ? ownTargets[ownKey as keyof typeof ownTargets] : undefined
-    const chosenNow = ctx.choices && key in ctx.choices ? ctx.choices[key] : undefined
+    const chosenNow = ctx.choices && srcKey in ctx.choices ? ctx.choices[srcKey] : ctx.choices && key in ctx.choices ? ctx.choices[key] : undefined
     const hasOwn = chosenNow !== undefined || ownKey !== undefined
     const to = chosenNow !== undefined ? (chosenNow ?? undefined) : ownKey !== undefined ? (own ?? undefined) : entry ? pickReplacement(key, entry, target, ctx) : undefined
     const program = key === 'wasapi_process_output_capture' ? programOf(s.settings?.window) : undefined
@@ -190,11 +198,11 @@ function adaptSources(collection: any, manifest: Manifest, target: Platform, ctx
       s.id = to
       s.versioned_id = to
       s.settings = {}
-      subs.push({ source: s.name, from: id, to, result: 'substituted', note: chosenNow !== undefined ? 'As you chose.' : hasOwn ? 'As you set it in the preset settings.' : entry?.note, key, fromName: sourceName(key), toName: sourceName(to), options: standInOptions(key, target).map((o) => ({ id: o, name: sourceName(o) })) })
+      subs.push({ source: s.name, from: id, to, result: 'substituted', note: chosenNow !== undefined ? 'As you chose.' : hasOwn ? 'As you set it in the preset settings.' : entry?.note, key, sourceKey: srcKey, fromName: sourceName(key), toName: sourceName(to), options: standInOptions(key, target).map((o) => ({ id: o, name: sourceName(o) })) })
     } else {
       if (s.name) disabled.add(`n:${s.name}`)
       if (s.uuid) disabled.add(`u:${s.uuid}`)
-      subs.push({ source: s.name, from: id, result: 'disabled', note: chosenNow === null ? 'Hidden, as you chose.' : hasOwn ? 'Hidden, as you set it in the preset settings.' : 'No equivalent on this platform; kept as is and hidden.', key, fromName: sourceName(key), options: standInOptions(key, target).map((o) => ({ id: o, name: sourceName(o) })) })
+      subs.push({ source: s.name, from: id, result: 'disabled', note: chosenNow === null ? 'Hidden, as you chose.' : hasOwn ? 'Hidden, as you set it in the preset settings.' : 'No equivalent on this platform; kept as is and hidden.', key, sourceKey: srcKey, fromName: sourceName(key), options: standInOptions(key, target).map((o) => ({ id: o, name: sourceName(o) })) })
     }
     if (program && to) subs[subs.length - 1].note = `${subs[subs.length - 1].note ?? ''} It was capturing ${program}.`.trim()
     if (audioTo) {

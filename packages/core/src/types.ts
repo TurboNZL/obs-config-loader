@@ -109,6 +109,8 @@ export interface Manifest {
   /** Script folders whose files are kept with the setup (see `ScriptProject`). */
   projects?: ScriptProject[]
   platformOverrides?: Record<string, Partial<Record<Platform | 'linux-pipewire', string | null>>>
+  /** The same choices for one particular source (key: `u:<uuid>`, or `n:<name>` when OBS gave it no uuid). A source's own choice beats the one for its kind. */
+  sourceOverrides?: Record<string, Partial<Record<Platform | 'linux-pipewire', string | null>>>
   /** What this preset leaves out when saving from OBS (names as OBS has them). Everything else in OBS is kept. */
   exclude?: { collections?: string[]; profiles?: string[]; remoteControl?: boolean; scripts?: boolean }
   /** Unknown fields are kept so a re-write does not lose them. */

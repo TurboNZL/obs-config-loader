@@ -3,6 +3,8 @@ import type { AppSettings, GithubState, GitState, RepoInfo } from '../../../elec
 import { Card, Chip, Choice, Message, Page } from '../ui'
 import { Icon } from '../components/Icon'
 import { GitMissing, GithubCard } from '../components/Account'
+import { IdentityCard } from '../components/Identity'
+import { StorageCard } from '../components/StorageCard'
 
 export function SettingsPage() {
   const [s, setS] = useState<AppSettings | null>(null)
@@ -23,7 +25,7 @@ export function SettingsPage() {
   useEffect(() => { void load(); void refreshGit(); void refreshGh() }, [])
 
   return (
-    <Page icon="settings" title="Settings" intro="Where your presets are kept, how stream keys are handled, and your online backup account.">
+    <Page icon="settings" title="Settings" intro="Where your presets are kept, how stream keys are handled, your online backup account, who your saves are by, and where big files go.">
       {s && (
         <Card title={<span className="inline-flex items-center gap-2"><Icon name="folder" /> Where presets are kept</span>}>
           <p className="text-sm text-muted">Every preset gets its own folder here, in the place your system keeps an app's own data. Changing this does not move presets you already have; they stay where they are.</p>
@@ -64,6 +66,8 @@ export function SettingsPage() {
 
       {git && !git.available && <GitMissing git={git} recheck={refreshGit} />}
       <GithubCard gh={gh} refresh={refreshGh} />
+      <IdentityCard key={gh.login ?? (gh.connected ? 'on' : 'off')} />
+      <StorageCard />
     </Page>
   )
 }

@@ -155,6 +155,10 @@ against what the target OBS has (module files present, or built-in ids).
 source translated on another system. It wins over `platformMap` and over the built-in table, and a save never rewrites it
 (unlike `platformMap`, which is derived).
 
+`sourceOverrides` is the same shape keyed by one particular source: `u:<uuid>` (or `n:<name>` when OBS gave the source no uuid).
+A source's own entry beats the `platformOverrides` entry for its kind; an import screen choice beats both (it may be keyed by
+either the source key or the kind).
+
 `exclude` is `{ collections?: string[], profiles?: string[], remoteControl?: boolean, scripts?: boolean }`: what saving from
 OBS into this setup leaves out (names as OBS has them). Everything else in OBS is kept, including things added later. A save
 reads it from the setup's *current* files, not from the commit OBS last matched.
@@ -288,6 +292,7 @@ my-setup/
   collections/  profiles/  scripts/  global/
   media/                    # only files the person chose to upload (mode `bundled`)
   assets.lock.json          # id -> { sha256, size, hint }: every external asset, committed
+  preset-settings.json      # this preset's own settings (what is uploaded, where big files are kept), tracked
   .gitignore                # local/
   local/                    # NEVER tracked: this computer's own part of a preset (see below)
 ```
@@ -298,6 +303,16 @@ my-setup/
   (this computer's copy of each file the scenes use) and `local/settings.json` (this preset's own choices: whether to keep keys,
   which files not to copy, and which parts are **not uploaded**). Readers of the directory form ignore `local/`. It is not part of
   the bundle format and is never written into a bundle unless the person exports with keys / chosen files.
+- **The preset's settings travel with it (`preset-settings.json`).** The shareable part of the settings (`keepKeys`,
+  `skipLocalMedia`, `cloud` with `skip` / `media` / `stored`, and `storage`) is also written as a tracked file at the top of the
+  preset, so a copy from GitHub or from a setup file behaves like the original. It never holds a key or a password. When the file
+  changes from outside (an update from GitHub), it replaces this computer's choices; otherwise this computer's own
+  `local/settings.json` wins (`mirrored` in it is the hash of the file as last written or taken over). A setup file made as an
+  *independent* copy leaves it out. Who saves are by (`author`) stays in `local/settings.json` only.
+- **Big-file storage.** `storage` is `{ endpoint, region, bucket, prefix?, label? }`: an S3-compatible bucket (Backblaze B2,
+  Cloudflare R2, …). Files listed in `cloud.stored` are not in git and not in `local/` of another computer: each is kept at
+  `<prefix><sha256>/<file name>` in the bucket and fetched by the hash the manifest records for that asset, then checked against it.
+  Access keys are never in the preset; each computer keeps its own, encrypted by the system.
 - **Parts kept off the upload.** Choices in `local/settings.json` (`cloud.skip`: scene layout ids, output setting ids, scripts,
   remote control; `cloud.media`: asset ids that **are** uploaded) are applied through the repository's `info/exclude` (this computer only),
   so such parts stay on disk and are saved from OBS as usual but are never committed. The manifest still lists them; a copy made from

@@ -11,6 +11,8 @@ import {
   renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, renameSourceInObs, RenameError,
   applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
   readLocalKeys, readLocalSettings, writeLocalKeys, writeLocalSettings, cloudSkippedPaths, writeExclude, LOCAL_DIR, EXTRAS_EXT, type LocalSettings,
+  listPlatformSources, DEFAULT_PLATFORM_MAP, withIdentity, listAuthors, rewriteAuthor, discardNameChangeBackup, putFile, getFile, testStorage, objectKey, validateTarget, regionFromEndpoint, sha256OfFile, localMediaPath,
+  type GitIdentity, type StorageTarget, type StorageKeys,
 } from '@obs-config-loader/core'
 import { Updates } from './updater'
 import type { BundleSummary, ExportRequest, ExportResult, GithubState, ImportRequest, InstallInfo, Locations, PresetOverview, RepoInfo } from './api'
@@ -53,6 +55,12 @@ interface Settings {
   presetsRoot?: string
   /** Remember stream keys on this computer (encrypted by the system keychain, never in a preset or online). Default on. */
   rememberKeys?: boolean
+  /** Who saves are by. `github` (default): the signed-in GitHub account's name and private address. `custom`: what the person typed. Never written to anyone's git config. */
+  identity?: { mode: 'github' | 'custom'; name?: string; email?: string }
+  /** The signed-in GitHub account, remembered so it shows at once on the next start. No secret in it. */
+  github?: { login: string; name: string; email: string }
+  /** Where big files are kept (an S3-compatible bucket). The access keys are not here: they are in storage.bin, encrypted. */
+  storage?: StorageTarget
 }
 function loadSettings(): Settings {
   try { return { customInstalls: [], repos: [], ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) } } catch { return { customInstalls: [], repos: [] } }
@@ -207,9 +215,37 @@ function loadGithubToken(): string | undefined {
   return githubTokenMem
 }
 /** The git every repository operation runs through: the user's own git, signed in to github.com when connected. */
-function gitRunner(): GitRunner { return githubAuthGit(loadGithubToken(), defaultGit) }
+function gitRunner(presetPath?: string): GitRunner {
+  const base = githubAuthGit(loadGithubToken(), defaultGit)
+  // who a save is by: decided per call from where git runs, so a preset with its own name keeps it
+  return (args, cwd, env) => withIdentity(base, identityFor(presetPath ?? cwd))(args, cwd, env)
+}
+/** The app-wide choice: what was typed, else the GitHub account, else nothing (this computer's own git name is used, as before). */
+function appIdentity(): GitIdentity | undefined {
+  const s = loadSettings()
+  if (s.identity?.mode === 'custom' && s.identity.name?.trim() && s.identity.email?.trim()) return { name: s.identity.name.trim(), email: s.identity.email.trim() }
+  if (loadGithubToken() && s.github) return { name: s.github.name, email: s.github.email }
+  return undefined
+}
+/** A preset's own choice wins over the app-wide one. `where` is a preset folder or a folder inside one. */
+function identityFor(where: string): GitIdentity | undefined {
+  try {
+    const hit = loadSettings().repos.find((r) => where === r.path || where.startsWith(r.path + path.sep))
+    const own = hit ? readLocalSettings(hit.path).author : undefined
+    if (own?.name?.trim() && own.email?.trim()) return own
+  } catch { /* the app-wide choice */ }
+  return appIdentity()
+}
 const noGit = () => !!process.env.OBSCL_FAKE_NO_GIT // lets tests show the "install git" screen
-const hasGit = async () => !noGit() && (await gitAvailable())
+let gitSeen = 0
+/** Starting git is slow on some systems; once it has been found, it is not asked again for a minute. */
+const hasGit = async () => {
+  if (noGit()) return false
+  if (Date.now() - gitSeen < 60_000) return true
+  const ok = await gitAvailable()
+  if (ok) gitSeen = Date.now()
+  return ok
+}
 const gitMissing = 'Git is not installed. Open the Git repositories page: it can install it for you.'
 const errText = (e: unknown) => redact((e as Error).message, loadGithubToken())
 
@@ -271,14 +307,75 @@ const updates = new Updates(app.isPackaged, (st) => {
   for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updates:state', st)
 })
 
+
+// ── big-file storage: an S3-compatible bucket (Backblaze B2, Cloudflare R2, …). Its access keys are kept like the GitHub token ──
+let storageKeysMem: StorageKeys | undefined
+let storageSessionOnly = false
+const storageKeysPath = () => path.join(app.getPath('userData'), 'storage.bin')
+function loadStorageKeys(): StorageKeys | undefined {
+  if (storageKeysMem) return storageKeysMem
+  try { storageKeysMem = JSON.parse(safeStorage.decryptString(fs.readFileSync(storageKeysPath()))) } catch { /* none saved */ }
+  return storageKeysMem
+}
+/** Is the storage a preset uses the one this computer has keys for? */
+function storageReady(t?: StorageTarget): boolean {
+  const mine = loadSettings().storage
+  return !!mine && !!loadStorageKeys() && (!t || (mine.endpoint === t.endpoint && mine.bucket === t.bucket))
+}
+const storageError = (e: unknown) => redactKeys((e as Error).message)
+function redactKeys(text: string): string {
+  const k = loadStorageKeys()
+  return k ? text.split(k.secretAccessKey).join('***').split(k.accessKeyId).join('***') : text
+}
+function sendStorageProgress(id: string, filename: string, done: number, total: number) {
+  for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('storage:progress', { id, filename, done, total })
+}
+
+// ── keeping the app quick ────────────────────────────────────────────────────
+// Reading a preset's state (diff against OBS, sizes, asking GitHub) is slow, and every tile on a page asks at once. Heavy
+// questions are answered one at a time (the window stays alive in between), the same question asked twice shares one answer,
+// and an answer is reused for a short while until something is changed.
+let diskChain: Promise<unknown> = Promise.resolve()
+let netLanes: Promise<unknown>[] = [Promise.resolve(), Promise.resolve()]
+const later = <T,>(fn: () => Promise<T> | T) => new Promise<T>((res, rej) => setImmediate(() => { Promise.resolve().then(fn).then(res, rej) }))
+/** Work that reads many files runs one at a time. */
+function heavy<T>(fn: () => Promise<T> | T): Promise<T> {
+  const run = diskChain.then(() => later(fn))
+  diskChain = run.catch(() => undefined)
+  return run
+}
+/** Work that waits for the internet runs two at a time. */
+let nextLane = 0
+function online<T>(fn: () => Promise<T> | T): Promise<T> {
+  const k = nextLane; nextLane = 1 - nextLane
+  const run = netLanes[k].then(() => later(fn))
+  netLanes[k] = run.catch(() => undefined)
+  return run
+}
+const memo = new Map<string, { at: number; v: Promise<unknown> }>()
+function memoised<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+  const hit = memo.get(key)
+  if (hit && Date.now() - hit.at < ttlMs) return hit.v as Promise<T>
+  const v = fn()
+  memo.set(key, { at: Date.now(), v })
+  v.catch(() => { if (memo.get(key)?.v === v) memo.delete(key) })
+  return v
+}
+const READ_ONLY = new Set(['installs:list', 'repos:list', 'repos:live', 'repos:needs', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
+
 // ── IPC ──────────────────────────────────────────────────────────────────────
 function registerIpc() {
-  ipcMain.handle('installs:list', async () => {
+  /** Reading never changes anything, so it keeps the quick answers; anything else makes them stale, before and after. */
+  const handle: typeof ipcMain.handle = (channel, fn) => ipcMain.handle(channel, async (e, ...a) => {
+    if (!READ_ONLY.has(channel)) memo.clear()
+    try { return await fn(e, ...a) } finally { if (!READ_ONLY.has(channel)) memo.clear() }
+  })
+  handle('installs:list', async () => {
     const all = allInstalls()
     const running = await runningMap(all)
     return Promise.all(all.map((i) => describe(i, running.get(i.id) ?? false)))
   })
-  ipcMain.handle('installs:addPortable', async () => {
+  handle('installs:addPortable', async () => {
     const r = await dialog.showOpenDialog({ title: 'Choose the portable OBS folder', properties: ['openDirectory'] })
     if (r.canceled || !r.filePaths[0]) return { cancelled: true }
     const got = portableInstall(host, r.filePaths[0])
@@ -287,15 +384,15 @@ function registerIpc() {
     if (!s.customInstalls.some((c) => c.id === got.id)) { s.customInstalls.push(got); saveSettings(s) }
     return { added: await describe(got, await obsRunningFor(got)) }
   })
-  ipcMain.handle('installs:remove', (_e, id: string) => {
+  handle('installs:remove', (_e, id: string) => {
     const s = loadSettings()
     s.customInstalls = s.customInstalls.filter((c) => c.id !== id)
     saveSettings(s)
   })
-  ipcMain.handle('installs:openFolder', async (_e, id: string) => { await shell.openPath(findInstall(id).configDir) })
+  handle('installs:openFolder', async (_e, id: string) => { await shell.openPath(findInstall(id).configDir) })
 
   // ── starting OBS, and separate OBS instances ──
-  ipcMain.handle('installs:launch', async (_e, id: string) => {
+  handle('installs:launch', async (_e, id: string) => {
     const i = findInstall(id)
     if (!i.launch) return { ok: false, message: 'This app does not know how to start that OBS. Start it the usual way.' }
     const { command, args, env } = i.launch
@@ -312,7 +409,7 @@ function registerIpc() {
       return { ok: true, message: 'Starting OBS…', command: describeLaunch(i) }
     } catch (e) { return { ok: false, message: `Could not start it (${(e as Error).message}).`, command: describeLaunch(i) } }
   })
-  ipcMain.handle('installs:verify', (_e, id: string, since: number) => {
+  handle('installs:verify', (_e, id: string, since: number) => {
     const i = findInstall(id)
     // Copied settings are there before OBS ever runs, so "the folder exists" proves nothing. OBS writes a new log file into
     // the folder it really uses every time it starts, and rewrites global.ini: look for something newer than the start.
@@ -323,8 +420,8 @@ function registerIpc() {
     return { usesOwnSettings: newLog || fresh(path.join(i.configDir, 'global.ini')) }
   })
 
-  ipcMain.handle('instances:support', (_e, baseId: string, name?: string) => instancePaths(findInstall(baseId), host, name || 'new'))
-  ipcMain.handle('instances:create', async (_e, r: { baseId: string; name: string; copySettings: boolean }) => {
+  handle('instances:support', (_e, baseId: string, name?: string) => instancePaths(findInstall(baseId), host, name || 'new'))
+  handle('instances:create', async (_e, r: { baseId: string; name: string; copySettings: boolean }) => {
     const name = r.name.trim()
     if (!name) return { ok: false, error: 'Give it a name.' }
     const base = findInstall(r.baseId)
@@ -342,7 +439,7 @@ function registerIpc() {
     saveSettings(s)
     return { ok: true, install: await describe(inst, false) }
   })
-  ipcMain.handle('instances:remove', (_e, id: string, deleteFiles: boolean) => {
+  handle('instances:remove', (_e, id: string, deleteFiles: boolean) => {
     const s = loadSettings()
     const hit = s.customInstalls.find((c) => c.id === id)
     s.customInstalls = s.customInstalls.filter((c) => c.id !== id)
@@ -353,13 +450,13 @@ function registerIpc() {
       fs.rmSync(hit.instance.dataHome, { recursive: true, force: true })
     }
   })
-  ipcMain.handle('instances:openPlugins', async (_e, id: string) => {
+  handle('instances:openPlugins', async (_e, id: string) => {
     const i = findInstall(id)
     const dir = i.pluginDirs[0]
     if (dir) { fs.mkdirSync(dir, { recursive: true }); await shell.openPath(dir) }
   })
 
-  ipcMain.handle('bundle:open', async () => {
+  handle('bundle:open', async () => {
     const r = await dialog.showOpenDialog({
       title: 'Open an OBS config bundle',
       properties: ['openFile'],
@@ -367,11 +464,11 @@ function registerIpc() {
     })
     return r.canceled || !r.filePaths[0] ? null : openBundlePath(r.filePaths[0])
   })
-  ipcMain.handle('bundle:openFolder', async () => {
+  handle('bundle:openFolder', async () => {
     const r = await dialog.showOpenDialog({ title: 'Open a config bundle folder', properties: ['openDirectory'] })
     return r.canceled || !r.filePaths[0] ? null : openBundlePath(r.filePaths[0])
   })
-  ipcMain.handle('bundle:openPath', (_e, p: string) => openBundlePath(p))
+  handle('bundle:openPath', (_e, p: string) => openBundlePath(p))
 
   const importOpts = async (r: ImportRequest) => {
     const b = bundles.get(r.handle)
@@ -383,8 +480,8 @@ function registerIpc() {
       installed: versionsOf(findInstall(r.installId)), websocket: r.websocket, sourceChoices: r.sourceChoices,
     }
   }
-  ipcMain.handle('import:plan', async (_e, r: ImportRequest) => planImport(await importOpts(r)).report)
-  ipcMain.handle('import:apply', async (_e, r: ImportRequest) => {
+  handle('import:plan', async (_e, r: ImportRequest) => planImport(await importOpts(r)).report)
+  handle('import:apply', async (_e, r: ImportRequest) => {
     const opts = await importOpts(r)
     const plan = planImport(opts)
     const res = applyImport(plan)
@@ -399,7 +496,7 @@ function registerIpc() {
     return { written: res.written.length, backedUp: res.backedUp.length, backupDir: res.backupDir }
   })
 
-  ipcMain.handle('export:run', async (_e, r: ExportRequest): Promise<ExportResult | { error: string } | null> => {
+  handle('export:run', async (_e, r: ExportRequest): Promise<ExportResult | { error: string } | null> => {
     try {
       const install = findInstall(r.installId)
       const bundle = exportBundle({
@@ -437,11 +534,11 @@ function registerIpc() {
     } catch (e) { return { error: (e as Error).message } }
   })
 
-  ipcMain.handle('git:state', async () => ({
+  handle('git:state', async () => ({
     available: await hasGit(), platform: process.platform,
     help: gitInstallHelp(host.platform, host.platform === 'linux' ? detectLinuxPackageManager() : undefined),
   }))
-  ipcMain.handle('git:install', async () => {
+  handle('git:install', async () => {
     const help = gitInstallHelp(host.platform, host.platform === 'linux' ? detectLinuxPackageManager() : undefined)
     if (!help.auto) return { ok: false, message: help.manual }
     const { command, args } = help.auto
@@ -453,37 +550,39 @@ function registerIpc() {
     })
   })
 
-  ipcMain.handle('github:state', (): GithubState => ({ connected: !!loadGithubToken(), login: githubLogin, sessionOnly: githubSessionOnly || undefined }))
-  ipcMain.handle('github:connect', async (_e, token: string) => {
+  handle('github:state', (): GithubState => ({ connected: !!loadGithubToken(), login: githubLogin ?? loadSettings().github?.login, sessionOnly: githubSessionOnly || undefined }))
+  handle('github:connect', async (_e, token: string) => {
     const t = token.trim()
     if (!t) return { ok: false, error: 'Paste the token first.' }
     try {
       const who = await githubWhoAmI(t)
       githubTokenMem = t; githubLogin = who.login
+      { const st = loadSettings(); st.github = { login: who.login, name: who.name, email: who.email }; saveSettings(st) }
       if (safeStorage.isEncryptionAvailable()) { fs.writeFileSync(githubPath(), safeStorage.encryptString(t)); githubSessionOnly = false }
       else githubSessionOnly = true // no keychain: never write it in the clear
       return { ok: true, login: who.login, sessionOnly: githubSessionOnly }
     } catch (e) { return { ok: false, error: errText(e) } }
   })
-  ipcMain.handle('github:disconnect', () => {
+  handle('github:disconnect', () => {
     githubTokenMem = undefined; githubLogin = undefined; githubSessionOnly = false
+    { const st = loadSettings(); delete st.github; saveSettings(st) }
     try { fs.rmSync(githubPath()) } catch { /* nothing saved */ }
   })
-  ipcMain.handle('github:repos', async () => {
+  handle('github:repos', async () => {
     const t = loadGithubToken()
     if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
     try { return { ok: true, repos: await githubListRepos(t) } } catch (e) { return { ok: false, error: errText(e) } }
   })
 
-  ipcMain.handle('repos:list', async () => Promise.all(loadSettings().repos.filter((r) => fs.existsSync(r.path)).map(repoInfo)))
-  ipcMain.handle('repos:suggestFolder', (_e, name: string) => suggestFolder(name))
-  ipcMain.handle('repos:remove', (_e, p: string) => {
+  handle('repos:list', () => memoised('list', 3_000, () => Promise.all(loadSettings().repos.filter((r) => fs.existsSync(r.path)).map(repoInfo))))
+  handle('repos:suggestFolder', (_e, name: string) => suggestFolder(name))
+  handle('repos:remove', (_e, p: string) => {
     const s = loadSettings(); s.repos = s.repos.filter((r) => r.path !== p); saveSettings(s)
   })
-  ipcMain.handle('repos:openFolder', async (_e, p: string) => { await shell.openPath(p) })
-  ipcMain.handle('repos:setInstall', (_e, p: string, installId: string | null) => rememberRepo(p, installId))
+  handle('repos:openFolder', async (_e, p: string) => { await shell.openPath(p) })
+  handle('repos:setInstall', (_e, p: string, installId: string | null) => rememberRepo(p, installId))
 
-  ipcMain.handle('repos:addExisting', async () => {
+  handle('repos:addExisting', async () => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     const r = await dialog.showOpenDialog({ title: 'Choose a config repository folder', properties: ['openDirectory'] })
     if (r.canceled || !r.filePaths[0]) return { ok: false, cancelled: true, error: '' }
@@ -494,7 +593,7 @@ function registerIpc() {
     return { ok: true, repo: await repoInfo({ path: r.filePaths[0] }) }
   })
 
-  ipcMain.handle('repos:clone', async (_e, url: string, folder: string) => {
+  handle('repos:clone', async (_e, url: string, folder: string) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     const v = validateRemoteUrl(url)
     if (!v.ok) return { ok: false, error: v.message }
@@ -505,7 +604,7 @@ function registerIpc() {
     return { ok: true, repo: await repoInfo({ path: folder }) }
   })
 
-  ipcMain.handle('repos:create', async (_e, r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude']; link?: boolean; cloudSkip?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean } }) => {
+  handle('repos:create', async (_e, r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude']; link?: boolean; cloudSkip?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean } }) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     if (!emptyOrMissing(r.folder)) return { ok: false, error: 'That folder is not empty. Choose another one.' }
     try {
@@ -563,7 +662,7 @@ function registerIpc() {
     if (installId) { try { await markSynced(folder, findInstall(installId), gitRunner()) } catch { /* not worth failing for */ } }
     return { kept, url, fromOnline }
   }
-  ipcMain.handle('repos:fromBundle', async (_e, handle: string, folder: string, installId?: string) => {
+  handle('repos:fromBundle', async (_e, handle: string, folder: string, installId?: string) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     const b = bundles.get(handle)
     if (!b) return { ok: false, error: 'That bundle is no longer open. Open it again.' }
@@ -572,7 +671,7 @@ function registerIpc() {
   })
 
   /** "Import a file": a setup file becomes a preset in the presets folder; an extras file goes into the preset it belongs with. */
-  ipcMain.handle('presets:importFile', async (_e, file?: string) => {
+  handle('presets:importFile', async (_e, file?: string) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     let p = file
     if (!p) {
@@ -600,13 +699,13 @@ function registerIpc() {
     } catch (e) { return { ok: false, error: errText(e) } }
   })
 
-  ipcMain.handle('bundle:existing', async (_e, handle: string) => {
+  handle('bundle:existing', async (_e, handle: string) => {
     const b = bundles.get(handle)
     const hit = b && presetFor(b.manifest.id)
     return hit ? repoInfo(hit) : null
   })
   /** A file that knows its online address: the latest version from there (get updates if we have the preset, else download it). */
-  ipcMain.handle('bundle:latest', async (_e, handle: string) => {
+  handle('bundle:latest', async (_e, handle: string) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     const b = bundles.get(handle)
     if (!b) return { ok: false, error: 'That file is no longer open. Open it again.' }
@@ -636,17 +735,17 @@ function registerIpc() {
     } catch (e) { return { ok: false, error: errText(e) } }
   })
   /** Ask the online copy what is new, so "N to download" is true. */
-  ipcMain.handle('repos:check', async (_e, p: string) => {
-    const git = gitRunner()
+  handle('repos:check', (_e, p: string) => memoised(`check|${p}`, 60_000, () => online(async () => {
+    const git = gitRunner(p)
     const r = await fetchRepo(p, git)
     return { ok: r.ok, message: r.message, repo: await repoInfo({ path: p, installId: loadSettings().repos.find((x) => x.path === p)?.installId }) }
-  })
+  })))
 
-  ipcMain.handle('repos:setRemote', async (_e, p: string, url: string) => {
+  handle('repos:setRemote', async (_e, p: string, url: string) => {
     const r = await setRemote(p, url, gitRunner())
     return r.ok ? { ok: true } : { ok: false, error: r.message }
   })
-  ipcMain.handle('repos:publish', async (_e, p: string, name: string, priv: boolean) => {
+  handle('repos:publish', async (_e, p: string, name: string, priv: boolean) => {
     const t = loadGithubToken()
     if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
     try {
@@ -657,19 +756,19 @@ function registerIpc() {
     } catch (e) { return { ok: false, error: e instanceof GithubError ? errText(e) : errText(e) } }
   })
 
-  ipcMain.handle('repos:live', async (_e, p: string, installId: string) => {
+  handle('repos:live', (_e, p: string, installId: string, withDiff?: boolean) => memoised(`live|${p}|${installId}|${withDiff === true}`, 30_000, () => heavy(async () => {
     const inst = findInstall(installId)
-    const r = await captureLive({ host, install: inst, dir: p, dryRun: true, withDiff: true, keepKeysDefault: keepKeysDefault(), git: gitRunner() })
+    const r = await captureLive({ host, install: inst, dir: p, dryRun: true, withDiff: withDiff === true, keepKeysDefault: keepKeysDefault(), git: gitRunner(p) })
     if (r.status === 'error') return { error: r.message }
     // and the other direction: what the preset has that this OBS has not got yet (typically after getting updates)
-    return { changed: r.status === 'changes' ? r.files : [], details: r.status === 'changes' ? r.details : undefined, pending: await pendingForObs(p, inst, gitRunner()) }
-  })
-  ipcMain.handle('repos:save', async (_e, p: string, installId: string, commitDirtyFirst: boolean, onConflict?: 'abort' | 'keep-repo' | 'keep-obs') => {
+    return { changed: r.status === 'changes' ? r.files : [], details: r.status === 'changes' ? r.details : undefined, pending: await pendingForObs(p, inst, gitRunner(p)) }
+  })))
+  handle('repos:save', async (_e, p: string, installId: string, commitDirtyFirst: boolean, onConflict?: 'abort' | 'keep-repo' | 'keep-obs') => {
     const inst = findInstall(installId)
     const seen: { id: string; filename: string; path: string }[] = []
     const r = await captureLive({
       host, install: inst, dir: p, onDirty: commitDirtyFirst ? 'commit-first' : 'refuse', onConflict,
-      appVersion: app.getVersion(), versions: detectVersions(inst, host), onAsset: (a) => seen.push(a), keepKeysDefault: keepKeysDefault(), git: gitRunner(),
+      appVersion: app.getVersion(), versions: detectVersions(inst, host), onAsset: (a) => seen.push(a), keepKeysDefault: keepKeysDefault(), git: gitRunner(p),
     })
     rememberAssets(p, seen)
     if (r.status === 'changes') return { status: 'unchanged' }
@@ -690,21 +789,21 @@ function registerIpc() {
     }
     return r
   })
-  ipcMain.handle('repos:pull', (_e, p: string, onConflict?: 'abort' | 'keep-mine' | 'keep-theirs') => pullRepo(p, gitRunner(), onConflict))
-  ipcMain.handle('repos:push', (_e, p: string, force?: boolean) => pushRepo(p, gitRunner(), { force: force === true }))
+  handle('repos:pull', (_e, p: string, onConflict?: 'abort' | 'keep-mine' | 'keep-theirs') => pullRepo(p, gitRunner(), onConflict))
+  handle('repos:push', (_e, p: string, force?: boolean) => pushRepo(p, gitRunner(), { force: force === true }))
   /** How this computer's copy and the online one relate: ask GitHub first, then compare. */
-  ipcMain.handle('repos:compare', async (_e, p: string) => {
-    const git = gitRunner()
+  handle('repos:compare', (_e, p: string) => memoised(`compare|${p}`, 60_000, () => online(async () => {
+    const git = gitRunner(p)
     await fetchRepo(p, git)
     return onlineComparison(p, git)
-  })
-  ipcMain.handle('repos:useOnline', async (_e, p: string) => {
+  })))
+  handle('repos:useOnline', async (_e, p: string) => {
     const git = gitRunner()
     const r = await useOnlineVersion(p, git)
     return r.ok ? { ok: true, kept: r.kept } : { ok: false, error: r.message }
   })
-  ipcMain.handle('repos:log', (_e, p: string) => repoLog(p, 15, gitRunner()))
-  ipcMain.handle('repos:needs', async (_e, p: string) => {
+  handle('repos:log', (_e, p: string) => repoLog(p, 15, gitRunner()))
+  handle('repos:needs', (_e, p: string) => memoised(`needs|${p}`, 30_000, () => heavy(async () => {
     const m = readBundleDir(p).manifest
     const all = readLocations()
     const cur = locationsFor(m.id)
@@ -713,8 +812,8 @@ function registerIpc() {
     for (const [id, f] of Object.entries(here)) if (!cur.assets[id] || !fs.existsSync(cur.assets[id])) cur.assets[id] = f
     all[m.id] = cur; writeLocations(all)
     return assetNeeds(m, cur.assets)
-  })
-  ipcMain.handle('repos:setAsset', (_e, p: string, assetId: string, file: string) => {
+  })))
+  handle('repos:setAsset', (_e, p: string, assetId: string, file: string) => {
     const m = readBundleDir(p).manifest
     const all = readLocations()
     const cur = all[m.id] ?? { assets: {}, variables: {} }
@@ -722,28 +821,28 @@ function registerIpc() {
     all[m.id] = cur
     writeLocations(all)
   })
-  ipcMain.handle('locations:load', (_e, id: string) => locationsFor(id))
-  ipcMain.handle('locations:save', (_e, id: string, l: Locations) => {
+  handle('locations:load', (_e, id: string) => locationsFor(id))
+  handle('locations:save', (_e, id: string, l: Locations) => {
     // merged, never replaced: what import and save learned about where the files are must not be wiped by a screen that knows less
     const all = readLocations(); const cur = all[id] ?? { assets: {}, variables: {} }
     all[id] = { assets: { ...cur.assets, ...l.assets }, variables: l.variables }
     writeLocations(all)
   })
 
-  ipcMain.handle('files:pick', async (_e, title: string, folder?: boolean) => {
+  handle('files:pick', async (_e, title: string, folder?: boolean) => {
     const r = await dialog.showOpenDialog({ title, properties: [folder ? 'openDirectory' : 'openFile'] })
     return r.canceled ? null : r.filePaths[0] ?? null
   })
 
-  ipcMain.handle('files:reveal', (_e, p: string) => { shell.showItemInFolder(p) })
+  handle('files:reveal', (_e, p: string) => { shell.showItemInFolder(p) })
 
   // answers typed when loading a setup: kept in the preset made from it (this computer only); the keychain is only for setups with no preset
-  ipcMain.handle('secrets:load', (_e, id: string) => {
+  handle('secrets:load', (_e, id: string) => {
     const hit = presetFor(id)
     if (hit) adoptLegacyKeys(hit.path)
     return { ...readSecrets()[id], ...(hit ? readLocalKeys(hit.path) : {}) }
   })
-  ipcMain.handle('secrets:save', (_e, id: string, values: Record<string, string>) => {
+  handle('secrets:save', (_e, id: string, values: Record<string, string>) => {
     const hit = presetFor(id)
     if (hit && readLocalSettings(hit.path).keepKeys !== false && keepKeysDefault()) { writeLocalKeys(hit.path, values); return true }
     const all = readSecrets()
@@ -752,33 +851,41 @@ function registerIpc() {
   })
 
   // ── settings ──
-  ipcMain.handle('settings:get', () => {
+  handle('settings:get', () => {
     const s = loadSettings()
     return {
       presetsRoot: presetsRoot(), defaultPresetsRoot: defaultPresetsRoot(), isDefault: !s.presetsRoot,
       rememberKeys: s.rememberKeys !== false, canStoreKeys: true,
     }
   })
-  ipcMain.handle('settings:setPresetsRoot', (_e, p: string | null) => {
+  handle('settings:setPresetsRoot', (_e, p: string | null) => {
     const s = loadSettings()
     if (p) s.presetsRoot = p; else delete s.presetsRoot
     saveSettings(s)
   })
-  ipcMain.handle('settings:setRememberKeys', (_e, on: boolean) => {
+  handle('settings:setRememberKeys', (_e, on: boolean) => {
     const s = loadSettings(); s.rememberKeys = on === true; saveSettings(s)
   })
 
   // ── presets (a preset is one of the saved setup folders) ──
-  ipcMain.handle('presets:keys', (_e, p: string) => {
+  handle('presets:keys', (_e, p: string) => {
     adoptLegacyKeys(p)
     return { count: Object.keys(readLocalKeys(p)).length, canStore: true }
   })
-  ipcMain.handle('presets:details', (_e, p: string) => {
+  handle('presets:details', (_e, p: string) => {
     const b = readBundleDir(p)
     const m = b.manifest
     const overrides = m.platformOverrides ?? {}
     const platforms: ('win32' | 'darwin' | 'linux')[] = ['win32', 'darwin', 'linux']
     const label = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }
+    /** For one kind of source: on each system it does not exist on, what it becomes by default and what is chosen. `own`: the saved choices (for the kind, or for one source). */
+    const targetsOf = (from: string, to: Record<string, string | undefined>, own: Partial<Record<string, string | null>> | undefined) =>
+      platforms.filter((pl) => !availableOn(from, pl)).map((pl) => {
+        const def = pl === 'linux' ? (to['linux-pipewire'] ?? to.linux) : to[pl]
+        const has = own && (pl === 'linux' ? 'linux' in own || 'linux-pipewire' in own : pl in own)
+        const val = has ? (pl === 'linux' ? (own!.linux ?? own!['linux-pipewire'] ?? null) : own![pl] ?? null) : undefined
+        return { platform: pl, label: label[pl], default: def ?? null, defaultName: def ? sourceName(def) : null, chosen: val === undefined ? undefined : val, options: standInOptions(from, pl).map((id) => ({ id, name: sourceName(id) })) }
+      })
     return {
       savedWithObs: m.savedWithObs as string | undefined,
       plugins: m.plugins.map((x) => ({ name: x.name, version: x.version, known: !x.id.startsWith('unknown:') })),
@@ -787,20 +894,12 @@ function registerIpc() {
       layouts: m.collections.map((c) => ({ id: c.id, name: c.name, ...listNames(p, c.id) })),
       outputs: m.profiles.map((x) => ({ id: x.id, name: x.name })),
       exclude: m.exclude ?? {},
-      translations: m.platformMap.filter((e) => SOURCE_PLATFORMS[e.from]).map((e) => ({
-        from: e.from, name: sourceName(e.from),
-        targets: platforms.filter((pl) => !availableOn(e.from, pl)).map((pl) => {
-          const def = pl === 'linux' ? (e.to['linux-pipewire'] ?? e.to.linux) : e.to[pl]
-          const own = overrides[e.from]
-          const has = own && (pl === 'linux' ? 'linux' in own || 'linux-pipewire' in own : pl in own)
-          const val = has ? (pl === 'linux' ? (own!.linux ?? own!['linux-pipewire'] ?? null) : own![pl] ?? null) : undefined
-          return {
-            platform: pl, label: label[pl], default: def ?? null, defaultName: def ? sourceName(def) : null,
-            chosen: val === undefined ? undefined : val, // undefined = the built-in choice; null = hide it
-            options: standInOptions(e.from, pl).map((id) => ({ id, name: sourceName(id) })),
-          }
-        }),
-      })),
+      translations: m.platformMap.filter((e) => SOURCE_PLATFORMS[e.from]).map((e) => ({ from: e.from, name: sourceName(e.from), targets: targetsOf(e.from, e.to, overrides[e.from]) })),
+      // and the same per source, for when two sources of one kind should not be treated alike
+      sourceTranslations: m.collections.flatMap((c) => listPlatformSources(p, c.id).map((x) => {
+        const entry = [...m.platformMap, ...DEFAULT_PLATFORM_MAP].find((e) => e.from === x.kind)
+        return { key: x.key, name: x.name, layout: c.name, from: x.kind, fromName: sourceName(x.kind), targets: targetsOf(x.kind, entry?.to ?? {}, m.sourceOverrides?.[x.key]) }
+      }).filter((r) => r.targets.length)),
     }
   })
 
@@ -816,15 +915,17 @@ function registerIpc() {
     if (st.remote) await pushRepo(p, git)
     return { ok: true as const }
   }
-  ipcMain.handle('presets:setExclude', (_e, p: string, exclude: NonNullable<ExportRequest['exclude']>) =>
+  handle('presets:setExclude', (_e, p: string, exclude: NonNullable<ExportRequest['exclude']>) =>
     editManifest(p, (m) => {
       const clean = { ...(exclude.collections?.length ? { collections: exclude.collections } : {}), ...(exclude.profiles?.length ? { profiles: exclude.profiles } : {}), ...(exclude.remoteControl ? { remoteControl: true } : {}), ...(exclude.scripts ? { scripts: true } : {}) }
       if (Object.keys(clean).length) m.exclude = clean; else delete m.exclude
     }, 'Changed what this preset saves'))
-  ipcMain.handle('presets:setOverrides', (_e, p: string, overrides: Record<string, Record<string, string | null>>) =>
+  handle('presets:setSourceOverrides', (_e, p: string, overrides: Record<string, Record<string, string | null>>) =>
+    editManifest(p, (m) => { if (Object.keys(overrides).length) m.sourceOverrides = overrides as never; else delete m.sourceOverrides }, 'Changed how single sources are translated between computers'))
+  handle('presets:setOverrides', (_e, p: string, overrides: Record<string, Record<string, string | null>>) =>
     editManifest(p, (m) => { if (Object.keys(overrides).length) m.platformOverrides = overrides as never; else delete m.platformOverrides }, 'Changed how sources are translated between computers'))
 
-  ipcMain.handle('presets:move', async (_e, p: string, parent: string) => {
+  handle('presets:move', async (_e, p: string, parent: string) => {
     try {
       const target = path.join(parent, path.basename(p))
       if (path.resolve(target) === path.resolve(p)) return { ok: false, error: 'It is already there.' }
@@ -846,7 +947,7 @@ function registerIpc() {
   })
 
   // what is in an OBS (and what would go into a file), without reading any big file into the file
-  ipcMain.handle('obs:scan', (_e, installId: string) => {
+  handle('obs:scan', (_e, installId: string) => {
     const b = exportBundle({ host, install: findInstall(installId), name: 'scan', bundleBelowBytes: 0 })
     return {
       files: b.manifest.assets.filter((a) => a.role !== 'script').map((a) => ({ id: a.id, filename: a.filename, size: a.size ?? 0, available: a.size !== undefined, auto: (a.size ?? 0) <= SMALL_FILE })),
@@ -855,10 +956,10 @@ function registerIpc() {
       keys: b.manifest.variables.filter((v) => v.kind === 'secret').map((v) => v.label ?? v.name),
     }
   })
-  ipcMain.handle('presets:scanFile', (_e, p: string) => presetFiles(p, locationsFor(readBundleDir(p).manifest.id).assets))
+  handle('presets:scanFile', (_e, p: string) => presetFiles(p, locationsFor(readBundleDir(p).manifest.id).assets))
 
   /** A setup file made from a preset: everything it holds, the big files that were chosen, the keys only when asked. */
-  ipcMain.handle('presets:exportFile', async (_e, p: string, o: { includeKeys: boolean; bigFiles: string[]; independent: boolean }) => {
+  handle('presets:exportFile', async (_e, p: string, o: { includeKeys: boolean; bigFiles: string[]; independent: boolean }) => {
     try {
       const m = readBundleDir(p).manifest
       const remote = (await repoStatus(p, gitRunner())).remote ? await getRemoteUrl(p, gitRunner()) : undefined
@@ -879,11 +980,11 @@ function registerIpc() {
   })
 
   /** What the companion file of a preset would hold. */
-  ipcMain.handle('presets:extrasInfo', (_e, p: string) => {
+  handle('presets:extrasInfo', (_e, p: string) => {
     const c = extrasContent(p, locationsFor(readBundleDir(p).manifest.id).assets)
     return { files: c.files, media: c.media.map(({ id, filename, size }) => ({ id, filename, size })), keys: c.keys }
   })
-  ipcMain.handle('presets:exportExtras', async (_e, p: string, o: { includeKeys: boolean; mediaIds: string[] }) => {
+  handle('presets:exportExtras', async (_e, p: string, o: { includeKeys: boolean; mediaIds: string[] }) => {
     try {
       const m = readBundleDir(p).manifest
       const d = await dialog.showSaveDialog({
@@ -906,7 +1007,7 @@ function registerIpc() {
     return n
   }
   /** What a preset holds and where each part lives: this computer, GitHub, or only here. */
-  ipcMain.handle('presets:overview', (_e, p: string): PresetOverview => {
+  handle('presets:overview', (_e, p: string) => memoised(`overview|${p}`, 30_000, () => heavy((): PresetOverview => {
     const b = readBundleDir(p)
     const m = b.manifest
     const set = readLocalSettings(p)
@@ -924,11 +1025,14 @@ function registerIpc() {
     const scriptNames = [...m.assets.filter((a) => a.role === 'script').map((a) => a.filename), ...scriptFolderNames(m)]
     const rc = b.files.has(WEBSOCKET_FILE)
     const keyCount = Object.keys(readLocalKeys(p)).length
-    const fileRows = files.map((f) => ({ ...f, haveCopy: !!own[f.id], keepCopy: !noCopy.has(f.id), cloud: up.has(f.id), tooBigForGithub: f.size > MAX_UPLOAD_FILE }))
+    const stored = new Set(set.cloud?.stored ?? [])
+    const fileRows = files.map((f) => ({ ...f, haveCopy: !!own[f.id], keepCopy: !noCopy.has(f.id), cloud: up.has(f.id), stored: stored.has(f.id), tooBigForGithub: f.size > MAX_UPLOAD_FILE }))
     const onlyHere: string[] = []
     if (keyCount) onlyHere.push(`${keyCount} stream key${keyCount === 1 ? '' : 's'}`)
-    const copied = fileRows.filter((f) => f.haveCopy && !f.cloud)
+    const copied = fileRows.filter((f) => f.haveCopy && !f.cloud && !f.stored)
     if (copied.length) onlyHere.push(`${copied.length} file${copied.length === 1 ? '' : 's'} (${humanSize(copied.reduce((n, f) => n + f.size, 0))})`)
+    const inStorage = fileRows.filter((f) => f.stored)
+    if (inStorage.length) onlyHere.push(`${inStorage.length} file${inStorage.length === 1 ? '' : 's'} in your big-file storage`)
     for (const l of layouts) if (!l.cloud) onlyHere.push(`scene layout “${l.name}”`)
     for (const o of outputs) if (!o.cloud) onlyHere.push(`output settings “${o.name}”`)
     if (skip.scripts && scriptNames.length) onlyHere.push('scripts')
@@ -939,11 +1043,12 @@ function registerIpc() {
       remoteControl: { present: rc, local: !ex.remoteControl, cloud: !skip.remoteControl },
       keys: { count: keyCount, keep: set.keepKeys ?? keepKeysDefault() },
       onlyHere, sizeBytes: dirSize(p), maxUploadBytes: MAX_UPLOAD_FILE,
+      storage: set.storage ? { label: set.storage.label || set.storage.bucket, connected: storageReady(set.storage), target: set.storage } : undefined,
     }
-  })
+  })))
 
   /** Change where each part of a preset lives. Upload choices take effect at once (one saved step); keys and copies follow the choice. */
-  ipcMain.handle('presets:setStorage', async (_e, p: string, patch: { cloud?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean; media?: string[] }; keepKeys?: boolean; skipLocalMedia?: string[] }) => {
+  handle('presets:setStorage', async (_e, p: string, patch: { cloud?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean; media?: string[] }; keepKeys?: boolean; skipLocalMedia?: string[] }) => {
     try {
       const git = gitRunner()
       const cur: LocalSettings = readLocalSettings(p)
@@ -979,7 +1084,7 @@ function registerIpc() {
     } catch (e) { return { ok: false, error: errText(e) } }
   })
 
-  ipcMain.handle('presets:rename', async (_e, r: { path: string; installId?: string; kind: 'preset' | 'layout' | 'output' | 'scene'; id?: string; layoutId?: string; from?: string; to: string }) => {
+  handle('presets:rename', async (_e, r: { path: string; installId?: string; kind: 'preset' | 'layout' | 'output' | 'scene'; id?: string; layoutId?: string; from?: string; to: string }) => {
     const git = gitRunner()
     try {
       const st = await repoStatus(r.path, git)
@@ -1043,7 +1148,7 @@ function registerIpc() {
   })
 
   /** Rename the repository on GitHub (always `OBS-Config-<name>`) and point this preset at the new address. */
-  ipcMain.handle('presets:renameOnline', async (_e, p: string, name: string) => {
+  handle('presets:renameOnline', async (_e, p: string, name: string) => {
     const t = loadGithubToken()
     if (!t) return { ok: false, error: 'Sign in to GitHub first (under Settings).' }
     try {
@@ -1061,7 +1166,7 @@ function registerIpc() {
     } catch (e) { return { ok: false, error: errText(e) } }
   })
 
-  ipcMain.handle('presets:setOnline', async (_e, p: string, on: boolean, name: string, priv: boolean) => {
+  handle('presets:setOnline', async (_e, p: string, on: boolean, name: string, priv: boolean) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     const git = gitRunner()
     try {
@@ -1083,22 +1188,163 @@ function registerIpc() {
     } catch (e) { return { ok: false, error: errText(e) } }
   })
 
-  ipcMain.handle('updates:state', () => updates.state)
-  ipcMain.handle('updates:check', () => updates.check())
-  ipcMain.handle('updates:install', () => { updates.install() })
+  handle('updates:state', () => updates.state)
+  handle('updates:check', () => updates.check())
+  handle('updates:install', () => { updates.install() })
   // the theme-drawn title bar (the engine's window-frame module): off by default, applies after a restart
-  ipcMain.handle('window:frame', () => ({ custom: !!loadSettings().customFrame, platform: process.platform }))
-  ipcMain.handle('window:setCustomFrame', (_e, on: boolean) => { const s = loadSettings(); s.customFrame = on === true; saveSettings(s) })
-  ipcMain.handle('window:control', (e, action: 'minimize' | 'maximize' | 'close') => {
+  handle('window:frame', () => ({ custom: !!loadSettings().customFrame, platform: process.platform }))
+  handle('window:setCustomFrame', (_e, on: boolean) => { const s = loadSettings(); s.customFrame = on === true; saveSettings(s) })
+  handle('window:control', (e, action: 'minimize' | 'maximize' | 'close') => {
     const w = BrowserWindow.fromWebContents(e.sender)
     if (!w) return
     if (action === 'minimize') w.minimize()
     else if (action === 'close') w.close()
     else if (w.isMaximized()) w.unmaximize(); else w.maximize()
   })
-  ipcMain.handle('window:restart', () => { app.relaunch(); app.exit(0) })
-  ipcMain.handle('app:version', () => app.getVersion())
-  ipcMain.handle('app:openExternal', (_e, url: string) => {
+  handle('window:restart', () => { app.relaunch(); app.exit(0) })
+
+  // ── who saves are by ──
+  handle('identity:get', () => {
+    const st = loadSettings()
+    return {
+      mode: st.identity?.mode ?? 'github', name: st.identity?.name ?? '', email: st.identity?.email ?? '',
+      github: loadGithubToken() ? st.github : undefined,
+      effective: appIdentity() ?? null,
+    }
+  })
+  handle('identity:set', (_e, mode: 'github' | 'custom', name: string, email: string) => {
+    const n = (name ?? '').trim(), m = (email ?? '').trim()
+    if (mode === 'custom') {
+      if (!n || !m) return { ok: false, error: 'Give both a name and an email address.' }
+      if (/[<>\n]/.test(n) || /[<>\s]/.test(m) || !/^[^@]+@[^@]+$/.test(m)) return { ok: false, error: 'That name or email address is not usable. The address looks like name@example.com.' }
+    }
+    const st = loadSettings(); st.identity = { mode, ...(mode === 'custom' ? { name: n, email: m } : {}) }; saveSettings(st)
+    return { ok: true }
+  })
+  handle('presets:authors', async (_e, p: string) => ({
+    authors: await listAuthors(p, gitRunner(p)),
+    own: readLocalSettings(p).author ?? null,
+    effective: identityFor(p) ?? null,
+  }))
+  handle('presets:setAuthor', (_e, p: string, who: GitIdentity | null) => {
+    const cur = readLocalSettings(p)
+    if (who) {
+      if (!who.name.trim() || !/^[^@\s<>]+@[^@\s<>]+$/.test(who.email.trim()) || /[<>\n]/.test(who.name)) return { ok: false, error: 'That name or email address is not usable.' }
+      writeLocalSettings(p, { ...cur, author: { name: who.name.trim(), email: who.email.trim() } })
+    } else { const { author: _a, ...rest } = cur; writeLocalSettings(p, rest) }
+    return { ok: true }
+  })
+  /** Every save in a preset, signed with this name from now on and back to the first one; then GitHub gets the new history. */
+  handle('presets:rewriteAuthors', async (_e, p: string, who: GitIdentity) => {
+    try {
+      if (!who.name.trim() || !/^[^@\s<>]+@[^@\s<>]+$/.test(who.email.trim()) || /[<>\n]/.test(who.name)) return { ok: false, error: 'That name or email address is not usable.' }
+      const git = gitRunner(p)
+      let st = await repoStatus(p, git)
+      if (st.remote) {
+        await fetchRepo(p, git)
+        st = await repoStatus(p, git)
+        if (st.behind > 0) return { ok: false, error: 'GitHub has newer changes than this computer. Press “Get updates” first, then change the name.' }
+      }
+      const r = await rewriteAuthor(p, who, git)
+      if (!r.ok) return { ok: false, error: r.message }
+      // saves from now on carry the same name
+      writeLocalSettings(p, { ...readLocalSettings(p), author: { name: who.name.trim(), email: who.email.trim() } })
+      let pushed = false, pushError: string | undefined
+      if (st.remote && (r.changed || st.ahead > 0)) {
+        const pr = await pushRepo(p, git, { force: true })
+        pushed = pr.status === 'pushed'
+        if (pr.status === 'error') pushError = pr.message
+      }
+      // the old history is only dropped once nothing still needs it
+      if (!st.remote || pushed) await discardNameChangeBackup(p, git)
+      return { ok: true, rewritten: r.rewritten, changed: r.changed, online: !!st.remote, pushed, pushError }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
+
+  // ── big-file storage ──
+  handle('storage:state', () => ({ target: loadSettings().storage ?? null, hasKeys: !!loadStorageKeys(), canStoreKeys: safeStorage.isEncryptionAvailable(), sessionOnly: storageSessionOnly || undefined }))
+  handle('storage:save', async (_e, target: StorageTarget, keys: StorageKeys | null) => {
+    const t: StorageTarget = { endpoint: target.endpoint.trim(), region: (target.region ?? '').trim() || regionFromEndpoint(target.endpoint) || 'auto', bucket: target.bucket.trim(), ...(target.label?.trim() ? { label: target.label.trim() } : {}), prefix: (target.prefix ?? 'obs-config-loader/').trim() || 'obs-config-loader/' }
+    const bad = validateTarget(t)
+    if (bad) return { ok: false, error: bad }
+    const k = keys && keys.accessKeyId.trim() && keys.secretAccessKey.trim() ? { accessKeyId: keys.accessKeyId.trim(), secretAccessKey: keys.secretAccessKey.trim() } : loadStorageKeys()
+    if (!k) return { ok: false, error: 'Paste the key ID and the secret key.' }
+    const test = await testStorage(t, k)
+    if (!test.ok) return { ok: false, error: test.message.split(k.secretAccessKey).join('***') }
+    storageKeysMem = k
+    if (safeStorage.isEncryptionAvailable()) { fs.mkdirSync(path.dirname(storageKeysPath()), { recursive: true }); fs.writeFileSync(storageKeysPath(), safeStorage.encryptString(JSON.stringify(k))); storageSessionOnly = false }
+    else storageSessionOnly = true // no keychain: never written in the clear
+    const st = loadSettings(); st.storage = t; saveSettings(st)
+    return { ok: true, sessionOnly: storageSessionOnly }
+  })
+  handle('storage:forget', () => {
+    storageKeysMem = undefined; storageSessionOnly = false
+    try { fs.rmSync(storageKeysPath(), { force: true }) } catch { /* nothing saved */ }
+    const st = loadSettings(); delete st.storage; saveSettings(st)
+  })
+  /** Which files of a preset are kept in the storage. Files newly added are uploaded first; nothing changes if one fails. */
+  handle('presets:setStored', async (_e, p: string, ids: string[]) => {
+    try {
+      const cur = readLocalSettings(p)
+      const had = new Set(cur.cloud?.stored ?? [])
+      const adding = ids.filter((i) => !had.has(i))
+      const target = loadSettings().storage
+      const keys = loadStorageKeys()
+      if (adding.length && (!target || !keys)) return { ok: false, error: 'Set up your big-file storage first (Settings).' }
+      const m = readBundleDir(p, { keepMissing: true }).manifest
+      const own = localMediaLocations(p, m)
+      const known = locationsFor(m.id).assets
+      let uploaded = 0, already = 0
+      for (const id of adding) {
+        const a = m.assets.find((x) => x.id === id)
+        if (!a) continue
+        const file = [own[id], known[id]].find((f) => f && fs.existsSync(f))
+        if (!file) return { ok: false, error: `“${a.filename}” is not on this computer, so it cannot be put in the storage. Find it first.` }
+        const sha = await sha256OfFile(file)
+        if (a.sha256 && a.sha256 !== sha) return { ok: false, error: `“${a.filename}” has changed since the preset was saved. Press “Update preset from OBS” first.` }
+        // keyed by the fingerprint the preset records (or, for an older preset without one, this file's)
+        const r = await putFile(target!, keys!, objectKey(target!, sha, a.filename), file, sha, (d, t) => sendStorageProgress(id, a.filename, d, t))
+        if (r === 'uploaded') uploaded++; else already++
+        if (!a.sha256) { a.sha256 = sha; a.size = fs.statSync(file).size; fs.writeFileSync(path.join(p, 'manifest.json'), serializeManifest(m)) }
+      }
+      const next: LocalSettings = { ...cur, cloud: { ...cur.cloud, stored: ids, media: (cur.cloud?.media ?? []).filter((x) => !ids.includes(x)) }, ...(ids.length && target ? { storage: target } : {}) }
+      writeLocalSettings(p, next)
+      const git = gitRunner(p)
+      const st = await repoStatus(p, git)
+      if (st.dirtyFiles.some((f) => f !== 'manifest.json' && f !== 'assets.lock.json')) { writeLocalSettings(p, cur); return { ok: false, error: 'This preset has changes that are not saved yet. Save them first.' } }
+      const r = await applyCloudSettings(p, git, locationsFor(m.id).assets)
+      if (!r.ok) { writeLocalSettings(p, cur); return { ok: false, error: r.message } }
+      let pushed = false
+      if (r.changed && st.remote && st.behind === 0) pushed = (await pushRepo(p, git)).status === 'pushed'
+      return { ok: true, uploaded, already, pushed }
+    } catch (e) { return { ok: false, error: storageError(e) } }
+  })
+  /** Download the files a preset keeps in the storage that this computer does not have yet. */
+  handle('presets:fetchStored', async (_e, p: string) => {
+    try {
+      const set = readLocalSettings(p)
+      const wanted = new Set(set.cloud?.stored ?? [])
+      if (!wanted.size) return { ok: true, downloaded: 0, failed: [] as { filename: string; error: string }[] }
+      const target = loadSettings().storage
+      const keys = loadStorageKeys()
+      if (!target || !keys || !storageReady(set.storage)) return { ok: false, error: set.storage ? `This preset keeps big files in “${set.storage.label || set.storage.bucket}”. Connect to it in Settings first (you only need its access keys).` : 'Set up your big-file storage first (Settings).' }
+      const m = readBundleDir(p, { keepMissing: true }).manifest
+      const own = localMediaLocations(p, m)
+      const known = locationsFor(m.id).assets
+      let downloaded = 0
+      const failed: { filename: string; error: string }[] = []
+      for (const a of m.assets) {
+        if (!wanted.has(a.id) || [own[a.id], known[a.id]].some((f) => f && fs.existsSync(f))) continue
+        if (!a.sha256) { failed.push({ filename: a.filename, error: 'The preset does not record this file’s fingerprint, so it cannot be fetched safely.' }); continue }
+        try { await getFile(target, keys, objectKey(target, a.sha256, a.filename), localMediaPath(p, a.id, a.filename), a.sha256, (d, t) => sendStorageProgress(a.id, a.filename, d, t)); downloaded++ }
+        catch (e) { failed.push({ filename: a.filename, error: storageError(e) }) }
+      }
+      return { ok: true, downloaded, failed }
+    } catch (e) { return { ok: false, error: storageError(e) } }
+  })
+
+  handle('app:version', () => app.getVersion())
+  handle('app:openExternal', (_e, url: string) => {
     if (/^https:\/\//.test(url)) return shell.openExternal(url) // only web links, never file: or custom schemes
   })
 }
