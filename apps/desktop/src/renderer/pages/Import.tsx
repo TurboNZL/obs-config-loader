@@ -373,17 +373,17 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
                         <strong>{s.source}</strong>: {s.result === 'variant' ? 'using the version you saved for this kind of computer.'
                           : s.result === 'added' ? `${s.note ?? ''}`
                           : s.result === 'substituted' ? <>this setup was made for another kind of computer, so <strong>{s.toName ?? 'a matching capture'}</strong> was put in place of {s.fromName ?? 'it'}. Choose the window or screen again in OBS.</>
-                          : s.key && choices[s.key] === null ? 'hidden, as you chose (not deleted).'
+                          : (s.sourceKey ?? s.key) && choices[(s.sourceKey ?? s.key)!] === null ? 'hidden, as you chose (not deleted).'
                           : 'there is no equivalent on this computer, so it is hidden (not deleted).'}
                       </div>
-                      {(s.result === 'substituted' || s.result === 'disabled') && s.key && (
+                      {(s.result === 'substituted' || s.result === 'disabled') && (s.sourceKey ?? s.key) && (
                         <label className="flex items-center gap-2 pl-3">
                           <span className="text-muted shrink-0">Use instead:</span>
                           <select
                             className="input flex-1 px-2 py-1" aria-label={`What ${s.source} becomes`}
-                            value={s.key in choices ? (choices[s.key] === null ? '__hide__' : choices[s.key]!) : ''}
+                            value={(s.sourceKey ?? s.key!) in choices ? (choices[(s.sourceKey ?? s.key)!] === null ? '__hide__' : choices[(s.sourceKey ?? s.key)!]!) : ''}
                             onChange={(e) => {
-                              const v = e.target.value; const k = s.key!
+                              const v = e.target.value; const k = (s.sourceKey ?? s.key)!
                               const next = { ...choices }
                               if (v === '') delete next[k]; else next[k] = v === '__hide__' ? null : v
                               setChoices(next)

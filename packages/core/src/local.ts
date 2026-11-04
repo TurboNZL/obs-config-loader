@@ -1,5 +1,6 @@
 import * as fs from 'node:fs'
 import * as nodePath from 'node:path'
+import * as crypto from 'node:crypto'
 import { LOCAL_DIR } from './bundleIO.js'
 import { variantsPathFor } from './variants.js'
 import type { Manifest } from './types.js'
@@ -23,22 +24,86 @@ export interface LocalSettings {
     skip?: CloudSkip
     /** Files (asset ids) that ARE uploaded. Default: none (they are big). */
     media?: string[]
+    /** Files (asset ids) kept in the big-file storage (not in git at all). */
+    stored?: string[]
   }
+  /** Where the big-file storage is (never its password). Shared, so another computer only has to enter the access keys. */
+  storage?: StorageTarget
+  /** Who saves in this preset are by, when not the app-wide choice. Stays on this computer (an address can be private). */
+  author?: { name: string; email: string }
+  /** Bookkeeping: hash of the shared settings file as this computer last wrote or took it over. */
+  mirrored?: string
 }
+
+/** Where big files are kept (an S3-compatible bucket). Access keys are never part of it. */
+export interface StorageTarget { endpoint: string; region: string; bucket: string; prefix?: string; label?: string }
+
+/** The preset's own settings as a file inside the preset, so they travel with it (GitHub, a setup file) and a copy on another computer behaves the same. */
+export const SHARED_SETTINGS = 'preset-settings.json'
 
 const SETTINGS = 'settings.json'
 const KEYS = 'keys.json'
 
 export const localPath = (dir: string, ...parts: string[]) => nodePath.join(dir, LOCAL_DIR, ...parts)
 
-export function readLocalSettings(dir: string): LocalSettings {
+const sharedOf = (s: LocalSettings) => {
+  const out: Record<string, unknown> = {}
+  if (s.keepKeys !== undefined) out.keepKeys = s.keepKeys
+  if (s.skipLocalMedia?.length) out.skipLocalMedia = s.skipLocalMedia
+  if (s.cloud && (s.cloud.skip || s.cloud.media || s.cloud.stored)) out.cloud = s.cloud
+  if (s.storage) out.storage = s.storage
+  return out
+}
+const sharedText = (s: LocalSettings) => JSON.stringify({ note: 'This preset\'s own settings (what is uploaded, where big files are kept). Saved with the preset by OBS Config Loader.', ...sharedOf(s) }, null, 2) + '\n'
+const hashOf = (t: string) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 16)
+
+function readLocalRaw(dir: string): LocalSettings {
   try { return JSON.parse(fs.readFileSync(localPath(dir, SETTINGS), 'utf8')) as LocalSettings } catch { return {} }
 }
+
+/**
+ * This preset's settings. They are saved twice: in `local/settings.json` (this computer) and as `preset-settings.json` inside the
+ * preset (so GitHub and setup files carry them). If the file inside the preset changed from outside (a copy from GitHub, newer
+ * saves from another computer), it wins; otherwise this computer's own file does.
+ */
+export function readLocalSettings(dir: string): LocalSettings {
+  const mine = readLocalRaw(dir)
+  let text: string
+  try { text = fs.readFileSync(nodePath.join(dir, SHARED_SETTINGS), 'utf8') } catch { return mine }
+  if (hashOf(text) === mine.mirrored) return mine
+  try {
+    const j = JSON.parse(text) as LocalSettings
+    const taken: LocalSettings = { ...mine, keepKeys: j.keepKeys, skipLocalMedia: j.skipLocalMedia, cloud: j.cloud, storage: j.storage, mirrored: hashOf(text) }
+    // remembered as taken over, so this computer's own later changes win again until the file changes from outside once more
+    try { fs.mkdirSync(localPath(dir), { recursive: true }); fs.writeFileSync(localPath(dir, SETTINGS), JSON.stringify(taken, null, 2) + '\n') } catch { /* read-only: used as is */ }
+    return taken
+  } catch { return mine }
+}
 export function writeLocalSettings(dir: string, s: LocalSettings): void {
-  // the bookkeeping field belongs to the save, not to whoever changes the choices
-  if (s.kept === undefined) { const old = readLocalSettings(dir).kept; if (old) s = { ...s, kept: old } }
+  // bookkeeping belongs to the save, not to whoever changes the choices
+  const old = readLocalRaw(dir)
+  if (s.kept === undefined && old.kept) s = { ...s, kept: old.kept }
+  if (s.mirrored === undefined && old.mirrored) s = { ...s, mirrored: old.mirrored }
   fs.mkdirSync(localPath(dir), { recursive: true })
   fs.writeFileSync(localPath(dir, SETTINGS), JSON.stringify(s, null, 2) + '\n')
+}
+
+/**
+ * Bring `preset-settings.json` up to date with this computer's choices. Returns true when the file changed (it then needs
+ * committing). Nothing is written when there is nothing to share and no file yet.
+ */
+export function writeSharedSettings(dir: string): boolean {
+  const s = readLocalSettings(dir)
+  const file = nodePath.join(dir, SHARED_SETTINGS)
+  const has = fs.existsSync(file)
+  if (!has && !Object.keys(sharedOf(s)).length) return false
+  const text = sharedText(s)
+  const current = has ? fs.readFileSync(file, 'utf8') : ''
+  const changed = text !== current
+  if (changed) fs.writeFileSync(file, text)
+  const raw = readLocalRaw(dir)
+  if (raw.mirrored !== hashOf(text)) { fs.mkdirSync(localPath(dir), { recursive: true }); fs.writeFileSync(localPath(dir, SETTINGS), JSON.stringify({ ...raw, ...s, mirrored: hashOf(text) }, null, 2) + '\n') }
+  return changed
 }
 
 // ── stream keys ──────────────────────────────────────────────────────────────

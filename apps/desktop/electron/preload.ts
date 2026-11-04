@@ -54,7 +54,7 @@ const api: Api = {
     setInstall: (p, i) => call('repos:setInstall', p, i),
     setRemote: (p, u) => call('repos:setRemote', p, u),
     publish: (p, n, priv) => call('repos:publish', p, n, priv),
-    live: (p, i) => call('repos:live', p, i),
+    live: (p, i, d) => call('repos:live', p, i, d),
     save: (p, i, c, o) => call('repos:save', p, i, c, o),
     pull: (p, o) => call('repos:pull', p, o),
     push: (p, f) => call('repos:push', p, f),
@@ -66,6 +66,20 @@ const api: Api = {
     openFolder: (p) => call('repos:openFolder', p),
   },
   obs: { scan: (id) => call('obs:scan', id) },
+  identity: {
+    get: () => call('identity:get'),
+    set: (m, n, e) => call('identity:set', m, n, e),
+  },
+  storage: {
+    state: () => call('storage:state'),
+    save: (t, k) => call('storage:save', t, k),
+    forget: () => call('storage:forget'),
+    onProgress: (cb) => {
+      const h = (_e: unknown, p: Parameters<typeof cb>[0]) => cb(p)
+      ipcRenderer.on('storage:progress', h)
+      return () => { ipcRenderer.removeListener('storage:progress', h) }
+    },
+  },
   settings: {
     get: () => call('settings:get'),
     setPresetsRoot: (p) => call('settings:setPresetsRoot', p),
@@ -87,6 +101,12 @@ const api: Api = {
     rename: (r) => call('presets:rename', r),
     renameOnline: (p, n) => call('presets:renameOnline', p, n),
     setOnline: (p, on, n, priv) => call('presets:setOnline', p, on, n, priv),
+    authors: (p) => call('presets:authors', p),
+    setAuthor: (p, w) => call('presets:setAuthor', p, w),
+    rewriteAuthors: (p, w) => call('presets:rewriteAuthors', p, w),
+    setStored: (p, ids) => call('presets:setStored', p, ids),
+    fetchStored: (p) => call('presets:fetchStored', p),
+    setSourceOverrides: (p, o) => call('presets:setSourceOverrides', p, o),
   },
   locations: {
     load: (id) => call('locations:load', id),

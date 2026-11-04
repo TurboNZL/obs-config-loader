@@ -35,23 +35,25 @@ export function HomePage({ installs, go }: { installs: InstallInfo[] | null; go:
 
   useEffect(() => {
     let alive = true
+    const patch = (path: string, f: Partial<Facts>) => setFacts((cur) => cur && cur.map((x) => (x.repo.path === path ? { ...x, ...f } : x)))
     void (async () => {
+      // the page appears at once with what is cheap to know; the rest fills in one preset at a time, so the window never waits on it
       const repos = await window.obsLoader.repos.list()
-      const base: Facts[] = await Promise.all(repos.map(async (repo) => ({
-        repo,
-        ov: await window.obsLoader.presets.overview(repo.path).catch(() => null),
-        last: (await window.obsLoader.repos.log(repo.path).catch(() => []))[0],
-        obsChanges: null,
-      })))
       if (!alive) return
-      setFacts(base)
-      // what OBS has that a linked preset does not: one at a time, because it reads the real files
-      for (const f of base) {
-        const inst = f.repo.installId ? (installs ?? []).find((i) => i.id === f.repo.installId) : undefined
-        if (!inst) continue
-        const r = await window.obsLoader.repos.live(f.repo.path, inst.id).catch(() => null)
+      setFacts(repos.map((repo) => ({ repo, ov: null, last: undefined, obsChanges: null })))
+      for (const repo of repos) {
+        const ov = await window.obsLoader.presets.overview(repo.path).catch(() => null)
+        const last = (await window.obsLoader.repos.log(repo.path).catch(() => []))[0]
         if (!alive) return
-        if (r && !('error' in r)) setFacts((cur) => cur && cur.map((x) => (x.repo.path === f.repo.path ? { ...x, obsChanges: r.changed.length, obsLabel: inst.label } : x)))
+        patch(repo.path, { ov, last })
+      }
+      // what OBS has that a linked preset does not: last, because it reads the real files
+      for (const repo of repos) {
+        const inst = repo.installId ? (installs ?? []).find((i) => i.id === repo.installId) : undefined
+        if (!inst) continue
+        const r = await window.obsLoader.repos.live(repo.path, inst.id).catch(() => null)
+        if (!alive) return
+        if (r && !('error' in r)) patch(repo.path, { obsChanges: r.changed.length, obsLabel: inst.label })
       }
     })()
     return () => { alive = false }

@@ -10,8 +10,10 @@ import { Details, RenameOnline, type Msg } from './PresetDetails'
 type Pending = { kind: 'save'; files: string[] } | { kind: 'pull'; files: string[] } | null
 
 /** One preset as a tile: what is in it, how it stands against the linked OBS (this computer) and against GitHub, and what you can do. */
-export function PresetTile({ repo, installs, gh, refresh, apply, go, notify, wide, onWide }: {
+export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, notify, wide, onWide }: {
   repo: RepoInfo; installs: InstallInfo[]; gh: GithubState; refresh: () => Promise<void>
+  /** Replace just this preset's entry (after asking GitHub), without re-reading everything else. */
+  patch: (r: RepoInfo) => void
   apply: (dir: string, installId?: string) => void; go: (t: 'settings' | 'import') => void; notify: (m: Msg) => void
   /** The tile needs the whole row (its panels are open). */
   wide: boolean; onWide: (on: boolean) => void
@@ -50,10 +52,15 @@ export function PresetTile({ repo, installs, gh, refresh, apply, go, notify, wid
     if (!linkedId) { setLive(null); setPending(null); setDetails(undefined); return }
     const r = await window.obsLoader.repos.live(repo.path, linkedId)
     setLive('error' in r ? null : r.changed)
-    setDetails('error' in r ? undefined : r.details)
+    setDetails(undefined) // the line-by-line preview is only read when it is asked for
     setPending('error' in r ? null : r.pending ?? null)
   }
-  useEffect(() => { void check() }, [linkedId, st.dirtyFiles.length, st.commits]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void check(); setShowDiff(false) }, [linkedId, st.dirtyFiles.length, st.commits]) // eslint-disable-line react-hooks/exhaustive-deps
+  // the coloured preview reads every changed file, so it is only made when someone opens it
+  useEffect(() => {
+    if (!showDiff || !linkedId || details) return
+    void window.obsLoader.repos.live(repo.path, linkedId, true).then((r) => { if (!('error' in r)) setDetails(r.details) })
+  }, [showDiff]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void window.obsLoader.repos.needs(repo.path).then(setNeeds).catch(() => setNeeds([])) }, [repo.path, st.behind])
 
   // an online preset asks what is new when it is shown, so "newer version online" is true and not last time's guess
@@ -61,7 +68,7 @@ export function PresetTile({ repo, installs, gh, refresh, apply, go, notify, wid
   const [cmp, setCmp] = useState<OnlineComparison | null>(null)
   const [sure, setSure] = useState<'mine' | 'theirs' | null>(null)
   const disagree = !!cmp && cmp.unrelated && st.ahead > 0
-  useEffect(() => { if (online) void window.obsLoader.repos.check(repo.path).then(async () => { setChecked(true); await refresh() }); else setChecked(true) }, [repo.path, online]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (online) void window.obsLoader.repos.check(repo.path).then((r) => { setChecked(true); patch(r.repo) }); else setChecked(true) }, [repo.path, online]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (online && checked && (st.behind > 0 || st.ahead > 0)) void window.obsLoader.repos.compare(repo.path).then(setCmp); else setCmp(null) }, [online, checked, st.behind, st.ahead, repo.path])
 
   const changes = live?.length ?? 0
@@ -322,7 +329,7 @@ export function PresetTile({ repo, installs, gh, refresh, apply, go, notify, wid
             <div key={n.id} className="bt-row flex items-center gap-3 py-1">
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium">{n.filename} {n.reason === 'changed' && <Chip tone="warn">newer version in the preset</Chip>}</div>
-                <div className="text-xs text-muted">{n.path ?? n.hint ?? 'Not chosen yet'}</div>
+                <div className="text-xs text-muted">{ov?.files.find((f) => f.id === n.id)?.stored ? 'It is in your big-file storage: open the details and press “Download from storage”.' : (n.path ?? n.hint ?? 'Not chosen yet')}</div>
               </div>
               <button className="btn px-3 py-1" onClick={async () => {
                 const f = await window.obsLoader.files.pick(`Find ${n.filename}`)

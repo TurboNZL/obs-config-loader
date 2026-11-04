@@ -32,10 +32,11 @@ pre.cmd { background: hsl(var(--raised)); border: 1px solid hsl(var(--line)); pa
 .guide hr { border: 0; border-top: 1px solid hsl(var(--line)); margin: 1.2rem 0; }
 
 /* The three ways a preset is saved, each with its own colour (the same in every theme): this computer, GitHub, a file. */
-:root { --k-local: 152 52% 40%; --k-cloud: 212 78% 52%; --k-file: 30 88% 50%; }
+:root { --k-local: 152 52% 40%; --k-cloud: 212 78% 52%; --k-file: 30 88% 50%; --k-store: 275 55% 55%; }
 .kind-local { --k: var(--k-local); }
 .kind-cloud { --k: var(--k-cloud); }
 .kind-file  { --k: var(--k-file); }
+.kind-store { --k: var(--k-store); }
 .kind-panel {
   background-color: hsl(var(--k) / 0.09);
   box-shadow: inset 4px 0 0 hsl(var(--k));
@@ -60,3 +61,4 @@ pre.cmd { background: hsl(var(--raised)); border: 1px solid hsl(var(--line)); pa
 
 input[type="checkbox"].kind-local { accent-color: hsl(var(--k-local)) !important; }
 input[type="checkbox"].kind-cloud { accent-color: hsl(var(--k-cloud)) !important; }
+input[type="checkbox"].kind-store { accent-color: hsl(var(--k-store)) !important; }

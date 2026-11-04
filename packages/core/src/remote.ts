@@ -1,6 +1,5 @@
 import * as fs from 'node:fs'
 import * as nodePath from 'node:path'
-import { execFile } from 'node:child_process'
 import { defaultGit, commitAll, initRepo, repoStatus, pushRepo, type GitRunner, type PushResult } from './repo.js'
 import { writeBundleDir } from './bundleIO.js'
 import type { Bundle } from './types.js'
@@ -50,20 +49,11 @@ export async function setRemote(dir: string, url: string, git: GitRunner = defau
 export function githubAuthGit(token: string | undefined, base: GitRunner = defaultGit): GitRunner {
   if (!token) return base
   const basic = Buffer.from(`x-access-token:${token}`).toString('base64')
-  return (args, cwd) => new Promise((resolve) => {
-    execFile('git', args, {
-      cwd, maxBuffer: 64 * 1024 * 1024,
-      env: {
-        ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C', GCM_INTERACTIVE: 'never',
-        GIT_CONFIG_COUNT: '1',
-        GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
-        GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
-      },
-    }, (err, stdout, stderr) => {
-      const c = (err as { code?: unknown } | null)?.code
-      resolve({ code: !err ? 0 : typeof c === 'number' ? c : 127, stdout: String(stdout), stderr: redact(String(stderr), token) })
-    })
-  })
+  const auth = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}` }
+  return async (args, cwd, env) => {
+    const r = await base(args, cwd, { ...auth, ...env })
+    return { ...r, stderr: redact(r.stderr, token) }
+  }
 }
 
 /** Never let a token reach a message shown to the user or a log. */
@@ -113,8 +103,13 @@ async function gh<T>(token: string, path: string, init: RequestInit = {}, f: Fet
 
 const toRepo = (r: any): GithubRepo => ({ name: r.name, fullName: r.full_name, cloneUrl: r.clone_url, htmlUrl: r.html_url, private: !!r.private })
 
-export async function githubWhoAmI(token: string, f?: Fetch): Promise<{ login: string }> {
-  return { login: (await gh<{ login: string }>(token, '/user', {}, f)).login }
+/**
+ * Who the token belongs to, and the name and address saves are signed with by default: the GitHub name (or user name) and
+ * GitHub's own "no-reply" address, which is private and still links the save to the account.
+ */
+export async function githubWhoAmI(token: string, f?: Fetch): Promise<{ login: string; name: string; email: string }> {
+  const u = await gh<{ login: string; id: number; name?: string | null }>(token, '/user', {}, f)
+  return { login: u.login, name: (u.name ?? '').trim() || u.login, email: `${u.id ? u.id + '+' : ''}${u.login}@users.noreply.github.com` }
 }
 
 export async function githubListRepos(token: string, f?: Fetch): Promise<GithubRepo[]> {

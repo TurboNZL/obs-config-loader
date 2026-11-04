@@ -20,6 +20,8 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
 
   // OBS's own list of layouts and settings can change when a preset is renamed or loaded, so it is read again too
   const refresh = async () => { await window.obsLoader.repos.list().then(setRepos); await refreshInstalls() }
+  /** Replace one preset's entry in place: asking GitHub about a preset must not make every other one reload. */
+  const patch = (r: RepoInfo) => setRepos((cur) => (cur ? cur.map((x) => (x.path === r.path ? r : x)) : cur))
   const refreshGit = () => window.obsLoader.git.state().then(setGit)
   useEffect(() => { void refresh(); void refreshGit(); void window.obsLoader.github.state().then(setGh) }, [])
 
@@ -58,7 +60,7 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
       <div className="grid gap-4 grid-cols-1 min-[820px]:grid-cols-2 min-[1500px]:grid-cols-3 items-start">
         {repos?.map((r) => (
           <PresetTile
-            key={r.path} repo={r} installs={installs ?? []} gh={gh} refresh={refresh} apply={applyRepo} go={go} notify={setNotice}
+            key={r.path} repo={r} installs={installs ?? []} gh={gh} refresh={refresh} patch={patch} apply={applyRepo} go={go} notify={setNotice}
             wide={!!wide[r.path]} onWide={(on) => setWide((w) => (w[r.path] === on ? w : { ...w, [r.path]: on }))}
           />
         ))}

@@ -12,7 +12,7 @@ import { unversioned } from './plugins.js'
 import { applyVersions, type DetectedVersions } from './versions.js'
 import { mergeProfileVariants } from './profilevariants.js'
 import {
-  cloudSkippedPaths, copyLocalOnly, isSkipped, localOnlyDiffs, mediaToCopy, pruneLocalMedia, readLocalKeys, readLocalSettings, storeLocalMedia, writeExclude, writeLocalKeys, writeLocalSettings,
+  cloudSkippedPaths, copyLocalOnly, isSkipped, localOnlyDiffs, mediaToCopy, pruneLocalMedia, readLocalKeys, readLocalSettings, storeLocalMedia, writeExclude, writeLocalKeys, writeLocalSettings, writeSharedSettings, SHARED_SETTINGS,
   localMediaLocations, localMediaPath, safeSegment, type LocalSettings, type SeenAsset,
 } from './local.js'
 import { extractVariants, parseVariants, serializeVariants, variantsPathFor } from './variants.js'
@@ -20,14 +20,15 @@ import { extractVariants, parseVariants, serializeVariants, variantsPathFor } fr
 // ── git runner ───────────────────────────────────────────────────────────────
 
 export interface GitResult { code: number; stdout: string; stderr: string }
-export type GitRunner = (args: string[], cwd: string) => Promise<GitResult>
+/** `env` is added to git's environment for this one call (a sign-in header, who the saves are by). */
+export type GitRunner = (args: string[], cwd: string, env?: Record<string, string>) => Promise<GitResult>
 
 /** Runs the user's own git, never prompting (a prompt would hang a GUI). Credentials come from their git setup. */
-export const defaultGit: GitRunner = (args, cwd) =>
+export const defaultGit: GitRunner = (args, cwd, env) =>
   new Promise((resolve) => {
     execFile('git', args, {
       cwd, maxBuffer: 64 * 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C', GCM_INTERACTIVE: 'never' },
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C', GCM_INTERACTIVE: 'never', ...env },
     }, (err, stdout, stderr) => {
       const c = (err as { code?: unknown } | null)?.code
       const code = !err ? 0 : typeof c === 'number' ? c : 127 // a string code (ENOENT) means git itself could not run
@@ -37,6 +38,16 @@ export const defaultGit: GitRunner = (args, cwd) =>
 
 export async function gitAvailable(git: GitRunner = defaultGit): Promise<boolean> {
   return (await git(['--version'], process.cwd())).code === 0
+}
+
+/** Who a save is by. Given to git through its environment for each call: nobody's git config is ever written. */
+export interface GitIdentity { name: string; email: string }
+
+/** A runner whose commits are by `who` (author and committer), whatever this computer's own git settings say. */
+export function withIdentity(base: GitRunner, who: GitIdentity | undefined): GitRunner {
+  if (!who?.name.trim() || !who.email.trim()) return base
+  const e = { GIT_AUTHOR_NAME: who.name.trim(), GIT_AUTHOR_EMAIL: who.email.trim(), GIT_COMMITTER_NAME: who.name.trim(), GIT_COMMITTER_EMAIL: who.email.trim() }
+  return (args, cwd, env) => base(args, cwd, { ...e, ...env })
 }
 
 /** Identity flags, only when the user has none configured (their own git config is never touched). */
@@ -83,7 +94,12 @@ export async function repoStatus(dir: string, git: GitRunner = defaultGit): Prom
   const top = await git(['rev-parse', '--show-toplevel'], dir)
   // A folder inside some other repo is not "its own repo": require the folder to be the top level.
   if (top.code !== 0 || !samePath(top.stdout.trim(), dir)) return empty
-  const st = await git(['--no-optional-locks', 'status', '--porcelain=v1', '-b', '--untracked-files=all'], dir) // read-only: never take the index lock, so a check can never collide with a save
+  // independent questions asked together: starting git is the slow part on Windows
+  const [st, count, remote] = await Promise.all([
+    git(['--no-optional-locks', 'status', '--porcelain=v1', '-b', '--untracked-files=all'], dir), // read-only: never take the index lock, so a check can never collide with a save
+    git(['rev-list', '--count', 'HEAD'], dir),
+    git(['remote'], dir),
+  ])
   const lines = st.stdout.split('\n').filter(Boolean)
   const head = lines.shift() ?? ''
   const m = /^## (?:No commits yet on |Initial commit on )?([^.\s]+)(?:\.\.\.(\S+))?(?: \[(.*)\])?$/.exec(head)
@@ -91,11 +107,11 @@ export async function repoStatus(dir: string, git: GitRunner = defaultGit): Prom
     isRepo: true, branch: m?.[1], upstream: m?.[2], ahead: 0, behind: 0,
     dirtyFiles: lines.map((l) => l.slice(3).replace(/^"|"$/g, '')), hasManifest: false, commits: 0,
   }
-  out.commits = Number((await git(['rev-list', '--count', 'HEAD'], dir)).stdout.trim() || 0)
+  out.commits = Number(count.stdout.trim() || 0)
   const flags = m?.[3] ?? ''
   out.ahead = Number(/ahead (\d+)/.exec(flags)?.[1] ?? 0)
   out.behind = Number(/behind (\d+)/.exec(flags)?.[1] ?? 0)
-  const remotes = (await git(['remote'], dir)).stdout.split('\n').filter(Boolean)
+  const remotes = remote.stdout.split('\n').filter(Boolean)
   out.remote = remotes[0]
   const mp = nodePath.join(dir, 'manifest.json')
   if (fs.existsSync(mp)) {
@@ -348,7 +364,15 @@ export async function pendingForObs(dir: string, install: ObsInstall, git: GitRu
   if ((await git(['merge-base', '--is-ancestor', marked, head], dir)).code !== 0) return null
   const r = await git(['diff', '--name-only', marked, head], dir)
   const skipped = cloudSkippedPaths(readLocalSettings(dir).cloud?.skip)
-  return r.stdout.split('\n').filter(Boolean).filter((f) => !isSkipped(f, skipped))
+  return r.stdout.split('\n').filter(Boolean).filter((f) => f !== SHARED_SETTINGS && !isSkipped(f, skipped))
+}
+
+/** A commit that only changed how the preset is stored: what OBS last matched moves along with it, so OBS still counts as matching. */
+async function moveSyncRefs(dir: string, from: string | null, git: GitRunner): Promise<void> {
+  const to = await revParse(dir, 'HEAD', git)
+  if (!from || !to || from === to) return
+  const refs = (await git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/obs-config-loader/synced'], dir)).stdout.split('\n').filter(Boolean)
+  for (const line of refs) { const [ref, sha] = line.split(' '); if (sha === from) await git(['update-ref', ref, to], dir) }
 }
 
 /** Call after the repo's content has been loaded into OBS: from now on live edits are measured from here. */
@@ -478,6 +502,12 @@ export async function captureLive(o0: CaptureOptions): Promise<CaptureResult> {
     await git([...id, 'commit', '-q', '-m', 'Upload some parts again'], o.dir)
   }
   if (!o.dryRun && (before.length !== skipped.length || before.some((x) => !skipped.includes(x)))) writeLocalSettings(o.dir, { ...settings, kept: skipped })
+  // the preset's own settings are saved inside it too (so GitHub and files carry them): one small commit when they changed
+  if (!o.dryRun && (await revParse(o.dir, 'HEAD', git)) && writeSharedSettings(o.dir)) {
+    const from = await revParse(o.dir, 'HEAD', git)
+    await git(['add', '-f', '--', SHARED_SETTINGS], o.dir)
+    if ((await git(['diff', '--cached', '--quiet'], o.dir)).code !== 0) { await git([...id, 'commit', '-q', '-m', 'Saved this preset\'s settings'], o.dir); await moveSyncRefs(o.dir, from, git) }
+  }
   const st = await repoStatus(o.dir, git)
   if (!st.isRepo) return { status: 'error', message: 'This folder is not a git repository.' }
   const keepLocal = o.keepLocal !== false
@@ -652,6 +682,7 @@ export async function applyCloudSettings(dir: string, git: GitRunner = defaultGi
     writeExclude(dir, skipped)
     const head = await revParse(dir, 'HEAD', git)
     if (!head) return { ok: true, changed: false }
+    writeSharedSettings(dir)
     const id = await identity(dir, git)
 
     // parts that stay here: no longer tracked
@@ -691,16 +722,16 @@ export async function applyCloudSettings(dir: string, git: GitRunner = defaultGi
       const lock = Object.fromEntries(m.assets.map((a) => [a.id, { filename: a.filename, mode: a.mode, sha256: a.sha256, size: a.size, hint: a.hint }]))
       fs.writeFileSync(nodePath.join(dir, 'assets.lock.json'), JSON.stringify(lock, null, 2) + '\n')
     }
-    await git(['add', '-A', '--', 'manifest.json', 'assets.lock.json', 'media'], dir)
+    // only paths that exist: git refuses the whole `add` over one that does not
+    const toAdd = ['manifest.json', 'assets.lock.json', 'media', SHARED_SETTINGS].filter((x) => fs.existsSync(nodePath.join(dir, x)))
+    await git(['add', '-A', '--', ...toAdd], dir)
     let changed = false
     if ((await git(['diff', '--cached', '--quiet'], dir)).code !== 0) {
       const c = await git([...id, 'commit', '-q', '-m', 'Changed what is uploaded'], dir)
       if (c.code !== 0) return { ok: false, message: c.stderr.trim() || c.stdout.trim() }
       changed = true
       // OBS is exactly as far along as before: this only changed how the preset is stored, so what OBS last matched moves with it
-      const newHead = await revParse(dir, 'HEAD', git)
-      const refs = (await git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/obs-config-loader/synced'], dir)).stdout.split('\n').filter(Boolean)
-      for (const line of refs) { const [ref, sha] = line.split(' '); if (sha === head && newHead) await git(['update-ref', ref, newHead], dir) }
+      await moveSyncRefs(dir, head, git)
     }
     writeLocalSettings(dir, { ...readLocalSettings(dir), kept: skipped })
     return { ok: true, changed }

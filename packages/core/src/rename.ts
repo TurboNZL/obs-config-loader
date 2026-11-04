@@ -5,6 +5,9 @@ import { slug } from './export.js'
 import { setIni } from './ini.js'
 import { renameActive } from './userconfig.js'
 import { variantsPathFor, type VariantsFile } from './variants.js'
+import { sourceKeyOf } from './import.js'
+import { isPlatformSpecific } from './sources.js'
+import { unversioned } from './plugins.js'
 
 /**
  * Renaming inside a saved preset (a setup folder). Everything that mentions the old name is updated together so the
@@ -130,6 +133,26 @@ export function listNames(dir: string, collectionId: string): { scenes: string[]
   const json = JSON.parse(fs.readFileSync(nodePath.join(dir, c.file), 'utf8'))
   const all: any[] = json.sources ?? []
   return { scenes: all.filter((s) => s.id === 'scene').map((s) => s.name), sources: all.filter((s) => s.id !== 'scene').map((s) => s.name) }
+}
+
+/**
+ * Sources in a saved scene layout that only exist on some systems (screen, window and sound capture): what the translation
+ * settings are about. `kind` is the source id a choice for the whole kind is stored under; `key` is this source's own.
+ */
+export function listPlatformSources(dir: string, collectionId: string): { key: string; name: string; kind: string }[] {
+  const b = readBundleDir(dir, { keepMissing: true })
+  const c = b.manifest.collections.find((x) => x.id === collectionId)
+  if (!c) return []
+  let json: any
+  try { json = JSON.parse(fs.readFileSync(nodePath.join(dir, c.file), 'utf8')) } catch { return [] }
+  const out: { key: string; name: string; kind: string }[] = []
+  for (const s of json.sources ?? []) {
+    if (typeof s?.id !== 'string' || s.id === 'scene') continue
+    const kind = isPlatformSpecific(s.id) ? s.id : unversioned(s.id)
+    if (!isPlatformSpecific(kind)) continue
+    out.push({ key: sourceKeyOf(s), name: String(s.name ?? ''), kind })
+  }
+  return out
 }
 
 // ── the same renames, in an OBS settings folder ──────────────────────────────

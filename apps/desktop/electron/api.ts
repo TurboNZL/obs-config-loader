@@ -108,7 +108,7 @@ export interface AppSettings { presetsRoot: string; defaultPresetsRoot: string; 
 export interface PresetOverview {
   layouts: { id: string; name: string; scenes: number; sources: number; local: boolean; cloud: boolean }[]
   outputs: { id: string; name: string; local: boolean; cloud: boolean }[]
-  files: { id: string; filename: string; size: number; available: boolean; haveCopy: boolean; keepCopy: boolean; cloud: boolean; tooBigForGithub: boolean }[]
+  files: { id: string; filename: string; size: number; available: boolean; haveCopy: boolean; keepCopy: boolean; cloud: boolean; /** Kept in the big-file storage. */ stored: boolean; tooBigForGithub: boolean }[]
   scripts: { names: string[]; local: boolean; cloud: boolean }
   remoteControl: { present: boolean; local: boolean; cloud: boolean }
   keys: { count: number; keep: boolean }
@@ -116,6 +116,8 @@ export interface PresetOverview {
   onlyHere: string[]
   sizeBytes: number
   maxUploadBytes: number
+  /** Where this preset keeps big files, when it uses a storage; `connected`: this computer has the keys. */
+  storage?: { label: string; connected: boolean; target: StorageTargetInfo }
 }
 export interface StoragePatch {
   /** `layouts` / `outputs`: ids that are NOT uploaded. `media`: ids of files that ARE uploaded. */
@@ -135,7 +137,10 @@ export interface TranslationRow {
   name: string
   targets: { platform: 'win32' | 'darwin' | 'linux'; label: string; default: string | null; defaultName: string | null; chosen: string | null | undefined; options: { id: string; name: string }[] }[]
 }
+export interface SourceTranslationRow extends Omit<TranslationRow, 'name'> { key: string; name: string; layout: string; fromName: string }
 export interface PresetDetails {
+  /** One row per source that only exists on some systems, so a single source can be handled differently from others of its kind. */
+  sourceTranslations: SourceTranslationRow[]
   exclude: { collections?: string[]; profiles?: string[]; remoteControl?: boolean; scripts?: boolean }
   translations: TranslationRow[]
   savedWithObs?: string
@@ -146,6 +151,12 @@ export interface PresetDetails {
   outputs: { id: string; name: string }[]
 }
 export interface RenameRequest { path: string; installId?: string; kind: 'preset' | 'layout' | 'output' | 'scene'; id?: string; layoutId?: string; from?: string; to: string }
+
+export interface Identity { name: string; email: string }
+export interface IdentityState { mode: 'github' | 'custom'; name: string; email: string; github?: { login: string; name: string; email: string }; effective: Identity | null }
+export interface AuthorsState { authors: (Identity & { saves: number })[]; own: Identity | null; effective: Identity | null }
+export interface StorageTargetInfo { endpoint: string; region: string; bucket: string; prefix?: string; label?: string }
+export interface StorageState { target: StorageTargetInfo | null; hasKeys: boolean; canStoreKeys: boolean; sessionOnly?: boolean }
 
 export interface Locations { assets: Record<string, string>; variables: Record<string, string> }
 
@@ -215,7 +226,7 @@ export interface Api {
     publish(path: string, name: string, priv: boolean): Promise<Done<{ url: string; pushed: boolean }>>
     /** What OBS has changed since the last save (dry run). */
     /** `changed`: what OBS has that the preset does not. `pending`: what the preset has that this OBS does not (null: not known yet). */
-    live(path: string, installId: string): Promise<{ changed: string[]; details?: ChangeDetail[]; pending?: string[] | null } | { error: string }>
+    live(path: string, installId: string, withDiff?: boolean): Promise<{ changed: string[]; details?: ChangeDetail[]; pending?: string[] | null } | { error: string }>
     save(path: string, installId: string, commitDirtyFirst: boolean, onConflict?: SaveConflictChoice): Promise<SaveResult>
     pull(path: string, onConflict?: PullConflictChoice): Promise<PullResult>
     /** `force`: replace the online copy with this one (refused if someone pushed since we last looked). */
@@ -229,6 +240,18 @@ export interface Api {
     openFolder(path: string): Promise<void>
   }
   obs: { scan(installId: string): Promise<ObsScan> }
+  identity: {
+    get(): Promise<IdentityState>
+    /** `github`: the signed-in account's name and private address. `custom`: the name and address typed here. Never written to git's own settings. */
+    set(mode: 'github' | 'custom', name: string, email: string): Promise<Done<object>>
+  }
+  storage: {
+    state(): Promise<StorageState>
+    /** Tries the storage (write, read, remove) before keeping anything. `keys` null: keep the keys already saved. */
+    save(target: StorageTargetInfo, keys: { accessKeyId: string; secretAccessKey: string } | null): Promise<Done<{ sessionOnly: boolean }>>
+    forget(): Promise<void>
+    onProgress(cb: (p: { id: string; filename: string; done: number; total: number }) => void): () => void
+  }
   settings: {
     get(): Promise<AppSettings>
     setPresetsRoot(path: string | null): Promise<void>
@@ -254,6 +277,15 @@ export interface Api {
     /** Rename the GitHub repository (the app always keeps the `OBS-Config-` start). */
     renameOnline(path: string, name: string): Promise<Done<{ name: string }>>
     setOnline(path: string, on: boolean, name: string, priv: boolean): Promise<Done<{ url?: string; needsAccount?: boolean }>>
+    authors(path: string): Promise<AuthorsState>
+    /** This preset's own name for saves (null: use the app-wide one). Future saves only. */
+    setAuthor(path: string, who: Identity | null): Promise<Done<object>>
+    /** Every save in the preset (and its GitHub copy) is changed to this name. */
+    rewriteAuthors(path: string, who: Identity): Promise<Done<{ rewritten: number; changed: boolean; online: boolean; pushed: boolean; pushError?: string }>>
+    /** The files that are kept in the big-file storage (new ones are uploaded now). */
+    setStored(path: string, ids: string[]): Promise<Done<{ uploaded: number; already: number; pushed: boolean }>>
+    fetchStored(path: string): Promise<Done<{ downloaded: number; failed: { filename: string; error: string }[] }>>
+    setSourceOverrides(path: string, overrides: Record<string, Record<string, string | null>>): Promise<Done<object>>
   }
   locations: {
     load(bundleId: string): Promise<Locations>

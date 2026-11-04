@@ -52,7 +52,19 @@ If you saved on this computer while the online copy was changed somewhere else, 
 ## Big files
 A preset keeps its own copy of every file the scenes use (a fast copy-on-write copy where your disk supports it), so it is complete by itself. Untick a file's **This computer** box under **Where each part is kept** to not keep a copy. The app still remembers where each file is on this computer, and a copy of the preset that came from GitHub (which does not hold big files unless you chose to upload them) asks for any it cannot find: point to them, or import the extras file. GitHub refuses files over 100 MB, so those can only stay on your computer or go in a file.
 
+## Big-file storage (not GitHub)
+Under **Settings**, **Big-file storage** connects a space of your own for videos and other big files: any S3-style storage, such as Backblaze B2 or Cloudflare R2 (both list about 10 GB free; check their pages for today's terms and whether they ask for a payment card). You enter the address, the space's name and an access key; the app writes a small test file, reads it back and removes it before it keeps anything. The keys stay on this computer, encrypted by your system, and are never put in a preset or on GitHub.
+
+Then, in a preset's **Where each part is kept**, tick **Big-file storage** next to a file. The file is uploaded once, and the preset keeps only a note of it, so the GitHub copy stays small. On another computer, connect to the same space (a preset that uses one tells you which, and only asks for the keys), then press **Download from storage**. Every download is checked against the file's fingerprint, so a broken file is thrown away rather than used. Un-ticking a file does not delete it from your storage space.
+
+## Who your saves are by
+Every save in a preset carries a name and an email address, and anyone who can see a preset on GitHub sees them. By default the app uses your **GitHub account's** name and GitHub's private "no-reply" address; under **Settings**, **Who your saves are by**, you can choose any name instead (a stage name, say). Your computer's own git settings are never read for this and never changed. A single preset can have its own name under **Show details**.
+
+To fix the saves a preset already has, open **Show details**, **Who the saves are by**, type the name and press **Change the name on all earlier saves…**. Every save, from the first, then says that name; the files, messages and dates stay the same, and the GitHub copy is replaced. Copies other people already have, and old links to GitHub, can still show the old name, so for a preset that must never reveal it, make a fresh GitHub copy (switch online backup off, then on).
+
 ## Windows, Linux and Mac settings in one setup
+Screen, window and sound capture only exist on some systems, so each is swapped for the closest one on another system. Under **Show details**, **How sources change on other computers**, you can change that for every source of a kind, or open **Choose for one source at a time** to treat one source differently from the others of its kind (the Apply screen offers the same choice per source, for one use only). These choices, and the choices under **Where each part is kept**, are saved inside the preset (a small file called preset-settings.json plus the preset's own settings), so they come along to GitHub and to a setup file.
+
 A setup keeps each system's own encoders and audio devices (and capture sources) side by side. Saving from Windows never overwrites what Linux saved, even if the Windows computer never uses it, and each computer loads its own. If an encoder does not exist in the OBS you load into (a hardware encoder the graphics card does not have, say), it is swapped for the standard software one and you are told, so the Settings window never opens with empty boxes.
 
 ## Choosing what goes where

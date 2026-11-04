@@ -299,3 +299,66 @@ describe('the extras file: only what the online copy does not have', () => {
     await expect(applyExtras(other, await readExtras(out))).rejects.toThrow(/belongs with the preset/)
   })
 })
+
+describe('a preset’s own settings are saved inside it', () => {
+  it('travels through GitHub: a copy behaves like the original, and nothing else about git changes', async () => {
+    const { dir, h, inst, cfg } = setup()
+    const bare = nodePath.join(tmp, 'remote.git'); fs.mkdirSync(bare); git(bare, 'init', '-q', '--bare', '-b', 'main')
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'Mine' })
+    await setRemote(dir, bare); await pushRepo(dir)
+    expect(fs.existsSync(nodePath.join(dir, 'preset-settings.json'))).toBe(false) // nothing chosen yet: nothing written
+
+    // choose: keep one output off GitHub, stream keys not kept, a big file in the storage
+    writeLocalSettings(dir, { keepKeys: false, skipLocalMedia: ['mix'], cloud: { skip: { outputs: ['main'] }, stored: ['mix'] }, storage: { endpoint: 's3.us-west-004.backblazeb2.com', region: 'us-west-004', bucket: 'my-files' } })
+    const r = await applyCloudSettings(dir)
+    expect(r).toMatchObject({ ok: true, changed: true })
+    expect(git(dir, 'status', '--porcelain')).toBe('')
+    expect(git(dir, 'ls-files')).toContain('preset-settings.json')
+    const shared = JSON.parse(fs.readFileSync(nodePath.join(dir, 'preset-settings.json'), 'utf8'))
+    expect(shared).toMatchObject({ keepKeys: false, cloud: { skip: { outputs: ['main'] }, stored: ['mix'] }, storage: { bucket: 'my-files' } })
+    expect(JSON.stringify(shared)).not.toMatch(/SECRET|secret_?access|accessKey/i)
+    await pushRepo(dir)
+
+    // another computer gets a copy: the choices come with it
+    const copy = nodePath.join(tmp, 'copy'); await cloneRepo(bare, copy)
+    expect(readLocalSettings(copy)).toMatchObject({ keepKeys: false, cloud: { skip: { outputs: ['main'] }, stored: ['mix'] }, storage: { bucket: 'my-files' } })
+
+    // it changes a choice there; the original takes it over after getting the update
+    writeLocalSettings(copy, { ...readLocalSettings(copy), keepKeys: true })
+    expect((await applyCloudSettings(copy)).ok).toBe(true)
+    await pushRepo(copy)
+    git(dir, 'pull', '-q', '--no-rebase', 'origin', 'main')
+    expect(readLocalSettings(dir).keepKeys).toBe(true)
+    // and OBS saving does not turn that into a pending change or a dirty folder
+    const again = await captureLive({ host: h, install: inst, dir })
+    expect(['unchanged', 'committed']).toContain(again.status)
+    expect(git(dir, 'status', '--porcelain')).toBe('')
+    void cfg
+  })
+
+  it('a save from OBS commits a settings change made without applying it (renames, keys)', async () => {
+    const { dir, h, inst } = setup()
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'Mine' })
+    writeLocalSettings(dir, { ...readLocalSettings(dir), skipLocalMedia: ['mix'] })
+    const r = await captureLive({ host: h, install: inst, dir })
+    expect(r.status === 'unchanged' || r.status === 'committed').toBe(true)
+    expect(git(dir, 'status', '--porcelain')).toBe('')
+    expect(git(dir, 'show', 'HEAD:preset-settings.json')).toContain('"skipLocalMedia"')
+    // OBS still counts as matching: the settings commit is not "changes the preset has that OBS does not"
+    const { pendingForObs } = await import('../src/index.js')
+    expect(await pendingForObs(dir, inst)).toEqual([])
+  })
+
+  it('a setup file made from a preset carries them too', async () => {
+    const { dir, h, inst } = setup()
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'Mine' })
+    writeLocalSettings(dir, { ...readLocalSettings(dir), keepKeys: false })
+    await applyCloudSettings(dir)
+    expect([...buildPresetFile({ dir, includeKeys: false, independent: false }).bundle.files.keys()]).toContain('preset-settings.json')
+    // a copy made for someone else does not dictate their choices, nor say where this person keeps big files
+    expect([...buildPresetFile({ dir, includeKeys: false, independent: true }).bundle.files.keys()]).not.toContain('preset-settings.json')
+  })
+})

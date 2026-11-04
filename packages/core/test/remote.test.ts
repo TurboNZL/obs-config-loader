@@ -80,7 +80,7 @@ describe('token handling', () => {
 describe('GitHub calls', () => {
   it('who am I, list, create', async () => {
     const g = fakeGithub()
-    expect(await githubWhoAmI('t', g.f)).toEqual({ login: 'streamer' })
+    expect(await githubWhoAmI('t', g.f)).toEqual({ login: 'streamer', name: 'streamer', email: 'streamer@users.noreply.github.com' }) // a server that gives no id or name
     expect((await githubListRepos('t', g.f))[0]).toMatchObject({ fullName: 'streamer/a', private: true })
     const made = await githubCreateRepo('t', ' My OBS Setup! ', { private: true }, g.f)
     expect(made).toMatchObject({ name: 'My-OBS-Setup', cloneUrl: 'https://github.com/streamer/My-OBS-Setup.git' })

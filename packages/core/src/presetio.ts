@@ -47,7 +47,7 @@ export function buildPresetFile(o: PresetFileOptions): PresetFile {
   }
   delete b.manifest.exclude // the file is a complete copy of what it holds; leave-outs belong to the preset, not to the file
   delete b.manifest.repository
-  if (o.independent) b.manifest.id = crypto.randomUUID()
+  if (o.independent) { b.manifest.id = crypto.randomUUID(); b.files.delete('preset-settings.json') } // someone else's copy: their own choices, and no word of where this person's big files are kept
   else if (o.repository) b.manifest.repository = { url: o.repository }
   const keys = o.includeKeys ? attachSecrets(b, readLocalKeys(o.dir)) : 0
   return { bundle: b, keys, missingMedia: b.manifest.assets.filter((a) => a.mode === 'external').map((a) => a.filename) }
