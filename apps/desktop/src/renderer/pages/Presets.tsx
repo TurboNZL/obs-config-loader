@@ -5,6 +5,7 @@ import { BigFiles, KeysChoice } from '../components/SaveOptions'
 import { GitMissing } from '../components/Account'
 import { Icon } from '../components/Icon'
 import { PresetTile } from '../components/PresetTile'
+import { OwnerPick } from '../components/OwnerPick'
 import type { Msg } from '../components/PresetDetails'
 
 export type PresetsGo = (t: 'settings' | 'import') => void
@@ -57,7 +58,7 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
       {adding === 'get' && git?.available && <GetPreset gh={gh} count={repos?.length ?? 0} go={go} onDone={done} onCancel={() => setAdding(null)} />}
 
       {repos?.length === 0 && !adding && <Message tone="warn">You have no presets yet. Press “Make a preset from my OBS” to make your first one, or “Import a file…” if someone sent you one.</Message>}
-      <div className="grid gap-4 grid-cols-1 min-[820px]:grid-cols-2 min-[1500px]:grid-cols-3 items-start">
+      <div className="grid gap-4 grid-cols-1 min-[820px]:grid-cols-2 min-[1500px]:grid-cols-3 items-stretch">
         {repos?.map((r) => (
           <PresetTile
             key={r.path} repo={r} installs={installs ?? []} gh={gh} refresh={refresh} patch={patch} apply={applyRepo} go={go} notify={setNotice}
@@ -95,6 +96,7 @@ function SaveSetup({ installs, start, gh, go, onDone, onCancel }: { installs: In
   const [asPreset, setAsPreset] = useState(true)
   const [online, setOnline] = useState(false)
   const [priv, setPriv] = useState(true)
+  const [org, setOrg] = useState('')
   const [link, setLink] = useState(true)
   const [upLayouts, setUpLayouts] = useState<string[] | null>(null) // scene layouts that go online (null: all)
   const [upOutputs, setUpOutputs] = useState<string[] | null>(null)
@@ -131,7 +133,7 @@ function SaveSetup({ installs, start, gh, go, onDone, onCancel }: { installs: In
       if (asPreset) {
         const goesOnline = online && gh.connected
         const r = await window.obsLoader.repos.create({
-          installId, name: name.trim(), folder, exclude, link, github: goesOnline ? { private: priv } : undefined,
+          installId, name: name.trim(), folder, exclude, link, github: goesOnline ? { private: priv, ...(org ? { org } : {}) } : undefined,
           cloudSkip: goesOnline ? { layouts: scenes.filter((c) => !(upLayouts ?? scenes).includes(c)), outputs: outputs.filter((c) => !(upOutputs ?? outputs).includes(c)), scripts: !upScripts, remoteControl: !upRemote } : undefined,
         })
         if (!r.ok) { setError(r.error); setBusy(false); return }
@@ -184,7 +186,8 @@ function SaveSetup({ installs, start, gh, go, onDone, onCancel }: { installs: In
           />
           {online && asPreset && gh.connected && (
             <div className="space-y-0.5 pl-1">
-              <Choice checked={priv} onChange={setPriv} title="Keep it private" help="Only you can see it on GitHub." />
+              <OwnerPick value={org} onChange={setOrg} login={gh.login} />
+              <Choice checked={priv} onChange={setPriv} title="Keep it private" help={org ? `Only people in ${org} that you let in can see it.` : 'Only you can see it on GitHub.'} />
               <p className="text-xs text-muted pt-1">What goes online (untick what should stay only on this computer; you can change this later):</p>
               {scenes.map((c) => <Choice key={'ul' + c} checked={(upLayouts ?? scenes).includes(c)} onChange={(on) => setUpLayouts(on ? [...(upLayouts ?? scenes), c] : (upLayouts ?? scenes).filter((x) => x !== c))} title={<>{c} <span className="text-muted">(scene layout)</span></>} />)}
               {outputs.map((c) => <Choice key={'uo' + c} checked={(upOutputs ?? outputs).includes(c)} onChange={(on) => setUpOutputs(on ? [...(upOutputs ?? outputs), c] : (upOutputs ?? outputs).filter((x) => x !== c))} title={<>{c} <span className="text-muted">(output settings)</span></>} />)}

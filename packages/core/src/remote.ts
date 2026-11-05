@@ -113,22 +113,32 @@ export async function githubWhoAmI(token: string, f?: Fetch): Promise<{ login: s
 }
 
 export async function githubListRepos(token: string, f?: Fetch): Promise<GithubRepo[]> {
-  const rows = await gh<any[]>(token, '/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator', {}, f)
+  const rows = await gh<any[]>(token, '/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member', {}, f)
   return rows.map(toRepo)
 }
 
+/** The organisations the signed-in account belongs to (a repository can be made under one of them instead of under the account). */
+export async function githubOrgs(token: string, f?: Fetch): Promise<string[]> {
+  const rows = await gh<{ login: string }[]>(token, '/user/orgs?per_page=100', {}, f)
+  return rows.map((r) => r.login).sort((a, b) => a.localeCompare(b))
+}
+
+/** `org`: make it under that organisation instead of under the signed-in account. */
 export async function githubCreateRepo(
-  token: string, name: string, opts: { private: boolean; description?: string }, f?: Fetch,
+  token: string, name: string, opts: { private: boolean; description?: string; org?: string }, f?: Fetch,
 ): Promise<GithubRepo> {
   const clean = name.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
   if (!clean) throw new GithubError('Give the repository a name (letters, numbers, dashes).', 0)
   try {
-    return toRepo(await gh<any>(token, '/user/repos', {
+    return toRepo(await gh<any>(token, opts.org ? `/orgs/${encodeURIComponent(opts.org)}/repos` : '/user/repos', {
       method: 'POST',
       body: JSON.stringify({ name: clean, private: opts.private, description: opts.description ?? 'OBS setup, managed with OBS Config Loader', auto_init: false }),
     }, f))
   } catch (e) {
-    if (e instanceof GithubError && e.status === 422) throw new GithubError(`You already have a repository called "${clean}" on GitHub. Pick another name.`, 422)
+    if (e instanceof GithubError && e.status === 422) throw new GithubError(`${opts.org ? `${opts.org} already has` : 'You already have'} a repository called "${clean}" on GitHub. Pick another name.`, 422)
+    if (opts.org && e instanceof GithubError && (e.status === 403 || e.status === 404)) {
+      throw new GithubError(`GitHub would not let this account make a repository in ${opts.org}. Ask an owner of ${opts.org} to allow it, or to approve your token for ${opts.org} (GitHub, Settings, Developer settings, your token).`, e.status)
+    }
     throw e
   }
 }
@@ -170,7 +180,7 @@ export const GITHUB_TOKEN_URL =
 
 /** Create the repository on GitHub, point `origin` at it, and push. One step for the user. */
 export async function publishToGithub(
-  dir: string, token: string, name: string, opts: { private: boolean }, f?: Fetch,
+  dir: string, token: string, name: string, opts: { private: boolean; org?: string }, f?: Fetch,
 ): Promise<{ repo: GithubRepo; push: PushResult }> {
   const git = githubAuthGit(token)
   const st = await repoStatus(dir, git)
