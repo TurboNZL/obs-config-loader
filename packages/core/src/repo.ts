@@ -356,7 +356,7 @@ async function baseFor(dir: string, install: ObsInstall, git: GitRunner): Promis
  * What the preset has that this OBS has not got yet: saves that came after the last time the preset was put into OBS or OBS was
  * saved into it (typically after "Get updates"). `null` when nobody has said yet, so nothing can be claimed.
  */
-export async function pendingForObs(dir: string, install: ObsInstall, git: GitRunner = defaultGit): Promise<string[] | null> {
+export async function pendingForObs(dir: string, install: ObsInstall, git: GitRunner = defaultGit, platform: Host['platform'] = install.platform): Promise<string[] | null> {
   const head = await revParse(dir, 'HEAD', git)
   const marked = await revParse(dir, syncRef(install), git)
   if (!head || !marked) return null
@@ -364,7 +364,27 @@ export async function pendingForObs(dir: string, install: ObsInstall, git: GitRu
   if ((await git(['merge-base', '--is-ancestor', marked, head], dir)).code !== 0) return null
   const r = await git(['diff', '--name-only', marked, head], dir)
   const skipped = cloudSkippedPaths(readLocalSettings(dir).cloud?.skip)
-  return r.stdout.split('\n').filter(Boolean).filter((f) => f !== SHARED_SETTINGS && !isSkipped(f, skipped))
+  const out: string[] = []
+  for (const f of r.stdout.split('\n').filter(Boolean)) {
+    if (f === SHARED_SETTINGS || isSkipped(f, skipped)) continue
+    if (f === 'assets.lock.json') continue // a list of files; changes OBS itself does not get from applying
+    // one file holds every system's version of a source or an encoder: another system's change does nothing to this OBS
+    if (/(^|\/)([^/]+\.)?platforms\.json$/.test(f)) {
+      const [a, b] = await Promise.all([marked, head].map(async (rev) => {
+        const t = await git(['show', `${rev}:${f}`], dir)
+        if (t.code !== 0) return undefined
+        try {
+          const j = JSON.parse(t.stdout) as Record<string, any>
+          // profiles/<id>/platforms.json is { <system>: ... }; collections/<id>.platforms.json is { <source>: { <system>: ... } }
+          if (f.startsWith('collections/')) return JSON.stringify(Object.fromEntries(Object.entries(j).map(([k, v]) => [k, v?.[platform] ?? null])))
+          return JSON.stringify(j[platform] ?? null)
+        } catch { return t.stdout }
+      }))
+      if (a === b) continue
+    }
+    out.push(f)
+  }
+  return out
 }
 
 /** A commit that only changed how the preset is stored: what OBS last matched moves along with it, so OBS still counts as matching. */
@@ -569,11 +589,14 @@ export async function captureLive(o0: CaptureOptions): Promise<CaptureResult> {
       const local = localChanges(wt, secrets)
       // stopping the upload of a part is a commit of its own in the scratch checkout; it has to reach the preset too
       const stopped = skipped.length > 0 && (await git(['rev-parse', 'HEAD'], wt)).stdout.trim() !== base
-      if (!files.length && !local.length && !(stopped && !o.dryRun)) return { status: 'unchanged' }
+      // This computer's own copies of the big files are housekeeping, refreshed with the next real save. They are never a reason
+      // to tell anyone that OBS "has changes" (that made the preset ask for attention over a file nobody had edited).
+      const shown = local.filter((f) => !f.startsWith('local/media/'))
+      if (o.dryRun ? !files.length && !shown.length : !files.length && !local.length && !stopped) return { status: 'unchanged' }
       if (o.dryRun) {
         let details: ChangeDetail[] | undefined
-        if (o.withDiff) details = [...(await describeStaged(wt, git)), ...local.map((f): ChangeDetail => ({ file: f, status: 'modified', added: 0, removed: 0, local: true }))]
-        return { status: 'changes', files: [...files, ...local], ...(details ? { details } : {}), ...(local.length ? { localChanges: local } : {}) }
+        if (o.withDiff) details = [...(await describeStaged(wt, git)), ...shown.map((f): ChangeDetail => ({ file: f, status: 'modified', added: 0, removed: 0, local: true }))]
+        return { status: 'changes', files: [...files, ...shown], ...(details ? { details } : {}), ...(shown.length ? { localChanges: shown } : {}) }
       }
 
       if (!files.length && !stopped) {

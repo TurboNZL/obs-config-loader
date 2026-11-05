@@ -208,6 +208,8 @@ export interface Api {
     connect(token: string): Promise<Done<{ login: string; sessionOnly: boolean }>>
     disconnect(): Promise<void>
     repos(): Promise<Done<{ repos: GithubRepo[] }>>
+    /** The organisations this account belongs to (a preset can be backed up under one of them instead of under the account). */
+    orgs(): Promise<Done<{ orgs: string[] }>>
   }
   repos: {
     list(): Promise<RepoInfo[]>
@@ -215,7 +217,7 @@ export interface Api {
     suggestFolder(name: string): Promise<string>
     addExisting(): Promise<Done<{ repo: RepoInfo }>>
     clone(url: string, folder: string): Promise<Done<{ repo: RepoInfo }>>
-    create(r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude']; link?: boolean; cloudSkip?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean } }): Promise<Done<{ repo: RepoInfo; published?: string; remoteUrl?: string }>>
+    create(r: { installId: string; name: string; folder: string; github?: { private: boolean; org?: string }; exclude?: ExportRequest['exclude']; link?: boolean; cloudSkip?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean } }): Promise<Done<{ repo: RepoInfo; published?: string; remoteUrl?: string }>>
     /** Ask the online copy what is new (so counts are true), then the preset's current state. */
     check(path: string): Promise<{ ok: boolean; message?: string; repo: RepoInfo }>
     fromBundle(handle: string, folder: string, installId?: string): Promise<Done<{ repo: RepoInfo }>>
@@ -223,7 +225,7 @@ export interface Api {
     /** Link the preset to an OBS on this computer, or (null) unlink it: the preset stays exactly as it is. */
     setInstall(path: string, installId: string | null): Promise<void>
     setRemote(path: string, url: string): Promise<Done<object>>
-    publish(path: string, name: string, priv: boolean): Promise<Done<{ url: string; pushed: boolean }>>
+    publish(path: string, name: string, priv: boolean, org?: string): Promise<Done<{ url: string; pushed: boolean }>>
     /** What OBS has changed since the last save (dry run). */
     /** `changed`: what OBS has that the preset does not. `pending`: what the preset has that this OBS does not (null: not known yet). */
     live(path: string, installId: string, withDiff?: boolean): Promise<{ changed: string[]; details?: ChangeDetail[]; pending?: string[] | null } | { error: string }>
@@ -276,7 +278,7 @@ export interface Api {
     rename(r: RenameRequest): Promise<Done<{ alsoInObs: boolean }>>
     /** Rename the GitHub repository (the app always keeps the `OBS-Config-` start). */
     renameOnline(path: string, name: string): Promise<Done<{ name: string }>>
-    setOnline(path: string, on: boolean, name: string, priv: boolean): Promise<Done<{ url?: string; needsAccount?: boolean }>>
+    setOnline(path: string, on: boolean, name: string, priv: boolean, org?: string): Promise<Done<{ url?: string; needsAccount?: boolean }>>
     authors(path: string): Promise<AuthorsState>
     /** This preset's own name for saves (null: use the app-wide one). Future saves only. */
     setAuthor(path: string, who: Identity | null): Promise<Done<object>>

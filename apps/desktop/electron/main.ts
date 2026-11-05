@@ -4,7 +4,7 @@ import * as path from 'node:path'
 import { execFile, spawn } from 'node:child_process'
 import {
   applyImport, assetNeeds, buildInstance, describeLaunch, findObsProcessesLinux, instancePaths, isInstallRunning, seedInstance, captureLive, cloneRepo, createRepoFromBundle, detectInstalls, detectLinuxPackageManager, exportBundle, getRemoteUrl,
-  gitAvailable, gitInstallHelp, githubAuthGit, githubListRepos, githubWhoAmI, initRepo, markSynced, planImport, portableInstall, publishToGithub,
+  gitAvailable, gitInstallHelp, githubAuthGit, githubListRepos, githubOrgs, githubWhoAmI, initRepo, markSynced, planImport, portableInstall, publishToGithub,
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
   assetBundlePath, attachSecrets, commitAll, fetchRepo, githubRenameRepo, githubRepoName, parseGithubUrl, pendingForObs, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
@@ -361,7 +361,7 @@ function memoised<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<
   v.catch(() => { if (memo.get(key)?.v === v) memo.delete(key) })
   return v
 }
-const READ_ONLY = new Set(['installs:list', 'repos:list', 'repos:live', 'repos:needs', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
+const READ_ONLY = new Set(['installs:list', 'repos:list', 'repos:live', 'repos:needs', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'github:orgs', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
 
 // ── IPC ──────────────────────────────────────────────────────────────────────
 function registerIpc() {
@@ -574,6 +574,12 @@ function registerIpc() {
     try { return { ok: true, repos: await githubListRepos(t) } } catch (e) { return { ok: false, error: errText(e) } }
   })
 
+  handle('github:orgs', async () => {
+    const t = loadGithubToken()
+    if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
+    try { return { ok: true, orgs: await githubOrgs(t) } } catch (e) { return { ok: false, error: errText(e) } }
+  })
+
   handle('repos:list', () => memoised('list', 3_000, () => Promise.all(loadSettings().repos.filter((r) => fs.existsSync(r.path)).map(repoInfo))))
   handle('repos:suggestFolder', (_e, name: string) => suggestFolder(name))
   handle('repos:remove', (_e, p: string) => {
@@ -604,7 +610,7 @@ function registerIpc() {
     return { ok: true, repo: await repoInfo({ path: folder }) }
   })
 
-  handle('repos:create', async (_e, r: { installId: string; name: string; folder: string; github?: { private: boolean }; exclude?: ExportRequest['exclude']; link?: boolean; cloudSkip?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean } }) => {
+  handle('repos:create', async (_e, r: { installId: string; name: string; folder: string; github?: { private: boolean; org?: string }; exclude?: ExportRequest['exclude']; link?: boolean; cloudSkip?: { layouts?: string[]; outputs?: string[]; scripts?: boolean; remoteControl?: boolean } }) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     if (!emptyOrMissing(r.folder)) return { ok: false, error: 'That folder is not empty. Choose another one.' }
     try {
@@ -625,7 +631,7 @@ function registerIpc() {
         const t = loadGithubToken()
         if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
         try {
-          const out = await publishToGithub(r.folder, t, r.name, { private: r.github.private })
+          const out = await publishToGithub(r.folder, t, r.name, { private: r.github.private, org: r.github.org })
           rememberGithub(r.folder, out.repo.fullName)
           published = out.repo.htmlUrl
           if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but pushing failed: ${out.push.message}` }
@@ -745,11 +751,11 @@ function registerIpc() {
     const r = await setRemote(p, url, gitRunner())
     return r.ok ? { ok: true } : { ok: false, error: r.message }
   })
-  handle('repos:publish', async (_e, p: string, name: string, priv: boolean) => {
+  handle('repos:publish', async (_e, p: string, name: string, priv: boolean, org?: string) => {
     const t = loadGithubToken()
     if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
     try {
-      const out = await publishToGithub(p, t, name, { private: priv })
+      const out = await publishToGithub(p, t, name, { private: priv, org })
       rememberGithub(p, out.repo.fullName)
       if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but pushing failed: ${out.push.message}` }
       return { ok: true, url: out.repo.htmlUrl, pushed: out.push.status === 'pushed' }
@@ -1166,7 +1172,7 @@ function registerIpc() {
     } catch (e) { return { ok: false, error: errText(e) } }
   })
 
-  handle('presets:setOnline', async (_e, p: string, on: boolean, name: string, priv: boolean) => {
+  handle('presets:setOnline', async (_e, p: string, on: boolean, name: string, priv: boolean, org?: string) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     const git = gitRunner()
     try {
@@ -1178,7 +1184,7 @@ function registerIpc() {
       if (!st.remote) {
         const t = loadGithubToken()
         if (!t) return { ok: false, needsAccount: true, error: 'Sign in to GitHub first (under Settings), then switch this on.' }
-        const out = await publishToGithub(p, t, name, { private: priv })
+        const out = await publishToGithub(p, t, name, { private: priv, org })
         rememberGithub(p, out.repo.fullName)
         if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but uploading failed: ${out.push.message}` }
         return { ok: true, url: out.repo.htmlUrl }

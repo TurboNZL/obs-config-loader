@@ -192,7 +192,7 @@ describe('import', () => {
     ])
     const ini = plan.writes.find((w) => w.path.endsWith('basic.ini'))!.data.toString('utf8')
     expect(ini).toContain('FilePath=C:\\Users\\streamer\\Videos')
-    expect(plan.report.warnings.join(' ')).toMatch(/Made on linux, importing on win32/)
+    expect(plan.report.warnings.join(' ')).toMatch(/made on Linux and is going into Windows/)
   })
 
   it('hides a source with no equivalent instead of dropping it', () => {
