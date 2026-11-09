@@ -207,7 +207,7 @@ const reopen = async (page) => { await page.click('nav >> text=OBS on this compu
   await main.locator('button:has-text("Get updates")').first().click()
   await main.locator('[role="status"]:has-text("Got")').waitFor()
   // getting updates only updates the preset: the card then says OBS does not have them yet, and one button puts them there
-  await main.locator('text=/This preset has changes .* does not have yet/').waitFor()
+  await main.locator('text=/This preset has \\d+ updates? that .* does not have yet/').waitFor()
   check('after getting updates it says OBS does not have them yet', true)
   await main.locator('button:has-text("Apply to OBS")').click()
   await page.waitForSelector('text=Here is what will happen')

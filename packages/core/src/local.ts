@@ -138,10 +138,45 @@ export function localMediaPath(dir: string, id: string, filename: string): strin
 
 export interface SeenAsset { id: string; filename: string; path: string; size?: number }
 
+/** Looking inside two files that are the same size is only worth it up to here; beyond it a newer date counts as a change. */
+const COMPARE_LIMIT = 1024 * 1024 * 1024
+const compared = new Map<string, boolean>()
+
+/** Same bytes? Read side by side and stop at the first difference. */
+function sameBytes(a: string, b: string): boolean {
+  const fa = fs.openSync(a, 'r'); const fb = fs.openSync(b, 'r')
+  try {
+    const x = Buffer.allocUnsafe(1 << 20); const y = Buffer.allocUnsafe(1 << 20)
+    for (;;) {
+      const n = fs.readSync(fa, x, 0, x.length, null)
+      const m = fs.readSync(fb, y, 0, y.length, null)
+      if (n !== m) return false
+      if (n === 0) return true
+      if (!x.subarray(0, n).equals(y.subarray(0, n))) return false
+    }
+  } finally { fs.closeSync(fa); fs.closeSync(fb) }
+}
+
+/**
+ * Is the preset's copy of a file still the file? A newer date alone is not a change: sync tools, players and backups touch
+ * files without changing a byte, and that must not make the preset ask for attention again and again. So when the sizes match
+ * but the date is newer, the bytes decide (once; the answer is remembered until a date changes, and the copy gets the date).
+ */
 function sameFileContent(src: string, dest: string): boolean {
   try {
     const a = fs.statSync(src), b = fs.statSync(dest)
-    return a.size === b.size && b.mtimeMs >= a.mtimeMs - 1
+    if (a.size !== b.size) return false
+    if (b.mtimeMs >= a.mtimeMs - 1) return true
+    if (a.size > COMPARE_LIMIT) return false
+    const key = `${src}|${a.size}|${a.mtimeMs}|${dest}|${b.mtimeMs}`
+    let same = compared.get(key)
+    if (same === undefined) {
+      same = sameBytes(src, dest)
+      if (compared.size > 500) compared.clear()
+      compared.set(key, same)
+      if (same) { try { fs.utimesSync(dest, a.atime, a.mtime) } catch { /* the copy is still good */ } }
+    }
+    return same
   } catch { return false }
 }
 

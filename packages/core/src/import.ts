@@ -533,7 +533,8 @@ export function planImport(o: ImportOptions): ImportPlan {
     warnings.push(`Some audio sources became PipeWire audio sources, which need the PipeWire Audio Capture plugin, and it is not installed in this OBS. ${(install.kind === 'flatpak' ? how?.['linux-flatpak'] : how?.['linux-native']) ?? ''}`.trim())
   }
   if (m.source?.platform && m.source.platform !== target) {
-    warnings.push(`Made on ${m.source.platform}, importing on ${target}: capture sources and device choices need checking (see substitutions).`)
+    const sys = (x: string) => (x === 'win32' ? 'Windows' : x === 'darwin' ? 'a Mac' : 'Linux')
+    warnings.push(`This setup was made on ${sys(m.source.platform)} and is going into ${sys(target)}, so screen, window and sound capture and device choices need checking (listed below).`)
   }
 
   return {

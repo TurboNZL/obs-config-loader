@@ -156,7 +156,9 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
   const fromPreset = !!bundle?.repoDir
   const [custom, setCustom] = useState(false)
   useEffect(() => { setCustom(false) }, [bundle?.handle])
-  const simple = fromPreset && !custom && !!report && report.missingAssets.length === 0 && !report.missingVariables.some((v) => v.kind !== 'secret')
+  // A saved preset is applied with one sentence and one button. Nothing optional is asked up front: a missing big file, a folder with a
+  // suggested place or a stream key (OBS keeps the one it has) never need an answer, and they are all one click away under "More about this".
+  const simple = fromPreset && !custom && !!report && report.blockers.length === 0 && !report.missingVariables.some((v) => v.kind !== 'secret' && v.required)
   let step = 0
 
   return (
@@ -357,11 +359,17 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
                 {report.willWrite.some((w) => /\/media\//.test(slashes(w.path))) && <li>✔ Copy the pictures, sounds and videos from the file.</li>}
                 {report.includedSecrets.length > 0 && <li>🔑 Use the stream keys from the file ({report.includedSecrets.length}).</li>}
                 {report.keptSecrets.length > 0 && <li>🔑 Keep the stream keys OBS already has ({report.keptSecrets.length}).</li>}
-                {report.missingVariables.some((v) => v.kind === 'secret') && <li>⚠ No stream key set for: {report.missingVariables.filter((v) => v.kind === 'secret').map((v) => m.variables.find((x) => x.name === v.name)?.label ?? 'a key').join(', ')}. You can add them in OBS later.</li>}
-                {report.missingAssets.length > 0 && <li>⚠ Not found yet: {report.missingAssets.map((a) => a.filename).join(', ')}. Those sources will be empty until you point to the files.</li>}
+                {!simple && report.missingVariables.some((v) => v.kind === 'secret') && <li>⚠ No stream key set for: {report.missingVariables.filter((v) => v.kind === 'secret').map((v) => m.variables.find((x) => x.name === v.name)?.label ?? 'a key').join(', ')}. You can add them in OBS later.</li>}
+                {!simple && report.missingAssets.length > 0 && <li>⚠ Not found yet: {report.missingAssets.map((a) => a.filename).join(', ')}. Those sources will be empty until you point to the files.</li>}
               </ul>
 
+              {simple && (() => {
+                const n = report.warnings.length + report.substitutions.length + report.plugins.filter((f) => f.status === 'missing').length + report.missingAssets.length
+                return <p className="text-sm text-muted">{n === 0 ? 'Nothing else needs your attention.' : `${plural(n, 'other thing')} to know about, none of them needed to go ahead: see “More about this”.`}</p>
+              })()}
+              <MoreAbout simple={simple} title="More about this">
               {report.warnings.map((w) => <Message key={w} tone="warn">{w}</Message>)}
+              {simple && report.missingAssets.length > 0 && <Message tone="warn">Not found yet: {report.missingAssets.map((a) => a.filename).join(', ')}. Those sources will be empty until you point to the files; pick “Change what is applied…” to find them now.</Message>}
 
               {report.substitutions.length > 0 && (
                 <div className="space-y-1">
@@ -421,6 +429,8 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
                 </div>
               )}
 
+              </MoreAbout>
+
               {liveChanges.length > 0 && (
                 <Message tone="warn">
                   OBS has changes that are not saved in this preset yet. Applying it would replace them, so save them to the preset first.
@@ -454,5 +464,16 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
         </>
       )}
     </Page>
+  )
+}
+
+/** Optional detail: open by default only when the page is not in its short form. */
+function MoreAbout({ simple, title, children }: { simple: boolean; title: string; children: React.ReactNode }) {
+  if (!simple) return <>{children}</>
+  return (
+    <details>
+      <summary className="text-sm cursor-pointer text-muted">{title}</summary>
+      <div className="mt-2 space-y-2">{children}</div>
+    </details>
   )
 }

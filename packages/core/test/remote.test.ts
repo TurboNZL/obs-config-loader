@@ -4,7 +4,7 @@ import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
-  validateRemoteUrl, repoNameFromUrl, setRemote, getRemoteUrl, githubAuthGit, redact, githubCreateRepo, githubListRepos, githubWhoAmI,
+  validateRemoteUrl, repoNameFromUrl, setRemote, getRemoteUrl, githubAuthGit, redact, githubCreateRepo, githubListRepos, githubOrgs, githubWhoAmI,
   GithubError, publishToGithub, createRepoFromBundle, initRepo, captureLive, repoStatus, exportBundle, pullRepo, commitAll, pushRepo,
   gitInstallHelp, detectLinuxPackageManager, GITHUB_TOKEN_URL,
 } from '../src/index.js'
@@ -24,6 +24,11 @@ function fakeGithub(over: { cloneUrl?: string; status?: number; body?: unknown }
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
     if (over.status && over.status !== 200) return json(over.status, over.body ?? { message: 'nope' })
     if (url.endsWith('/user')) return json(200, { login: 'streamer' })
+    if (url.includes('/user/orgs')) return json(200, [{ login: 'Zeta' }, { login: 'Prismalite' }])
+    if (url.includes('/orgs/') && init.method === 'POST') {
+      const org = decodeURIComponent(url.split('/orgs/')[1].split('/')[0]); const name = JSON.parse(String(init.body)).name
+      return json(201, { name, full_name: `${org}/${name}`, clone_url: `https://github.com/${org}/${name}.git`, html_url: `https://github.com/${org}/${name}`, private: true })
+    }
     if (url.includes('/user/repos') && init.method === 'POST') {
       const name = JSON.parse(String(init.body)).name
       return json(201, { name, full_name: `streamer/${name}`, clone_url: over.cloneUrl ?? `https://github.com/streamer/${name}.git`, html_url: `https://github.com/streamer/${name}`, private: JSON.parse(String(init.body)).private })
@@ -86,6 +91,17 @@ describe('GitHub calls', () => {
     expect(made).toMatchObject({ name: 'My-OBS-Setup', cloneUrl: 'https://github.com/streamer/My-OBS-Setup.git' })
     expect(g.calls.every((c) => c.auth === 'Bearer t')).toBe(true)
     expect(g.calls.at(-1)!.body).toMatchObject({ private: true, auto_init: false })
+  })
+  it('can make the repository under an organisation, and lists the organisations and their repositories', async () => {
+    const g = fakeGithub()
+    expect(await githubOrgs('t', g.f)).toEqual(['Prismalite', 'Zeta'])
+    const made = await githubCreateRepo('t', 'OBS-Config-Prismalite', { private: true, org: 'Prismalite' }, g.f)
+    expect(made).toMatchObject({ fullName: 'Prismalite/OBS-Config-Prismalite', cloneUrl: 'https://github.com/Prismalite/OBS-Config-Prismalite.git' })
+    expect(g.calls.at(-1)!.url).toMatch(/\/orgs\/Prismalite\/repos$/)
+    await githubListRepos('t', g.f)
+    expect(g.calls.at(-1)!.url).toContain('organization_member')
+    await expect(githubCreateRepo('t', 'x', { private: true, org: 'Prismalite' }, fakeGithub({ status: 403 }).f)).rejects.toThrow(/would not let this account make a repository in Prismalite/)
+    await expect(githubCreateRepo('t', 'x', { private: true, org: 'Prismalite' }, fakeGithub({ status: 422 }).f)).rejects.toThrow(/Prismalite already has a repository called "x"/)
   })
   it('turns failures into plain sentences', async () => {
     await expect(githubWhoAmI('bad', fakeGithub({ status: 401 }).f)).rejects.toThrow(/did not accept that token/)

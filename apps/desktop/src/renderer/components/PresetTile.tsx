@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react'
 import type { AssetNeed, ChangeDetail, GithubState, InstallInfo, LogEntry, OnlineComparison, PresetOverview, PullResult, RepoInfo, SaveResult } from '../../../electron/api'
 import { Chip, Choice, Field, IconButton, KIND_LABEL, KindPanel, Message, plural, size } from '../ui'
 import { Icon } from './Icon'
-import { DiffView } from './DiffView'
+import { DiffView, friendlyFile } from './DiffView'
 import { ExportPanel } from './ExportPanel'
 import { StoragePanel } from './StoragePanel'
 import { Details, RenameOnline, type Msg } from './PresetDetails'
+import { OwnerPick } from './OwnerPick'
 
 type Pending = { kind: 'save'; files: string[] } | { kind: 'pull'; files: string[] } | null
 
@@ -40,6 +41,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
   const [remoteUrl, setRemoteUrl] = useState('')
   const [editRemote, setEditRemote] = useState(false)
   const [priv, setPriv] = useState(true)
+  const [org, setOrg] = useState('')
   const [open, setOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const online = !!repo.remoteUrl
@@ -73,11 +75,13 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
 
   const changes = live?.length ?? 0
   const toObs = pending?.length ?? 0
+  // say WHAT: a number alone tells nobody what the button will do
+  const namesOf = (files: string[]) => { const n = [...new Set(files.map(friendlyFile))]; return n.length > 3 ? `${n.slice(0, 3).join('; ')}; and ${n.length - 3} more` : n.join('; ') }
   const obsLine = !linkedId ? ''
     : live === null ? `Checking ${obsName}…`
     : changes > 0 && toObs > 0 ? `${obsName} has changes the preset does not have, and the preset has changes ${obsName} does not have.`
-    : changes > 0 ? `${obsName} has ${plural(changes, 'change')} this preset does not have yet.`
-    : toObs > 0 ? `This preset has changes ${obsName} does not have yet (${plural(toObs, 'file')}).`
+    : changes > 0 ? `${obsName} has ${plural(changes, 'change')} this preset does not have yet: ${namesOf(live ?? [])}.`
+    : toObs > 0 ? `This preset has ${plural(toObs, 'update')} that ${obsName} does not have yet: ${namesOf(pending ?? [])}.`
     : `${obsName} and this preset match.`
   const obsAccent: 'save' | 'apply' | null = changes > 0 ? 'save' : toObs > 0 ? 'apply' : null
   const ghLine = !checked ? 'Asking GitHub…'
@@ -137,7 +141,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     setMsg(r.ok ? { tone: 'good', text: 'This computer now has the online version. Your previous one is kept in History. Apply it to OBS to use it.' } : { tone: 'bad', text: r.error })
   })
   const toggleOnline = (on: boolean) => run(async () => {
-    const r = await window.obsLoader.presets.setOnline(repo.path, on, ghName.trim() || repo.name, priv)
+    const r = await window.obsLoader.presets.setOnline(repo.path, on, ghName.trim() || repo.name, priv, org || undefined)
     if (r.ok) setMsg({ tone: 'good', text: on ? (r.url ? `Backed up online at ${r.url}.` : 'Backed up online.') : 'Online backup is off for this preset. What is already on GitHub stays there.' })
     else setMsg({ tone: 'warn', text: r.error })
   })
@@ -167,7 +171,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
   ] : []
 
   return (
-    <section className={'card p-4 space-y-3 min-w-0 ' + (wide ? 'col-span-full' : '')} aria-label={`Preset ${repo.name}`}>
+    <section className={'card p-4 space-y-3 min-w-0 h-full ' + (wide ? 'col-span-full' : '')} aria-label={`Preset ${repo.name}`}>
       {/* header: name, then the link and export buttons */}
       <div className="flex items-center gap-2">
         <Icon name="layers" size={18} className="text-muted" />
@@ -203,22 +207,28 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         {repo.installId && !linkedId && <p className="text-sm">This preset is linked to an OBS that cannot be found any more. Unlink it with the chain button.</p>}
         {linkedId ? (
           <div className="space-y-2">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm flex-1 min-w-40">{obsLine}</span>
-              <button className={'btn px-3 py-1 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy} onClick={() => save(false)}>Update preset from OBS</button>
-              <button className={'btn px-3 py-1 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => apply(repo.path, linkedId)}>Apply to OBS…</button>
+            <p className="text-sm min-h-[3.75rem]">{obsLine}</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button className={'btn px-3 py-2 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => apply(repo.path, linkedId)}>Apply to OBS…</button>
+              <button className={'btn px-3 py-2 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy} onClick={() => save(false)}>Update preset from OBS</button>
             </div>
-            {changes > 0 && (
+            <div className="min-h-[1.75rem]">
+              {changes > 0 && (
               <div>
                 <button className="btn btn-ghost px-2 py-0.5 text-xs inline-flex items-center gap-1" aria-expanded={showDiff} onClick={() => setShowDiff(!showDiff)}><Icon name="diff" size={13} /> {showDiff ? 'Hide what changed' : 'See what changed'}</button>
                 {showDiff && <div className="mt-1"><DiffView details={details} files={live ?? []} /></div>}
               </div>
-            )}
+              )}
+            </div>
           </div>
         ) : !repo.installId && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm flex-1 min-w-40">This preset stands on its own: it only changes when you change it here.</span>
-            <button className="btn px-3 py-1" disabled={busy} onClick={() => apply(repo.path)}>Apply to OBS…</button>
+          <div className="space-y-2">
+            <p className="text-sm min-h-[3.75rem]">This preset stands on its own: it only changes when you change it here.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button className="btn px-3 py-2" disabled={busy} onClick={() => apply(repo.path)}>Apply to OBS…</button>
+              <span />
+            </div>
+            <div className="min-h-[1.75rem]" />
           </div>
         )}
       </KindPanel>
@@ -229,10 +239,12 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         right={online && repo.online ? <button className="underline text-xs kind-text" disabled={!repo.online.url} onClick={() => repo.online?.url && window.obsLoader.app.openExternal(repo.online.url)}>{repo.online.name}</button> : undefined}
       >
         {online ? (
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm flex-1 min-w-40">{ghLine}</span>
-            <button className={'btn px-3 py-1 ' + (checked && st.behind > 0 && st.ahead === 0 ? 'btn-accent' : '')} disabled={busy} onClick={() => pull()}>Get updates</button>
-            <button className={'btn px-3 py-1 ' + (checked && st.ahead > 0 && st.behind === 0 ? 'btn-accent' : '')} disabled={busy} onClick={push}>Upload</button>
+          <div className="space-y-2">
+            <p className="text-sm min-h-[2.5rem]">{ghLine}</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button className={'btn px-3 py-2 ' + (checked && st.behind > 0 && st.ahead === 0 ? 'btn-accent' : '')} disabled={busy} onClick={() => pull()}>Get updates</button>
+              <button className={'btn px-3 py-2 ' + (checked && st.ahead > 0 && st.behind === 0 ? 'btn-accent' : '')} disabled={busy} onClick={push}>Upload</button>
+            </div>
           </div>
         ) : (
           <div className="space-y-1">
@@ -250,7 +262,8 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
                     <input className="input flex-1 px-2 py-1.5" aria-label="Name on GitHub" value={ghName} onChange={(e) => setGhName(e.target.value)} />
                   </div>
                 </Field>
-                <Choice checked={priv} onChange={setPriv} title="Keep it private" help="Only you can see it on GitHub. Choose before switching backup on." />
+                <OwnerPick value={org} onChange={setOrg} login={gh.login} />
+                <Choice checked={priv} onChange={setPriv} title="Keep it private" help={org ? `Only people in ${org} that you let in can see it. Choose before switching backup on.` : 'Only you can see it on GitHub. Choose before switching backup on.'} />
               </>
             )}
             {!gh.connected && <p className="text-sm text-muted">To switch this on, sign in to GitHub in <button className="underline" onClick={() => go('settings')}>Settings</button> first.</p>}
