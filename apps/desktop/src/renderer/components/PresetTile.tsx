@@ -150,9 +150,13 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     setSure(null)
     setMsg(r.ok ? { tone: 'good', text: 'This computer now has the online version. Your previous one is kept in History. Apply it to OBS to use it.' } : { tone: 'bad', text: r.error })
   })
-  const toggleOnline = (on: boolean) => run(async () => {
-    const r = await window.obsLoader.presets.setOnline(repo.path, on, ghName.trim() || repo.name, priv, org || undefined)
+  // a repository with that name is already on GitHub: the person may want exactly that one (say, an organisation's) to hold this preset
+  const [replaceAsk, setReplaceAsk] = useState(false)
+  const toggleOnline = (on: boolean, replace = false) => run(async () => {
+    const r = await window.obsLoader.presets.setOnline(repo.path, on, ghName.trim() || repo.name, priv, org || undefined, replace)
+    setReplaceAsk(false)
     if (r.ok) setMsg({ tone: 'good', text: on ? (r.url ? `Backed up online at ${r.url}.` : 'Backed up online.') : 'Online backup is off for this preset. What is already on GitHub stays there.' })
+    else if (on && !replace && /already (has|have) a repository called/.test(r.error)) { setMsg(null); setReplaceAsk(true) }
     else setMsg({ tone: 'warn', text: r.error })
   })
   const saveRemote = () => run(async () => {
@@ -264,6 +268,15 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
               title="Back up online (GitHub)"
               help={gh.connected ? 'Keeps a copy on GitHub, updated whenever you save, so you can use this preset on your other computers. Only the parts ticked in the GitHub column above go up.' : undefined}
             />
+            {replaceAsk && (
+              <Message tone="warn">
+                <strong>“OBS-Config-{ghName.trim() || repo.name}” already exists{org ? ` in ${org}` : ' on your GitHub'}.</strong> Use that one, and replace everything in it with this preset? Whatever is in it now stops being the current version (its older saves stay in GitHub's history).
+                <div className="mt-2 flex gap-2 flex-wrap">
+                  <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => toggleOnline(true, true)}>Yes, replace what is in it</button>
+                  <button className="btn btn-ghost px-3 py-1" onClick={() => setReplaceAsk(false)}>No, pick another name</button>
+                </div>
+              </Message>
+            )}
             {gh.connected && (
               <>
                 <Field label="Name on GitHub" hint="Always starts with OBS-Config- so they are easy to find.">

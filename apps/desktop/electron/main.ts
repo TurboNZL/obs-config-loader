@@ -772,11 +772,11 @@ function registerIpc() {
     const r = await setRemote(p, url, gitRunner())
     return r.ok ? { ok: true } : { ok: false, error: r.message }
   })
-  handle('repos:publish', async (_e, p: string, name: string, priv: boolean, org?: string) => {
+  handle('repos:publish', async (_e, p: string, name: string, priv: boolean, org?: string, replace?: boolean) => {
     const t = loadGithubToken()
     if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
     try {
-      const out = await publishToGithub(p, t, name, { private: priv, org })
+      const out = await publishToGithub(p, t, name, { private: priv, org, replaceExisting: replace === true })
       rememberGithub(p, out.repo.fullName)
       if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but pushing failed: ${out.push.message}` }
       return { ok: true, url: out.repo.htmlUrl, pushed: out.push.status === 'pushed' }
@@ -1213,7 +1213,7 @@ function registerIpc() {
     } catch (e) { return { ok: false, error: errText(e) } }
   })
 
-  handle('presets:setOnline', async (_e, p: string, on: boolean, name: string, priv: boolean, org?: string) => {
+  handle('presets:setOnline', async (_e, p: string, on: boolean, name: string, priv: boolean, org?: string, replace?: boolean) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     const git = gitRunner()
     try {
@@ -1225,9 +1225,9 @@ function registerIpc() {
       if (!st.remote) {
         const t = loadGithubToken()
         if (!t) return { ok: false, needsAccount: true, error: 'Sign in to GitHub first (under Settings), then switch this on.' }
-        const out = await publishToGithub(p, t, name, { private: priv, org })
+        const out = await publishToGithub(p, t, name, { private: priv, org, replaceExisting: replace === true })
         rememberGithub(p, out.repo.fullName)
-        if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but uploading failed: ${out.push.message}` }
+        if (out.push.status === 'error') return { ok: false, error: out.replaced ? `Found it on GitHub, but replacing what is in it failed: ${out.push.message}` : `Created on GitHub, but uploading failed: ${out.push.message}` }
         return { ok: true, url: out.repo.htmlUrl }
       }
       const pr = await pushRepo(p, git)

@@ -190,6 +190,61 @@ describe('resolving a conflict from the app', () => {
   })
 })
 
+describe('putting a preset into a repository that already exists', () => {
+  /** GitHub stand-in: creating says "already exists", looking it up gives a local bare repository that has its OWN history. */
+  function existing(bare: string, defaultBranch = 'main') {
+    const calls: string[] = []
+    const f = (async (url: string, init: RequestInit = {}) => {
+      calls.push(`${init.method ?? 'GET'} ${url.replace(/^https?:\/\/[^/]+/, '')}`)
+      const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
+      if (url.endsWith('/user')) return json(200, { login: 'streamer' })
+      if (init.method === 'POST') return json(422, { message: 'Repository creation failed.', errors: [{ message: 'name already exists on this account' }] })
+      if (/\/repos\/[^/]+\/OBS-Config-mine$/.test(url)) return json(200, { name: 'OBS-Config-mine', full_name: 'Prismalite/OBS-Config-mine', clone_url: bare, html_url: 'https://github.com/Prismalite/OBS-Config-mine', private: true, default_branch: defaultBranch })
+      return json(404, { message: 'Not Found' })
+    }) as unknown as typeof fetch
+    return { f, calls }
+  }
+
+  it('says it exists by default, and with the person\'s say-so replaces what is in it', async () => {
+    const bare = nodePath.join(tmp, 'old.git'); git(tmp, 'init', '--bare', '--initial-branch=main', bare)
+    const old = nodePath.join(tmp, 'old'); fs.mkdirSync(old); git(old, 'init', '-q', '--initial-branch=main'); fs.writeFileSync(nodePath.join(old, 'old.txt'), 'the old setup')
+    git(old, 'add', '.'); git(old, '-c', 'user.name=a', '-c', 'user.email=a@a', 'commit', '-qm', 'the old one'); git(old, 'push', '-q', bare, 'main')
+    const home = nodePath.join(tmp, 'home'); const { cfg } = makeSource(home)
+    const dir = nodePath.join(tmp, 'mine'); await initRepo(dir)
+    await captureLive({ host: host('linux', home), install: install(cfg), dir, name: 'Mine' })
+    const g = existing(bare)
+
+    await expect(publishToGithub(dir, 't', 'mine', { private: true, org: 'Prismalite' }, g.f)).rejects.toThrow(/already has a repository called "OBS-Config-mine"/)
+    expect((await repoStatus(dir)).remote).toBeUndefined() // nothing was changed by the refusal
+
+    const out = await publishToGithub(dir, 't', 'mine', { private: true, org: 'Prismalite', replaceExisting: true }, g.f)
+    expect(out).toMatchObject({ replaced: true, push: { status: 'pushed' } })
+    expect(g.calls.some((c) => c.startsWith('GET') && c.endsWith('/repos/Prismalite/OBS-Config-mine'))).toBe(true)
+    const files = git(tmp, '--git-dir', bare, 'ls-tree', '-r', '--name-only', 'main').split('\n')
+    expect(files).toContain('manifest.json')       // the preset is what the repository holds now
+    expect(files).not.toContain('old.txt')         // and what was there is gone from it
+    expect((await repoStatus(dir)).ahead).toBe(0)
+  })
+
+  it('uses the repository\'s own main branch, whatever this computer called its branch', async () => {
+    const bare = nodePath.join(tmp, 'old2.git'); git(tmp, 'init', '--bare', '--initial-branch=trunk', bare)
+    const home = nodePath.join(tmp, 'home'); const { cfg } = makeSource(home)
+    const dir = nodePath.join(tmp, 'mine2'); await initRepo(dir)
+    git(dir, 'branch', '-M', 'master')
+    await captureLive({ host: host('linux', home), install: install(cfg), dir, name: 'Mine' })
+    const out = await publishToGithub(dir, 't', 'mine', { private: true, org: 'Prismalite', replaceExisting: true }, existing(bare, 'trunk').f)
+    expect(out.push.status).toBe('pushed')
+    expect(git(tmp, '--git-dir', bare, 'ls-tree', '-r', '--name-only', 'trunk')).toContain('manifest.json')
+    expect(git(tmp, '--git-dir', bare, 'branch', '--list')).not.toContain('master')
+  })
+
+  it('a repository that cannot be seen is explained, not guessed at', async () => {
+    const dir = nodePath.join(tmp, 'mine3'); await initRepo(dir)
+    const f = (async (url: string, init: RequestInit = {}) => new Response(JSON.stringify({ message: 'x' }), { status: init.method === 'POST' ? 422 : 404 })) as unknown as typeof fetch
+    await expect(publishToGithub(dir, 't', 'mine', { private: true, org: 'Prismalite', replaceExisting: true }, f)).rejects.toThrow(/would not show the repository “Prismalite\/OBS-Config-mine”/)
+  })
+})
+
 describe('installing git', () => {
   it('picks the route for each platform', () => {
     expect(gitInstallHelp('win32').auto).toMatchObject({ command: 'winget' })
