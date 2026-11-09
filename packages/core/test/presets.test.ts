@@ -7,7 +7,7 @@ import {
   parseObsVersion, compareVersions, applyVersions, parseFlatpakPlugins, parsePlistVersion,
   renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, listNames, RenameError, type Manifest,
 } from '../src/index.js'
-import { host, install, makeSource } from './helpers.js'
+import { fwd, host, install, makeSource } from './helpers.js'
 
 let tmp: string
 beforeEach(() => { tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'obscl-pre-')) })
@@ -89,7 +89,7 @@ describe('scripts and remote control', () => {
     applyImport(plan)
     const col = JSON.parse(fs.readFileSync(nodePath.join(cfg2, 'basic/scenes/Main.json'), 'utf8'))
     const path = col.modules['scripts-tool'][0].path as string
-    expect(path.startsWith(cfg2)).toBe(true)
+    expect(fwd(path).startsWith(fwd(cfg2))).toBe(true)
     expect(fs.readFileSync(path, 'utf8')).toContain('print')
     expect(plan.report.warnings.join('\n')).toMatch(/runs a script \(switcher\.py\)/)
   })
@@ -252,7 +252,7 @@ describe('where plugins are found', () => {
     const { detectInstalls } = await import('../src/index.js')
     const fake = { ...h, exists: (p: string) => p === '/usr/bin/obs' || fs.existsSync(p) }
     const native = detectInstalls(fake).find((i) => i.kind === 'linux-native')!
-    expect(native.pluginDirs).toContain(nodePath.join(home, '.local/share/obs-studio/plugins'))
+    expect(native.pluginDirs.map(fwd)).toContain(fwd(nodePath.join(home, '.local/share/obs-studio/plugins')))
     expect(installedModules(h, native).has('linux-pipewire-audio')).toBe(true)
     void cfg; void inst
   })

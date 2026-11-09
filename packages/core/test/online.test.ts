@@ -7,7 +7,7 @@ import {
   exportBundle, planImport, applyImport, readBundleDir, captureLive, initRepo, repoStatus, fetchRepo, pullRepo, pushRepo, setRemote,
   publicRemoteUrl, readActive, fixEncoders, availableEncoders, parseManifest, onlineComparison, useOnlineVersion, type Bundle,
 } from '../src/index.js'
-import { host, install, makeSource } from './helpers.js'
+import { fwd, host, install, makeSource } from './helpers.js'
 
 let tmp: string
 beforeEach(() => { tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'obscl-on-')) })
@@ -203,7 +203,7 @@ describe('files the scenes use that are already on this computer', () => {
     const plan = planImport({ bundle: b, install: install(cfg2), host: host('linux', home), assetFiles: { mix: '/somewhere/mix.mp3' } })
     applyImport(plan)
     const overlay = b.manifest.assets.find((a) => a.filename === 'overlay.png')!
-    expect(plan.report.assetLocations[overlay.id]).toContain(nodePath.join('obs-config-loader', b.manifest.id, 'media', overlay.id, 'overlay.png'))
+    expect(fwd(plan.report.assetLocations[overlay.id])).toContain(`obs-config-loader/${b.manifest.id}/media/${overlay.id}/overlay.png`)
     expect(plan.report.assetLocations.mix).toBe('/somewhere/mix.mp3')
     // a preset made from that file only has placeholders, but the files are right there
     const found = locateExtracted(b.manifest, [cfg2])

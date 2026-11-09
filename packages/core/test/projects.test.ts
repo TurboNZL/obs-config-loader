@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
 import { exportBundle, planImport, applyImport, readBundleDir, captureLive, initRepo, renameOutputSetting, renameSceneLayout, type Bundle } from '../src/index.js'
-import { host, install, makeSource } from './helpers.js'
+import { fwd, host, install, makeSource } from './helpers.js'
 
 let tmp: string
 beforeEach(() => { tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'obscl-proj-')) })
@@ -48,9 +48,9 @@ describe('a script that needs the files around it', () => {
     expect(plan.report.warnings.join(' ')).not.toMatch(/was not found/)
     applyImport(plan)
     const got = JSON.parse(fs.readFileSync(nodePath.join(cfg2, 'basic/scenes/Main.json'), 'utf8'))
-    expect(got.modules['scripts-tool'][0].path).toBe(nodePath.join(where, 'tool.py'))
-    expect(got.sources.find((s: any) => s.name === 'Background').settings.file).toBe(nodePath.join(where, 'images/bg.png'))
-    expect(got.sources.find((s: any) => s.name === 'Pipe').settings.input).toBe(nodePath.join(where, 'audio.fifo'))
+    expect(fwd(got.modules['scripts-tool'][0].path)).toBe(fwd(nodePath.join(where, 'tool.py')))
+    expect(fwd(got.sources.find((s: any) => s.name === 'Background').settings.file)).toBe(fwd(nodePath.join(where, 'images/bg.png')))
+    expect(fwd(got.sources.find((s: any) => s.name === 'Pipe').settings.input)).toBe(fwd(nodePath.join(where, 'audio.fifo')))
     expect(got.modules['output-timer']).toEqual({ streamTimerSeconds: 30 })
   })
 
@@ -135,7 +135,7 @@ describe('OBS file and folder names that differ from the shown name', () => {
     expect(fs.readFileSync(nodePath.join(cfg2, 'user.ini'), 'utf8')).toMatch(/SceneCollectionFile=Tool_Scenes\b/)
     // "keep both" never overwrites, and renaming makes OBS's own name the new name
     const both = planImport({ bundle: b, install: install(cfg2), host: host('linux', home), conflict: 'keep-both' })
-    expect(both.writes.some((w) => w.path.endsWith(nodePath.join('Tool_Profile_2026_sep_22 (2)', 'basic.ini')))).toBe(true)
+    expect(both.writes.some((w) => fwd(w.path).endsWith('Tool_Profile_2026_sep_22 (2)/basic.ini'))).toBe(true)
   })
 
   it('renaming in a preset gives OBS\'s own naming back', async () => {

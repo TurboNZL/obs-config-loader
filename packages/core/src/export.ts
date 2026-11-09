@@ -7,6 +7,7 @@ import { escapeLiteral, looksLikeAbsolutePath, mapStrings, sanitizeFileName, spl
 import { getIni, mapIniValues } from './ini.js'
 import { readActive } from './userconfig.js'
 import { SecretScrubber } from './secrets.js'
+import { BACKUP_FILE, DATA_FILE, looksSecret, makeIgnore, stripBom } from './safety.js'
 import { DEFAULT_PLATFORM_MAP, isPlatformSpecific } from './sources.js'
 import { extractVariants, parseVariants, serializeVariants, variantsPathFor } from './variants.js'
 import { FILE_HINTS, installedModules, manifestPlugins, pluginReport, usedIds } from './plugins.js'
@@ -177,6 +178,9 @@ class Collector {
     let total = 0
     for (const proj of this.projects) {
       const rels: string[] = []
+      // what the project itself keeps out of its own repository (its secrets, its build, its private copy of OBS) stays out of the preset
+      let ignored = (_rel: string, _isDir: boolean) => false
+      try { ignored = makeIgnore(fs.readFileSync(nodePath.join(proj.dir, '.gitignore'), 'utf8')) } catch { /* no .gitignore */ }
       const walk = (dir: string, rel: string, depth: number) => {
         let ents: fs.Dirent[] = []
         try { ents = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)) } catch { return }
@@ -184,13 +188,17 @@ class Collector {
           if (e.name.startsWith('.')) continue
           const r = rel ? `${rel}/${e.name}` : e.name
           const full = nodePath.join(dir, e.name)
+          if (ignored(r, e.isDirectory())) continue
           if (e.isDirectory()) { if (depth < PROJECT_DEPTH && !PROJECT_SKIP_DIRS.has(e.name.toLowerCase())) walk(full, r, depth + 1); continue }
-          if (!e.isFile() || !PROJECT_FILE.test(e.name) || rels.length >= PROJECT_MAX_FILES) continue
+          if (!e.isFile() || !PROJECT_FILE.test(e.name) || BACKUP_FILE.test(e.name) || rels.length >= PROJECT_MAX_FILES) continue
           let size = 0
           try { size = fs.statSync(full).size } catch { continue }
           if (size > MAX_SCRIPT_BYTES || total + size > PROJECT_MAX_BYTES) continue
+          const data = fs.readFileSync(full)
+          // a text file that holds a password or key (a saved setup code, a config with a token) is never kept: the preset may go online
+          if (DATA_FILE.test(e.name) && looksSecret(data.toString('utf8'))) { this.warnings.push(`${r} looks like it holds a password or key, so it was not kept with the script folder.`); continue }
           total += size
-          this.files.set(`${PROJECT_DIR}/${proj.name}/${r}`, fs.readFileSync(full))
+          this.files.set(`${PROJECT_DIR}/${proj.name}/${r}`, data)
           rels.push(r)
         }
       }
@@ -199,7 +207,11 @@ class Collector {
         if (rels.includes(x.rel)) continue
         const id = slug(x.rel.split('/').pop() ?? '')
         if (x.size > this.bundleBelow && !this.alsoBundle.has(id)) { this.warnings.push(`${x.rel} (${(x.size / 1048576).toFixed(0)} MB) is too large to keep with the setup; it has to be in the script folder on the other computer.`); continue }
-        try { this.files.set(`${PROJECT_DIR}/${proj.name}/${x.rel}`, fs.readFileSync(x.full)); rels.push(x.rel) } catch { /* vanished: the report on import will say it is missing */ }
+        try {
+          const data = fs.readFileSync(x.full)
+          if (DATA_FILE.test(x.rel) && looksSecret(data.toString('utf8'))) { this.warnings.push(`${x.rel} looks like it holds a password or key, so it was not kept with the script folder.`); continue }
+          this.files.set(`${PROJECT_DIR}/${proj.name}/${x.rel}`, data); rels.push(x.rel)
+        } catch { /* vanished: the report on import will say it is missing */ }
       }
       if (rels.length) out.push({ variable: proj.name, files: rels })
     }
@@ -284,7 +296,7 @@ class Collector {
 }
 
 function readJson(p: string): any | undefined {
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return undefined }
+  try { return JSON.parse(stripBom(fs.readFileSync(p, 'utf8'))) } catch { return undefined }
 }
 
 /** Active names (user.ini on OBS 31+, global.ini before), used as defaults. */
@@ -419,6 +431,7 @@ export function exportBundle(opts: ExportOptions): Bundle {
     for (const f of fs.readdirSync(nodePath.join(profRoot, dir)).sort()) {
       const full = nodePath.join(profRoot, dir, f)
       if (!fs.statSync(full).isFile()) continue
+      if (BACKUP_FILE.test(f)) continue // a program's own spare copy of a file: same secrets, never used
       if (FILE_HINTS[f]) hinted.add(FILE_HINTS[f])
       const rel = `${base}/${f}`
       if (f.endsWith('.json')) {
@@ -429,13 +442,18 @@ export function exportBundle(opts: ExportOptions): Bundle {
           files.set(rel, Buffer.from(JSON.stringify(mapStrings(scrubbed, (s, k) => (s.includes('{{var:') ? s : col.tokenise(s, k)), ), null, 4) + '\n'))
           continue
         }
+        // a JSON file that cannot be read cannot be scrubbed: it is left out, never copied as it is (it may hold a stream key)
+        col.warnings.push(`${f} (in the output settings “${dir}”) could not be read, so it was left out. It may hold a key or password.`)
+        continue
       } else if (f === 'basic.ini') {
         const text = fs.readFileSync(full, 'utf8')
         display = getIni(text, 'General', 'Name') ?? dir
         files.set(rel, Buffer.from(mapIniValues(text, (_s, k, v) => (looksLikeAbsolutePath(v) ? col.tokenise(v, `${_s}.${k}`) : v)), 'utf8'))
         continue
       }
-      files.set(rel, fs.readFileSync(full))
+      const raw = fs.readFileSync(full)
+      if (DATA_FILE.test(f) && looksSecret(raw.toString('utf8'))) { col.warnings.push(`${f} (in the output settings “${dir}”) looks like it holds a password or key, so it was left out.`); continue }
+      files.set(rel, raw)
     }
     profiles.push({ id, name: display, dir: base, ...(sanitizeFileName(display) !== dir ? { dirName: dir } : {}) })
   }
