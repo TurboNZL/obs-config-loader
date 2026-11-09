@@ -9,7 +9,7 @@ import {
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
   assetBundlePath, attachSecrets, commitAll, fetchRepo, githubRenameRepo, githubRepoName, parseGithubUrl, pendingForObs, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
   renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, renameSourceInObs, RenameError,
-  applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
+  findRenamedAssets, missingFilesInObs, replacePathInObs, applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
   readLocalKeys, readLocalSettings, writeLocalKeys, writeLocalSettings, cloudSkippedPaths, writeExclude, LOCAL_DIR, EXTRAS_EXT, type LocalSettings,
   listPlatformSources, DEFAULT_PLATFORM_MAP, withIdentity, listAuthors, rewriteAuthor, discardNameChangeBackup, putFile, getFile, testStorage, objectKey, validateTarget, regionFromEndpoint, sha256OfFile, localMediaPath,
   type GitIdentity, type StorageTarget, type StorageKeys,
@@ -160,6 +160,27 @@ function rememberAssets(presetPath: string, found: { id: string; filename: strin
     all[m.id] = cur
     writeLocations(all)
   } catch { /* the preset still works; the files are asked for instead */ }
+}
+
+/** Files renamed outside the app, found by their contents in the folder they were in. Uses where this computer REMEMBERS having each file (not the preset's own copy). */
+async function renamedFiles(presetPath: string) {
+  try {
+    const m = readBundleDir(presetPath).manifest
+    // also what the linked OBS's scenes point at that is not there any more: that works even when only the preset's own copy was remembered
+    const linked = loadSettings().repos.find((r) => r.path === presetPath)?.installId
+    const inst = linked ? allInstalls().find((i) => i.id === linked) : undefined
+    return await findRenamedAssets(m, readLocations()[m.id]?.assets ?? {}, inst?.configExists ? missingFilesInObs(inst.configDir) : [])
+  } catch { return [] }
+}
+/** A file that was renamed is still the same file: saving under its new name must keep its identity in the preset. */
+async function assetHintsFor(presetPath: string): Promise<Record<string, string>> {
+  const hints: Record<string, string> = {}
+  try {
+    const m = readBundleDir(presetPath).manifest
+    for (const [id, p] of Object.entries(readLocations()[m.id]?.assets ?? {})) if (m.assets.some((a) => a.id === id)) hints[p] = id
+    for (const r of await renamedFiles(presetPath)) hints[r.to] = r.id
+  } catch { /* no hints: files are named by their names, as before */ }
+  return hints
 }
 
 // ── config repositories ──────────────────────────────────────────────────────
@@ -361,7 +382,7 @@ function memoised<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<
   v.catch(() => { if (memo.get(key)?.v === v) memo.delete(key) })
   return v
 }
-const READ_ONLY = new Set(['installs:list', 'repos:list', 'repos:live', 'repos:needs', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'github:orgs', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
+const READ_ONLY = new Set(['installs:list', 'repos:list', 'repos:live', 'repos:needs', 'repos:renamed', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'github:orgs', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
 
 // ── IPC ──────────────────────────────────────────────────────────────────────
 function registerIpc() {
@@ -764,7 +785,7 @@ function registerIpc() {
 
   handle('repos:live', (_e, p: string, installId: string, withDiff?: boolean) => memoised(`live|${p}|${installId}|${withDiff === true}`, 30_000, () => heavy(async () => {
     const inst = findInstall(installId)
-    const r = await captureLive({ host, install: inst, dir: p, dryRun: true, withDiff: withDiff === true, keepKeysDefault: keepKeysDefault(), git: gitRunner(p) })
+    const r = await captureLive({ host, install: inst, dir: p, dryRun: true, withDiff: withDiff === true, keepKeysDefault: keepKeysDefault(), git: gitRunner(p), assetIdHints: await assetHintsFor(p) })
     if (r.status === 'error') return { error: r.message }
     // and the other direction: what the preset has that this OBS has not got yet (typically after getting updates)
     return { changed: r.status === 'changes' ? r.files : [], details: r.status === 'changes' ? r.details : undefined, pending: await pendingForObs(p, inst, gitRunner(p)) }
@@ -774,7 +795,7 @@ function registerIpc() {
     const seen: { id: string; filename: string; path: string }[] = []
     const r = await captureLive({
       host, install: inst, dir: p, onDirty: commitDirtyFirst ? 'commit-first' : 'refuse', onConflict,
-      appVersion: app.getVersion(), versions: detectVersions(inst, host), onAsset: (a) => seen.push(a), keepKeysDefault: keepKeysDefault(), git: gitRunner(p),
+      appVersion: app.getVersion(), versions: detectVersions(inst, host), onAsset: (a) => seen.push(a), keepKeysDefault: keepKeysDefault(), git: gitRunner(p), assetIdHints: await assetHintsFor(p),
     })
     rememberAssets(p, seen)
     if (r.status === 'changes') return { status: 'unchanged' }
@@ -809,14 +830,34 @@ function registerIpc() {
     return r.ok ? { ok: true, kept: r.kept } : { ok: false, error: r.message }
   })
   handle('repos:log', (_e, p: string) => repoLog(p, 15, gitRunner()))
+  handle('repos:renamed', (_e, p: string) => memoised(`renamed|${p}`, 15_000, () => heavy(() => renamedFiles(p))))
+  /** "Use the new name": remember where the file is now and, when OBS is closed, point OBS's scenes at it. */
+  handle('repos:acceptRename', async (_e, p: string, id: string, to: string, installId?: string) => {
+    try {
+      const m = readBundleDir(p).manifest
+      const hit = (await renamedFiles(p)).find((r) => r.id === id && r.to === to)
+      if (!hit) return { ok: false, error: 'That file is not where it was seen a moment ago. Look again.' }
+      const all = readLocations(); const cur = all[m.id] ?? { assets: {}, variables: {} }
+      cur.assets[id] = hit.to; all[m.id] = cur; writeLocations(all)
+      let fixedInObs = 0; let obsRunning = false
+      const inst = installId ? allInstalls().find((i) => i.id === installId) : undefined
+      if (inst?.configExists) {
+        if (await obsRunningFor(inst)) obsRunning = true
+        else fixedInObs = replacePathInObs(inst.configDir, hit.from, hit.to)
+      }
+      return { ok: true, fixedInObs, obsRunning }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
   handle('repos:needs', (_e, p: string) => memoised(`needs|${p}`, 30_000, () => heavy(async () => {
     const m = readBundleDir(p).manifest
     const all = readLocations()
     const cur = locationsFor(m.id)
     // files that came with a setup file are already here (in OBS's own folder): do not ask for them
     const here = locateExtracted(m, allInstalls().map((i) => i.configDir))
-    for (const [id, f] of Object.entries(here)) if (!cur.assets[id] || !fs.existsSync(cur.assets[id])) cur.assets[id] = f
-    all[m.id] = cur; writeLocations(all)
+    const remembered = all[m.id] ?? { assets: {}, variables: {} }
+    for (const [id, f] of Object.entries(here)) if (!cur.assets[id] || !fs.existsSync(cur.assets[id])) { cur.assets[id] = f; remembered.assets[id] = f }
+    // only what was really learned is remembered: the preset's own copies are not where the file lives, and must not replace its real place
+    all[m.id] = remembered; writeLocations(all)
     return assetNeeds(m, cur.assets)
   })))
   handle('repos:setAsset', (_e, p: string, assetId: string, file: string) => {

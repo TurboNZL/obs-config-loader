@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
-import { captureLive, commitAll, initRepo, markSynced, pendingForObs } from '../src/index.js'
+import { captureLive, commitAll, findRenamedAssets, initRepo, markSynced, missingFilesInObs, pendingForObs, readBundleDir, replacePathInObs } from '../src/index.js'
 import { host, install, makeSource } from './helpers.js'
 
 let tmp: string
@@ -59,5 +59,56 @@ describe('a preset only asks for attention when something really changed', () =>
     // a Linux computer saved
     fs.writeFileSync(f, JSON.stringify({ ...base, linux: { ini: { AdvOut: { Encoder: 'vaapi' } } } })); await commitAll(dir, 'linux save')
     expect(await pendingForObs(dir, inst)).toEqual(['profiles/main/platforms.json'])
+  })
+})
+
+describe('a media file renamed outside the app', () => {
+  const rename = (from: string, to: string) => { fs.renameSync(from, to); return to }
+
+  it('is recognised by its contents, in the folder it was in', async () => {
+    const { dir, h, inst, mp3, home } = setup()
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'M' })
+    const manifest = readBundleDir(dir).manifest
+    const locations = { mix: mp3 }
+    expect(await findRenamedAssets(manifest, locations)).toEqual([]) // nothing moved
+    const now = rename(mp3, nodePath.join(home, 'Music', 'mix v2.mp3'))
+    expect(await findRenamedAssets(manifest, locations)).toEqual([{ id: 'mix', filename: 'mix.mp3', from: mp3, to: now }])
+    // a different file of the same size is not it
+    const other = Buffer.alloc(fs.statSync(now).size, 7); fs.writeFileSync(nodePath.join(home, 'Music', 'other.mp3'), other)
+    expect((await findRenamedAssets(manifest, locations)).map((r) => r.to)).toEqual([now])
+    // two identical copies: no guess
+    fs.copyFileSync(now, nodePath.join(home, 'Music', 'mix copy.mp3'))
+    expect(await findRenamedAssets(manifest, locations)).toEqual([])
+  })
+
+  it('is found from OBS\'s own scenes even when the app only remembers its own copy of the file', async () => {
+    const { dir, h, inst, mp3, home, cfg } = setup()
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'M' })
+    const manifest = readBundleDir(dir).manifest
+    const ownCopy = nodePath.join(dir, 'local/media/mix/mix.mp3') // what the app used to remember instead of the real place
+    expect(missingFilesInObs(cfg)).toEqual([])
+    const now = rename(mp3, nodePath.join(home, 'Music', 'a better name.mp3'))
+    expect(missingFilesInObs(cfg)).toEqual([mp3])
+    expect(await findRenamedAssets(manifest, { mix: ownCopy }, missingFilesInObs(cfg))).toEqual([{ id: 'mix', filename: 'mix.mp3', from: mp3, to: now }])
+  })
+
+  it('keeps its identity in the preset when it is saved under the new name, and the old copy goes', async () => {
+    const { dir, h, inst, mp3, home, cfg } = setup()
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'M' })
+    expect(fs.existsSync(nodePath.join(dir, 'local/media/mix/mix.mp3'))).toBe(true)
+    const now = rename(mp3, nodePath.join(home, 'Music', 'mix v2.mp3'))
+    expect(replacePathInObs(cfg, mp3, now)).toBeGreaterThan(0) // OBS's scenes follow the file
+    expect(replacePathInObs(cfg, mp3, now)).toBe(0)           // and only once
+    // without the hint the file would be a brand new one
+    expect((await captureLive({ host: h, install: inst, dir, dryRun: true })).status).toBe('changes')
+    const r = await captureLive({ host: h, install: inst, dir, assetIdHints: { [now]: 'mix' } })
+    expect(r.status).toBe('committed')
+    const assets = readBundleDir(dir).manifest.assets.filter((a) => /mix/.test(a.id))
+    expect(assets.map((a) => [a.id, a.filename])).toEqual([['mix', 'mix v2.mp3']])
+    expect(fs.readdirSync(nodePath.join(dir, 'local/media/mix'))).toEqual(['mix v2.mp3'])
+    expect(await captureLive({ host: h, install: inst, dir, dryRun: true, assetIdHints: { [now]: 'mix' } })).toEqual({ status: 'unchanged' })
   })
 })

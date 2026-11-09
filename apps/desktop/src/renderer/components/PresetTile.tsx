@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AssetNeed, ChangeDetail, GithubState, InstallInfo, LogEntry, OnlineComparison, PresetOverview, PullResult, RepoInfo, SaveResult } from '../../../electron/api'
+import type { AssetNeed, ChangeDetail, RenamedFile, GithubState, InstallInfo, LogEntry, OnlineComparison, PresetOverview, PullResult, RepoInfo, SaveResult } from '../../../electron/api'
 import { Chip, Choice, Field, IconButton, KIND_LABEL, KindPanel, Message, plural, size } from '../ui'
 import { Icon } from './Icon'
 import { DiffView, friendlyFile } from './DiffView'
@@ -64,6 +64,16 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     void window.obsLoader.repos.live(repo.path, linkedId, true).then((r) => { if (!('error' in r)) setDetails(r.details) })
   }, [showDiff]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void window.obsLoader.repos.needs(repo.path).then(setNeeds).catch(() => setNeeds([])) }, [repo.path, st.behind])
+  // a file renamed outside the app is the same file: say so, instead of asking for it again
+  const [renamed, setRenamed] = useState<RenamedFile[]>([])
+  useEffect(() => { void window.obsLoader.repos.renamed(repo.path).then(setRenamed).catch(() => setRenamed([])) }, [repo.path, st.behind, st.commits])
+  const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p
+  const useNewName = async (r: RenamedFile) => {
+    const res = await window.obsLoader.repos.acceptRename(repo.path, r.id, r.to, linkedId)
+    if (!res.ok) { setMsg({ tone: 'bad', text: res.error }); return }
+    setRenamed(await window.obsLoader.repos.renamed(repo.path)); setNeeds(await window.obsLoader.repos.needs(repo.path)); void check()
+    setMsg({ tone: 'good', text: res.obsRunning ? `Noted: “${baseName(r.from)}” is now “${baseName(r.to)}”. OBS is open, so close it and press the button again to point OBS at the new name.` : res.fixedInObs > 0 ? `Noted, and OBS now uses “${baseName(r.to)}”.` : `Noted: “${baseName(r.from)}” is now “${baseName(r.to)}”.` })
+  }
 
   // an online preset asks what is new when it is shown, so "newer version online" is true and not last time's guess
   const [checked, setChecked] = useState(false)
@@ -335,10 +345,20 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         </Message>
       )}
 
-      {needs.length > 0 && (
+      {renamed.map((r) => (
+        <Message key={r.id} tone="warn">
+          <strong>“{baseName(r.from)}” looks like it was renamed to “{baseName(r.to)}”.</strong> It is the same file, so nothing is lost.
+          <div className="mt-2 flex gap-2 items-center flex-wrap">
+            <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => void useNewName(r)}>Use the new name</button>
+            <span className="text-xs text-muted">{linkedId ? `The preset and ${obsName} will both follow it.` : 'The preset will follow it.'}</span>
+          </div>
+        </Message>
+      ))}
+
+      {needs.filter((n) => !renamed.some((r) => r.id === n.id)).length > 0 && (
         <div className="space-y-1">
           <h3 className="font-semibold text-sm flex items-center gap-2"><Icon name="image" size={14} /> Big files this computer still needs</h3>
-          {needs.map((n) => (
+          {needs.filter((n) => !renamed.some((r) => r.id === n.id)).map((n) => (
             <div key={n.id} className="bt-row flex items-center gap-3 py-1">
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium">{n.filename} {n.reason === 'changed' && <Chip tone="warn">newer version in the preset</Chip>}</div>

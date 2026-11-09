@@ -207,7 +207,9 @@ export function pruneLocalMedia(dir: string, manifest: Manifest, settings: Local
   for (const id of ids) {
     if (!safeSegment(id)) continue
     const a = manifest.assets.find((x) => x.id === id)
-    if (!a || skip.has(id)) fs.rmSync(nodePath.join(root, id), { recursive: true, force: true })
+    if (!a || skip.has(id)) { fs.rmSync(nodePath.join(root, id), { recursive: true, force: true }); continue }
+    // the file was renamed: the copy under its old name is no longer wanted
+    try { for (const n of fs.readdirSync(nodePath.join(root, id))) if (n !== a.filename) fs.rmSync(nodePath.join(root, id, n), { recursive: true, force: true }) } catch { /* nothing there */ }
   }
 }
 

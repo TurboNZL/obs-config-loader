@@ -63,6 +63,8 @@ const api: Api = {
     useOnline: (p) => call('repos:useOnline', p),
     log: (p) => call('repos:log', p),
     needs: (p) => call('repos:needs', p),
+    renamed: (p) => call('repos:renamed', p),
+    acceptRename: (p, id, to, installId) => call('repos:acceptRename', p, id, to, installId),
     setAsset: (p, a, f) => call('repos:setAsset', p, a, f),
     openFolder: (p) => call('repos:openFolder', p),
   },

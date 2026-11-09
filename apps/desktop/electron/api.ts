@@ -88,6 +88,7 @@ export type UpdateState = {
 }
 
 export interface GitState { available: boolean; help: GitInstallHelp; platform: string }
+export interface RenamedFile { id: string; filename: string; from: string; to: string }
 export interface GithubState { connected: boolean; login?: string; /** Token is kept for this session only (no system keychain). */ sessionOnly?: boolean }
 export type Done<T> = ({ ok: true } & T) | { ok: false; error: string; cancelled?: boolean }
 
@@ -238,6 +239,10 @@ export interface Api {
     useOnline(path: string): Promise<Done<{ kept: string }>>
     log(path: string): Promise<LogEntry[]>
     needs(path: string): Promise<AssetNeed[]>
+    /** Files renamed outside the app (same contents, same folder), by the name the preset knows. */
+    renamed(path: string): Promise<RenamedFile[]>
+    /** Remember the new name; with an OBS given and closed, its scenes are pointed at it too. */
+    acceptRename(path: string, id: string, to: string, installId?: string): Promise<Done<{ fixedInObs: number; obsRunning: boolean }>>
     setAsset(path: string, assetId: string, file: string): Promise<void>
     openFolder(path: string): Promise<void>
   }

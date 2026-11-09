@@ -35,6 +35,11 @@ export interface ExportOptions {
   /** Called for every file the scenes use that exists on this computer: where it really is (so a preset can remember it). */
   onAsset?: (a: { id: string; filename: string; path: string; size: number }) => void
   /**
+   * Files that were renamed: `{ <path now>: <id the file already has in the preset> }`. A file at one of these paths keeps its id instead of
+   * getting a new one from its new name, so the preset still knows it is the same file.
+   */
+  assetIdHints?: Record<string, string>
+  /**
    * Put the stream keys and other secrets INTO the file. Off by default, and the file is then labelled everywhere
    * (`containsSecrets`, a warning in the manifest, a README in the zip). Never allowed for the git folder form.
    */
@@ -240,7 +245,7 @@ class Collector {
     return undefined
   }
 
-  constructor(private host: Host, private bundleBelow: number, private alsoBundle: Set<string> = new Set(), private onAsset?: ExportOptions['onAsset']) {}
+  constructor(private host: Host, private bundleBelow: number, private alsoBundle: Set<string> = new Set(), private onAsset?: ExportOptions['onAsset'], private idHints: Record<string, string> = {}) {}
 
   private uniqueAssetId(base: string): string {
     let id = base
@@ -262,7 +267,8 @@ class Collector {
     if (st?.isFile() || (!st && hasExt)) {
       const known = this.assetByPath.get(value)
       if (known) return `{{asset:${known}}}`
-      const id = this.uniqueAssetId(slug(base))
+      const hinted = this.idHints[value]
+      const id = hinted && !this.assets.some((a) => a.id === hinted) ? hinted : this.uniqueAssetId(slug(base))
       this.assetByPath.set(value, id)
       const asset: Asset = { id, filename: base, role: roleOf(base), mode: 'external' }
       if (st?.isFile()) {
@@ -378,7 +384,7 @@ export function stripSecrets(b: Bundle): Record<string, string> {
 export function exportBundle(opts: ExportOptions): Bundle {
   const { host, install } = opts
   const cfg = install.configDir
-  const col = new Collector(host, opts.bundleBelowBytes ?? 5 * 1024 * 1024, new Set(opts.alsoBundle ?? []), opts.onAsset)
+  const col = new Collector(host, opts.bundleBelowBytes ?? 5 * 1024 * 1024, new Set(opts.alsoBundle ?? []), opts.onAsset, opts.assetIdHints)
   const ex = opts.exclude ?? {}
   const scrub = new SecretScrubber(opts.includeSecrets === true)
   const files = col.files

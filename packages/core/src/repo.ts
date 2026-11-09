@@ -309,6 +309,8 @@ export interface CaptureOptions {
   versions?: DetectedVersions
   /** Told where each file the scenes use really is on this computer, so the preset can remember it. */
   onAsset?: CaptureOptionsAsset
+  /** See `ExportOptions.assetIdHints`: files renamed outside the app keep their id. */
+  assetIdHints?: Record<string, string>
   /** What a brand-new preset leaves out. An existing preset's own list always wins. */
   exclude?: Manifest['exclude']
   /** When the repo and OBS changed the same lines: stop (default), or settle just those lines in favour of one side. */
@@ -413,7 +415,7 @@ function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest[
     description: typeof pm?.description === 'string' ? pm.description : undefined,
     // No name filter: OBS is the source of truth for which scenes/profiles exist. (Filtering by the names saved
     // earlier made a renamed collection or profile vanish, and the folder was then wiped.)
-    bundleBelowBytes: o.bundleBelowBytes, alsoBundle: uploadMedia, appVersion: o.appVersion, versions: o.versions, exclude: excludeNow ?? pm?.exclude ?? o.exclude, onAsset: o.onAsset,
+    bundleBelowBytes: o.bundleBelowBytes, alsoBundle: uploadMedia, appVersion: o.appVersion, versions: o.versions, exclude: excludeNow ?? pm?.exclude ?? o.exclude, onAsset: o.onAsset, assetIdHints: o.assetIdHints,
     // the stream keys are read here and kept apart: they go into the preset's own local-only area, never into what git tracks
     includeSecrets: true,
     // the repo's history is its revision list: keep these two still so they never cause a merge conflict
@@ -668,6 +670,38 @@ export async function assetNeeds(manifest: Manifest, locations: AssetLocations):
       try {
         if ((await sha256File(p)) !== a.sha256) out.push({ id: a.id, filename: a.filename, hint: a.hint, reason: 'changed', path: p })
       } catch { out.push({ id: a.id, filename: a.filename, hint: a.hint, reason: 'missing' }) }
+    }
+  }
+  return out
+}
+
+export interface RenamedAsset { id: string; /** The name the preset knows. */ filename: string; /** Where this computer last had it. */ from: string; /** Where the same file is now. */ to: string }
+
+/**
+ * Files that were renamed outside the app. A file this computer used to have is gone from where it was; if the same folder holds a
+ * file with the same size and the same contents, it is that file under a new name. Only a clear single match counts.
+ */
+export async function findRenamedAssets(manifest: Manifest, locations: AssetLocations, missingInObs: string[] = []): Promise<RenamedAsset[]> {
+  const out: RenamedAsset[] = []
+  const base = (p: string) => p.split(/[\\/]/).pop()!.toLowerCase()
+  for (const a of manifest.assets) {
+    if (!a.sha256 || !a.size) continue
+    // where the file used to be: what this computer remembered, and the paths OBS's own scenes use that are not there any more
+    const froms = [...new Set([locations[a.id], ...missingInObs.filter((p) => base(p) === a.filename.toLowerCase())].filter((p): p is string => !!p && !fs.existsSync(p)))]
+    for (const from of froms) {
+      const dir = nodePath.dirname(from)
+      let names: string[] = []
+      try { names = fs.readdirSync(dir) } catch { continue }
+      const hits: string[] = []
+      for (const n of names) {
+        const full = nodePath.join(dir, n)
+        try {
+          const st = fs.statSync(full)
+          if (!st.isFile() || st.size !== a.size) continue
+          if ((await sha256File(full)) === a.sha256) hits.push(full)
+        } catch { /* unreadable: not a candidate */ }
+      }
+      if (hits.length === 1) { out.push({ id: a.id, filename: a.filename, from, to: hits[0] }); break }
     }
   }
   return out
