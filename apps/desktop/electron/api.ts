@@ -88,6 +88,17 @@ export type UpdateState = {
 }
 
 export interface GitState { available: boolean; help: GitInstallHelp; platform: string }
+export interface SetupStepInfo {
+  id: string; title: string; why?: string; mode: 'wait' | 'open'; optional: boolean
+  /** Exactly what will run, for the person to read. Absent when it cannot run here (then `problem` says why). */
+  command?: { program: string; args: string[]; cwd: string }
+  problem?: string
+  ranBefore: boolean
+  /** It was run before, but the step or the program it runs is different now. */
+  changedSince: boolean
+}
+export interface NewSetupStep { title: string; why?: string; windows?: string; unix?: string; args?: string[]; open?: boolean; optional?: boolean }
+export interface SetupPoll { lines: string[]; done: boolean; exitCode?: number | null; message?: string }
 export interface RenamedFile { id: string; filename: string; from: string; to: string }
 export interface GithubState { connected: boolean; login?: string; /** Token is kept for this session only (no system keychain). */ sessionOnly?: boolean }
 export type Done<T> = ({ ok: true } & T) | { ok: false; error: string; cancelled?: boolean }
@@ -202,6 +213,15 @@ export interface Api {
     state(): Promise<GitState>
     /** Runs the platform's installer route. Always followed by state() to see whether it worked. */
     install(): Promise<{ ok: boolean; message: string }>
+  }
+  setup: {
+    /** `folders`: the folder names this preset knows (what a step can point at with `{{var:NAME}}`). */
+    plan(path: string): Promise<{ steps: SetupStepInfo[]; folders: string[] }>
+    /** Starts the step (never by itself: only when the person pressed the button). */
+    run(path: string, stepId: string): Promise<Done<{ runId: string }>>
+    poll(runId: string, from: number): Promise<SetupPoll>
+    add(path: string, step: NewSetupStep): Promise<Done<object>>
+    remove(path: string, stepId: string): Promise<Done<object>>
   }
   github: {
     state(): Promise<GithubState>

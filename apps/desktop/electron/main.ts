@@ -9,7 +9,7 @@ import {
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
   assetBundlePath, attachSecrets, commitAll, fetchRepo, githubRenameRepo, githubRepoName, parseGithubUrl, pendingForObs, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
   renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, renameSourceInObs, RenameError,
-  findRenamedAssets, missingFilesInObs, replacePathInObs, applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
+  findRenamedAssets, missingFilesInObs, planSetup, setupSteps, findPython, runPlannedStep, resolveString, type PlannedStep, replacePathInObs, applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
   readLocalKeys, readLocalSettings, writeLocalKeys, writeLocalSettings, cloudSkippedPaths, writeExclude, LOCAL_DIR, EXTRAS_EXT, type LocalSettings,
   listPlatformSources, DEFAULT_PLATFORM_MAP, withIdentity, listAuthors, rewriteAuthor, discardNameChangeBackup, putFile, getFile, testStorage, objectKey, validateTarget, regionFromEndpoint, sha256OfFile, localMediaPath,
   type GitIdentity, type StorageTarget, type StorageKeys,
@@ -382,7 +382,7 @@ function memoised<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<
   v.catch(() => { if (memo.get(key)?.v === v) memo.delete(key) })
   return v
 }
-const READ_ONLY = new Set(['installs:list', 'repos:list', 'repos:live', 'repos:needs', 'repos:renamed', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'github:orgs', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
+const READ_ONLY = new Set(['installs:list', 'repos:list', 'repos:live', 'repos:needs', 'repos:renamed', 'setup:plan', 'setup:poll', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'github:orgs', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
 
 // ── IPC ──────────────────────────────────────────────────────────────────────
 function registerIpc() {
@@ -830,6 +830,83 @@ function registerIpc() {
     return r.ok ? { ok: true, kept: r.kept } : { ok: false, error: r.message }
   })
   handle('repos:log', (_e, p: string) => repoLog(p, 15, gitRunner()))
+  // ── setup steps: what a preset does beyond OBS settings (see core/setup.ts). Never run by themselves. ──
+  const ranPath = () => path.join(app.getPath('userData'), 'setup-ran.json')
+  const readRan = (): Record<string, Record<string, string>> => { try { return JSON.parse(fs.readFileSync(ranPath(), 'utf8')) } catch { return {} } }
+  let pythonMemo: { at: number; v: ReturnType<typeof findPython> } | undefined
+  const pythonNow = () => { if (!pythonMemo || Date.now() - pythonMemo.at > 60_000) pythonMemo = { at: Date.now(), v: findPython(host.platform) }; return pythonMemo.v }
+  /** Where each folder variable of a preset is on this computer: what was chosen when it was applied, else the suggestion. */
+  const folderVars = (m: ReturnType<typeof readBundleDir>['manifest']): Record<string, string> => {
+    const chosen = locationsFor(m.id).variables ?? {}
+    const out: Record<string, string> = {}
+    const r = { asset: () => undefined, variable: () => undefined, builtin: (n: string) => (n === 'home' ? host.home : n === 'documents' ? path.join(host.home, 'Documents') : n === 'desktop' ? path.join(host.home, 'Desktop') : n === 'music' ? path.join(host.home, 'Music') : n === 'pictures' ? path.join(host.home, 'Pictures') : n === 'videos' ? path.join(host.home, 'Videos') : undefined), missing: () => {} }
+    for (const v of m.variables) if (v.kind === 'path') { const val = (chosen[v.name] || '').trim() || (v.default ? resolveString(v.default, r as never, host.platform) : ''); if (val) out[v.name] = val }
+    return out
+  }
+  const setupPlan = (p: string): (PlannedStep & { ranBefore: boolean; changedSince: boolean })[] => {
+    const m = readBundleDir(p, { keepMissing: true }).manifest
+    const ran = readRan()[m.id] ?? {}
+    return planSetup(m, { platform: host.platform, home: host.home, presetDir: p, folders: folderVars(m), python: pythonNow() }).map((s) => ({ ...s, ranBefore: !!s.fingerprint && ran[s.id] === s.fingerprint, changedSince: !!s.fingerprint && !!ran[s.id] && ran[s.id] !== s.fingerprint }))
+  }
+  const setupRuns = new Map<string, { lines: string[]; done: boolean; exitCode?: number | null; message?: string }>()
+  handle('setup:plan', (_e, p: string) => memoised(`setup|${p}`, 5_000, () => heavy(() => ({ steps: setupPlan(p), folders: Object.keys(folderVars(readBundleDir(p, { keepMissing: true }).manifest)) }))))
+  handle('setup:run', async (_e, p: string, stepId: string) => {
+    try {
+      const step = setupPlan(p).find((s) => s.id === stepId)
+      if (!step) return { ok: false, error: 'That step is not in this preset any more.' }
+      if (!step.command) return { ok: false, error: step.problem ?? 'This step cannot run here.' }
+      const m = readBundleDir(p, { keepMissing: true }).manifest
+      const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const state: { lines: string[]; done: boolean; exitCode?: number | null; message?: string } = { lines: [], done: false }
+      setupRuns.set(runId, state)
+      void runPlannedStep(step, (l) => { state.lines.push(l); if (state.lines.length > 2000) state.lines.splice(0, 500) }, { platform: host.platform }).then((r) => {
+        state.done = true; state.exitCode = r.exitCode
+        if (r.failedToStart) state.message = `It could not be started: ${r.failedToStart}`
+        else if (r.timedOut) state.message = 'It took too long and was stopped.'
+        else if (r.exitCode !== 0) state.message = `It did not finish (it stopped with code ${r.exitCode}).`
+        if (r.exitCode === 0) { const all = readRan(); all[m.id] = { ...(all[m.id] ?? {}), [step.id]: step.fingerprint }; try { fs.writeFileSync(ranPath(), JSON.stringify(all, null, 2)) } catch { /* only a reminder */ } }
+      })
+      return { ok: true, runId }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
+  handle('setup:poll', (_e, runId: string, from: number) => {
+    const s = setupRuns.get(runId)
+    if (!s) return { lines: [], done: true, exitCode: null, message: 'That run is not known any more.' }
+    return { lines: s.lines.slice(from), done: s.done, exitCode: s.exitCode, message: s.message }
+  })
+  handle('setup:add', async (_e, p: string, step: { title: string; why?: string; windows?: string; unix?: string; args?: string[]; open?: boolean; optional?: boolean }) => {
+    try {
+      const id = slug(step.title).slice(0, 40) || 'step'
+      const cmd = (program?: string) => (program && program.trim() ? { program: program.trim(), ...(step.args?.length ? { args: step.args } : {}) } : undefined)
+      const run: Record<string, unknown> = {}
+      const w = cmd(step.windows), u = cmd(step.unix)
+      if (w) run.win32 = w
+      if (u) { run.linux = u; run.darwin = u }
+      const m = readBundleDir(p, { keepMissing: true }).manifest
+      const existing = (m.setup?.steps ?? []) as { id?: string }[]
+      let uid = id; for (let n = 2; existing.some((x) => x.id === uid); n++) uid = `${id}-${n}`
+      const entry = { id: uid, title: step.title.trim(), ...(step.why?.trim() ? { why: step.why.trim() } : {}), run, ...(step.open ? { mode: 'open' } : {}), ...(step.optional ? { optional: true } : {}) }
+      if (!setupSteps({ setup: { steps: [entry] } } as never).length) return { ok: false, error: 'Give the step a name and the program it runs, for Windows, for Linux and Mac, or both.' }
+      m.setup = { steps: [...existing, entry] }
+      fs.writeFileSync(path.join(p, 'manifest.json'), serializeManifest(m))
+      await commitAll(p, `Added the setup step “${entry.title}”`, gitRunner(p))
+      return { ok: true }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
+  handle('setup:remove', async (_e, p: string, stepId: string) => {
+    try {
+      const m = readBundleDir(p, { keepMissing: true }).manifest
+      const steps = ((m.setup?.steps ?? []) as { id?: string; title?: string }[])
+      const gone = steps.find((x) => x.id === stepId)
+      if (!gone) return { ok: false, error: 'That step is not in this preset.' }
+      m.setup = { steps: steps.filter((x) => x.id !== stepId) }
+      if (!m.setup.steps.length) delete (m as { setup?: unknown }).setup
+      fs.writeFileSync(path.join(p, 'manifest.json'), serializeManifest(m))
+      await commitAll(p, `Removed the setup step “${gone.title ?? stepId}”`, gitRunner(p))
+      return { ok: true }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
+
   handle('repos:renamed', (_e, p: string) => memoised(`renamed|${p}`, 15_000, () => heavy(() => renamedFiles(p))))
   /** "Use the new name": remember where the file is now and, when OBS is closed, point OBS's scenes at it. */
   handle('repos:acceptRename', async (_e, p: string, id: string, to: string, installId?: string) => {

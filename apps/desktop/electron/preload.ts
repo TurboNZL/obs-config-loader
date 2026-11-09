@@ -35,6 +35,13 @@ const api: Api = {
     state: () => call('git:state'),
     install: () => call('git:install'),
   },
+  setup: {
+    plan: (p) => call('setup:plan', p),
+    run: (p, id) => call('setup:run', p, id),
+    poll: (runId, from) => call('setup:poll', runId, from),
+    add: (p, s) => call('setup:add', p, s),
+    remove: (p, id) => call('setup:remove', p, id),
+  },
   github: {
     state: () => call('github:state'),
     tokenUrl: 'https://github.com/settings/tokens/new?scopes=repo&description=OBS%20Config%20Loader',

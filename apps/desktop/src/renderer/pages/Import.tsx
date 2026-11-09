@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { SetupSteps } from '../components/SetupSteps'
 import type { RepoInfo, BundleSummary, ConflictMode, ImportReport, ImportRequest, InstallInfo } from '../../../electron/api'
 import { Icon } from '../components/Icon'
 import { Card, Chip, Choice, Field, KIND_LABEL, Message, Page, Step, plural } from '../ui'
@@ -171,6 +172,7 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
             <strong>Done.</strong> Your setup is now in {install.label}.
             {done.backedUp > 0 && <> {plural(done.backedUp, 'file')} it replaced {done.backedUp === 1 ? 'was' : 'were'} backed up first.</>}
           </Message>
+          {bundle?.repoDir && <Card title="One more thing"><SetupSteps presetPath={bundle.repoDir} title="Finish setting up" /></Card>}
           <Card title="What now?">
             <div className="flex gap-2 flex-wrap">
               {install.launch && <button className="btn btn-accent px-4 py-2" onClick={() => void window.obsLoader.installs.launch(install.id).then((r) => setNote(r.ok ? 'Starting OBS…' : r.message))}>Start OBS</button>}

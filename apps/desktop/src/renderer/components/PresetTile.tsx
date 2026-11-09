@@ -7,6 +7,7 @@ import { ExportPanel } from './ExportPanel'
 import { StoragePanel } from './StoragePanel'
 import { Details, RenameOnline, type Msg } from './PresetDetails'
 import { OwnerPick } from './OwnerPick'
+import { SetupSteps } from './SetupSteps'
 
 type Pending = { kind: 'save'; files: string[] } | { kind: 'pull'; files: string[] } | null
 
@@ -397,6 +398,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
             <Choice checked disabled={busy} onChange={(on) => !on && toggleOnline(false)} title="Back up online (GitHub)" help="Every save is uploaded automatically, so a copy is always on GitHub." />
           </div>}
 
+          <SetupSteps presetPath={repo.path} authoring />
           <Details repo={repo} installId={linkedId} refresh={refresh} obsNote notify={notify} />
           {online && gh.connected && repo.online && <RenameOnline repo={repo} refresh={refresh} notify={notify} />}
           <div className="space-y-1">
