@@ -83,6 +83,7 @@ export function StoragePanel({ repo, ov, changed }: { repo: RepoInfo; ov: Preset
             : <button className="btn px-3 py-1 mt-1" onClick={() => setConnecting(true)}>Enter the keys…</button>}
         </Message>
       )}
+      <PairBox repo={repo} hasStorage={!!ov.storage} own={!!ov.storage?.own} done={async (text) => { setMsg({ tone: 'good', text }); await changed() }} />
       {missingStored.length > 0 && ov.storage?.connected && (
         <Message tone="warn">
           <p>{missingStored.length === 1 ? '1 file is' : `${missingStored.length} files are`} in your big-file storage but not on this computer yet ({missingStored.map((f) => f.filename).join(', ')}).</p>
@@ -153,4 +154,34 @@ function useStorageOn(): boolean {
   const [on, setOn] = useState(false)
   useEffect(() => { void window.obsLoader.storage.state().then((s) => setOn(!!s.target && s.hasKeys)) }, [])
   return on
+}
+
+
+/** A preset's own big-file storage, shared with one pasteable line. The line holds the access keys: it is a secret. */
+function PairBox({ repo, hasStorage, own, done }: { repo: RepoInfo; hasStorage: boolean; own: boolean; done: (text: string) => Promise<void> }) {
+  const [code, setCode] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  return (
+    <details className="text-sm">
+      <summary className="cursor-pointer text-muted">Storage pairing code{own ? ' (this preset has its own storage)' : ''}</summary>
+      <div className="mt-2 space-y-2">
+        <p className="text-xs text-muted">Big files can live in a storage of their own for each preset. A pairing code is one line that lets another computer use the same storage for this preset. It contains the access keys, so send it privately. It stays on this computer and is never uploaded with the preset.</p>
+        {hasStorage && (
+          <button className="btn px-3 py-1.5" onClick={async () => {
+            const r = await window.obsLoader.storage.pairCode(repo.path)
+            if (!r.ok) { setErr(r.error); return }
+            await navigator.clipboard.writeText(r.code); setErr(null); await done('Pairing code copied. Paste it into a private message.')
+          }}>Copy this preset’s pairing code</button>
+        )}
+        <textarea className="input w-full px-2 py-1.5 mono text-xs" rows={2} placeholder="Paste a pairing code here (starts with OBSSTORE1:)" value={code} onChange={(e) => setCode(e.target.value)} aria-label="Storage pairing code" />
+        {err && <Message tone="bad">{err}</Message>}
+        <button className="btn px-3 py-1.5" disabled={busy || !code.trim()} onClick={async () => {
+          setBusy(true); const r = await window.obsLoader.storage.pair(repo.path, code); setBusy(false)
+          if (!r.ok) { setErr(r.error); return }
+          setErr(null); setCode(''); await done('Paired. This preset now uses that storage.')
+        }}>{busy ? 'Checking…' : 'Use this code for this preset'}</button>
+      </div>
+    </details>
+  )
 }

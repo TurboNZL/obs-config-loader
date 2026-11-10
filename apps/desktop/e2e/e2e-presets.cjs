@@ -308,7 +308,7 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   await sc.locator('button:has-text("Add a setup step")').click()
   await sc.locator('input[placeholder="Set up the voice switcher"]').fill('Say hi')
   await sc.locator('input[placeholder*="install.sh"]').fill('{{python}}')
-  await sc.locator('textarea').fill('{{bundle}}/scripts/switcher/switcher.py') // this preset's own copy of its script
+  await sc.locator("textarea:not([aria-label=\"Storage pairing code\"])").fill('{{bundle}}/scripts/switcher/switcher.py') // this preset's own copy of its script
   await sc.locator('button:has-text("Add it")').click()
   await sc.locator('text=Say hi').first().waitFor()
   check('the step is listed with a Run button and nothing ran yet', (await sc.locator('button:has-text("Run")').count()) >= 1 && !(await sc.innerText()).includes('Finished.'))

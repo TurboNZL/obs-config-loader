@@ -117,3 +117,17 @@ describe('keeping a big file in storage and getting it back', () => {
     expect((r as { message: string }).message).toMatch(/Could not reach the storage/)
   })
 })
+
+import { decodePairCode, encodePairCode } from '../src/storage.js'
+describe('storage pairing code', () => {
+  const t = { endpoint: 's3.us-west-004.backblazeb2.com', region: 'us-west-004', bucket: 'my-bucket', prefix: 'obs-config-loader/' } as never
+  const k = { accessKeyId: 'AK', secretAccessKey: 'SECRET' }
+  it('round trips, even with words and line breaks around it', () => {
+    const code = encodePairCode(t, k)
+    expect(decodePairCode(`here you go:\n${code.slice(0, 20)}\n${code.slice(20)} thanks!`)).toEqual({ target: t, keys: k })
+  })
+  it('refuses junk and damage in plain words', () => {
+    expect(() => decodePairCode('hello')).toThrow(/not a storage pairing code/)
+    expect(() => decodePairCode('OBSSTORE1:abcd.')).toThrow(/damaged/)
+  })
+})

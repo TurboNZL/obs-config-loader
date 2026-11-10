@@ -84,6 +84,8 @@ const api: Api = {
     state: () => call('storage:state'),
     save: (t, k) => call('storage:save', t, k),
     forget: () => call('storage:forget'),
+    pairCode: (p) => call('storage:pairCode', p),
+    pair: (p, code) => call('storage:pair', p, code),
     onProgress: (cb) => {
       const h = (_e: unknown, p: Parameters<typeof cb>[0]) => cb(p)
       ipcRenderer.on('storage:progress', h)

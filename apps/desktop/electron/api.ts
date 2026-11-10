@@ -131,7 +131,7 @@ export interface PresetOverview {
   sizeBytes: number
   maxUploadBytes: number
   /** Where this preset keeps big files, when it uses a storage; `connected`: this computer has the keys. */
-  storage?: { label: string; connected: boolean; target: StorageTargetInfo }
+  storage?: { label: string; connected: boolean; target: StorageTargetInfo; /** This preset has its own keys (a pairing code), not Settings'. */ own?: boolean }
 }
 export interface StoragePatch {
   /** `layouts` / `outputs`: ids that are NOT uploaded. `media`: ids of files that ARE uploaded. */
@@ -279,6 +279,10 @@ export interface Api {
     /** Tries the storage (write, read, remove) before keeping anything. `keys` null: keep the keys already saved. */
     save(target: StorageTargetInfo, keys: { accessKeyId: string; secretAccessKey: string } | null): Promise<Done<{ sessionOnly: boolean }>>
     forget(): Promise<void>
+    /** One line (a secret) that lets another computer use this preset's storage. */
+    pairCode(presetPath: string): Promise<Done<{ code: string }>>
+    /** Use a pairing code for this preset only. */
+    pair(presetPath: string, code: string): Promise<Done<object>>
     onProgress(cb: (p: { id: string; filename: string; done: number; total: number }) => void): () => void
   }
   settings: {

@@ -2,6 +2,7 @@ import * as fs from 'node:fs'
 import * as nodePath from 'node:path'
 import * as crypto from 'node:crypto'
 import * as os from 'node:os'
+import * as zlib from 'node:zlib'
 import * as http from 'node:http'
 import * as https from 'node:https'
 import type { StorageTarget } from './local.js'
@@ -186,4 +187,27 @@ export async function testStorage(t: StorageTarget, keys: StorageKeys): Promise<
     } finally { fs.rmSync(tmp, { force: true }) }
     return { ok: true }
   } catch (e) { return { ok: false, message: (e as Error).message } }
+}
+
+// ── pairing code: one line that holds a preset's storage address and access keys ────────────────────────────────
+const PAIR_PREFIX = 'OBSSTORE1:'
+
+/** A single pasteable line. It holds the access keys, so it is a secret: it is never uploaded or written into what git tracks. */
+export function encodePairCode(target: StorageTarget, keys: StorageKeys): string {
+  const raw = zlib.deflateSync(Buffer.from(JSON.stringify({ t: target, k: keys })))
+  return PAIR_PREFIX + raw.toString('base64url') + '.'
+}
+
+/** The reverse. Tolerates spaces, line breaks and words around the code; throws a plain sentence when it is not one. */
+export function decodePairCode(text: string): { target: StorageTarget; keys: StorageKeys } {
+  const m = /OBSSTORE1:([A-Za-z0-9_\-\s]+?)\./.exec(text)
+  if (!m) throw new Error('That is not a storage pairing code. It starts with OBSSTORE1: and ends with a full stop.')
+  try {
+    const j = JSON.parse(zlib.inflateSync(Buffer.from(m[1].replace(/\s+/g, ''), 'base64url')).toString('utf8')) as { t?: StorageTarget; k?: StorageKeys }
+    const bad = j.t ? validateTarget(j.t) : 'no address'
+    if (bad || !j.t || !j.k?.accessKeyId || !j.k?.secretAccessKey) throw new Error(bad ?? 'missing keys')
+    return { target: j.t, keys: { accessKeyId: j.k.accessKeyId, secretAccessKey: j.k.secretAccessKey } }
+  } catch {
+    throw new Error('That pairing code is damaged. Copy it again, all of it, up to and including the full stop.')
+  }
 }
