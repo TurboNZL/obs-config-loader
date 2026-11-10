@@ -1,6 +1,6 @@
 import * as fs from 'node:fs'
 import * as nodePath from 'node:path'
-import { defaultGit, commitAll, initRepo, repoStatus, pushRepo, type GitRunner, type PushResult } from './repo.js'
+import { defaultGit, commitAll, fetchRepo, initRepo, repoStatus, pushRepo, type GitRunner, type PushResult } from './repo.js'
 import { writeBundleDir } from './bundleIO.js'
 import type { Bundle } from './types.js'
 
@@ -63,7 +63,7 @@ export function redact(text: string, token: string | undefined): string {
 
 // ── GitHub (REST) ────────────────────────────────────────────────────────────
 
-export interface GithubRepo { name: string; fullName: string; cloneUrl: string; htmlUrl: string; private: boolean }
+export interface GithubRepo { name: string; fullName: string; cloneUrl: string; htmlUrl: string; private: boolean; defaultBranch?: string }
 export class GithubError extends Error {
   constructor(message: string, readonly status: number) { super(message) }
 }
@@ -101,7 +101,16 @@ async function gh<T>(token: string, path: string, init: RequestInit = {}, f: Fet
   return (await res.json()) as T
 }
 
-const toRepo = (r: any): GithubRepo => ({ name: r.name, fullName: r.full_name, cloneUrl: r.clone_url, htmlUrl: r.html_url, private: !!r.private })
+const toRepo = (r: any): GithubRepo => ({ name: r.name, fullName: r.full_name, cloneUrl: r.clone_url, htmlUrl: r.html_url, private: !!r.private, ...(r.default_branch ? { defaultBranch: r.default_branch } : {}) })
+
+/** One repository, to use the one that already exists. */
+export async function githubGetRepo(token: string, owner: string, name: string, f?: Fetch): Promise<GithubRepo> {
+  try { return toRepo(await gh<any>(token, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, {}, f)) }
+  catch (e) {
+    if (e instanceof GithubError && (e.status === 404 || e.status === 403)) throw new GithubError(`GitHub would not show the repository “${owner}/${name}”. Check the name, and that your token is approved for ${owner}.`, e.status)
+    throw e
+  }
+}
 
 /**
  * Who the token belongs to, and the name and address saves are signed with by default: the GitHub name (or user name) and
@@ -180,15 +189,32 @@ export const GITHUB_TOKEN_URL =
 
 /** Create the repository on GitHub, point `origin` at it, and push. One step for the user. */
 export async function publishToGithub(
-  dir: string, token: string, name: string, opts: { private: boolean; org?: string }, f?: Fetch,
-): Promise<{ repo: GithubRepo; push: PushResult }> {
+  dir: string, token: string, name: string, opts: { private: boolean; org?: string; replaceExisting?: boolean }, f?: Fetch,
+): Promise<{ repo: GithubRepo; push: PushResult; replaced?: boolean }> {
   const git = githubAuthGit(token)
   const st = await repoStatus(dir, git)
   if (!st.isRepo) throw new Error('That folder is not a git repository.')
   if (st.remote) throw new Error('This repository already has a remote. Change its address instead.')
-  const repo = await githubCreateRepo(token, githubRepoName(name), opts, f)
+  let repo: GithubRepo
+  let replaced = false
+  try {
+    repo = await githubCreateRepo(token, githubRepoName(name), opts, f)
+  } catch (e) {
+    // "it already exists": with the person's say-so, use that one and put this preset in it, replacing what it holds
+    if (!(opts.replaceExisting && e instanceof GithubError && e.status === 422)) throw e
+    const owner = opts.org || (await githubWhoAmI(token, f)).login
+    repo = await githubGetRepo(token, owner, githubRepoName(name), f)
+    replaced = true
+  }
   const set = await setRemote(dir, repo.cloneUrl, git)
   if (!set.ok) throw new Error(set.message)
+  if (replaced) {
+    const fetched = await fetchRepo(dir, git)
+    if (!fetched.ok) throw new Error(`Could not look at ${repo.fullName}: ${fetched.message}`)
+    // the repository's own main branch is the one that gets replaced, whatever this computer called its branch
+    if (repo.defaultBranch) await git(['branch', '-M', repo.defaultBranch], dir)
+    return { repo, push: await pushRepo(dir, git, { force: true }), replaced }
+  }
   return { repo, push: await pushRepo(dir, git) }
 }
 

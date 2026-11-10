@@ -14,6 +14,7 @@ the list of plugins it needs. The same setup works on Linux, Windows and macOS, 
 - Git-backed config repositories with large files kept outside git as placeholders.
 - Make a separate OBS with its own settings and plugins (Linux system package and Flatpak), so a heavy plugin only runs where it is needed.
 - One setup for several operating systems: capture sources are kept per OS.
+- **Setups that install themselves**: a preset can carry setup steps (run the installer for a helper program, set up a script) that people run with a button, so nobody opens a terminal. Good for a complicated setup you share with people who are not technical: see `docs/guides/SETUP_STEPS.md`.
 
 ## Install
 Every merge to `main` publishes a release with installers; installed copies update themselves.

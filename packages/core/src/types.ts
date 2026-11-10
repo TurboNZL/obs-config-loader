@@ -106,6 +106,8 @@ export interface Manifest {
    * save): `{ "<source id>": { "<win32|darwin|linux|linux-pipewire>": "<id to use>" | null (hide it) } }`.
    * They win over the built-in table.
    */
+  /** Steps that set the rest of the setup up (see `setup.ts`). Never run without the person pressing the button. */
+  setup?: { steps: unknown[] }
   /** Script folders whose files are kept with the setup (see `ScriptProject`). */
   projects?: ScriptProject[]
   platformOverrides?: Record<string, Partial<Record<Platform | 'linux-pipewire', string | null>>>

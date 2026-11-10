@@ -201,5 +201,46 @@ export function renameSourceInObs(configDir: string, layout: string, from: strin
   return true
 }
 
+/** Paths in this OBS's scenes that point at a file that is not there (a renamed or moved file shows up here). */
+export function missingFilesInObs(configDir: string): string[] {
+  const dir = nodePath.join(configDir, 'basic', 'scenes')
+  let files: string[] = []
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')) } catch { return [] }
+  const found = new Set<string>()
+  const walk = (o: any): void => {
+    if (typeof o === 'string') { if (/^(\/|[A-Za-z]:[\\/])/.test(o) && /\.[A-Za-z0-9]{1,5}$/.test(o) && !fs.existsSync(o)) found.add(o) }
+    else if (Array.isArray(o)) o.forEach(walk)
+    else if (o && typeof o === 'object') Object.values(o).forEach(walk)
+  }
+  for (const f of files) { try { walk(JSON.parse(fs.readFileSync(nodePath.join(dir, f), 'utf8').replace(/^\uFEFF/, ''))) } catch { /* not readable: nothing to learn */ } }
+  return [...found]
+}
+
+/**
+ * A file the scenes use was renamed or moved: point every source at the new path (exact matches only), in every scene layout of an
+ * OBS settings folder. OBS must not be running. Returns how many places were changed.
+ */
+export function replacePathInObs(configDir: string, from: string, to: string): number {
+  const dir = nodePath.join(configDir, 'basic', 'scenes')
+  let files: string[] = []
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')) } catch { return 0 }
+  const same = (a: string) => a === from || a.replace(/\\/g, '/') === from.replace(/\\/g, '/')
+  let changed = 0
+  for (const f of files) {
+    let json: any
+    try { json = JSON.parse(fs.readFileSync(nodePath.join(dir, f), 'utf8').replace(/^\uFEFF/, '')) } catch { continue }
+    let n = 0
+    const walk = (o: any): any => {
+      if (typeof o === 'string') { if (same(o)) { n++; return to } return o }
+      if (Array.isArray(o)) return o.map(walk)
+      if (o && typeof o === 'object') return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, walk(v)]))
+      return o
+    }
+    const next = walk(json)
+    if (n) { fs.writeFileSync(nodePath.join(dir, f), JSON.stringify(next, null, 4) + '\n'); changed += n }
+  }
+  return changed
+}
+
 export const obsHasLayout = (configDir: string, name: string) => fs.existsSync(nodePath.join(configDir, 'basic', 'scenes', fileSafe(name) + '.json'))
 export const obsHasOutput = (configDir: string, name: string) => fs.existsSync(nodePath.join(configDir, 'basic', 'profiles', fileSafe(name)))

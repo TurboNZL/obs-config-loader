@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AssetNeed, ChangeDetail, GithubState, InstallInfo, LogEntry, OnlineComparison, PresetOverview, PullResult, RepoInfo, SaveResult } from '../../../electron/api'
+import type { AssetNeed, ChangeDetail, RenamedFile, GithubState, InstallInfo, LogEntry, OnlineComparison, PresetOverview, PullResult, RepoInfo, SaveResult } from '../../../electron/api'
 import { Chip, Choice, Field, IconButton, KIND_LABEL, KindPanel, Message, plural, size } from '../ui'
 import { Icon } from './Icon'
 import { DiffView, friendlyFile } from './DiffView'
@@ -7,6 +7,7 @@ import { ExportPanel } from './ExportPanel'
 import { StoragePanel } from './StoragePanel'
 import { Details, RenameOnline, type Msg } from './PresetDetails'
 import { OwnerPick } from './OwnerPick'
+import { SetupSteps } from './SetupSteps'
 
 type Pending = { kind: 'save'; files: string[] } | { kind: 'pull'; files: string[] } | null
 
@@ -64,6 +65,16 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     void window.obsLoader.repos.live(repo.path, linkedId, true).then((r) => { if (!('error' in r)) setDetails(r.details) })
   }, [showDiff]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void window.obsLoader.repos.needs(repo.path).then(setNeeds).catch(() => setNeeds([])) }, [repo.path, st.behind])
+  // a file renamed outside the app is the same file: say so, instead of asking for it again
+  const [renamed, setRenamed] = useState<RenamedFile[]>([])
+  useEffect(() => { void window.obsLoader.repos.renamed(repo.path).then(setRenamed).catch(() => setRenamed([])) }, [repo.path, st.behind, st.commits])
+  const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p
+  const useNewName = async (r: RenamedFile) => {
+    const res = await window.obsLoader.repos.acceptRename(repo.path, r.id, r.to, linkedId)
+    if (!res.ok) { setMsg({ tone: 'bad', text: res.error }); return }
+    setRenamed(await window.obsLoader.repos.renamed(repo.path)); setNeeds(await window.obsLoader.repos.needs(repo.path)); void check()
+    setMsg({ tone: 'good', text: res.obsRunning ? `Noted: “${baseName(r.from)}” is now “${baseName(r.to)}”. OBS is open, so close it and press the button again to point OBS at the new name.` : res.fixedInObs > 0 ? `Noted, and OBS now uses “${baseName(r.to)}”.` : `Noted: “${baseName(r.from)}” is now “${baseName(r.to)}”.` })
+  }
 
   // an online preset asks what is new when it is shown, so "newer version online" is true and not last time's guess
   const [checked, setChecked] = useState(false)
@@ -140,9 +151,13 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     setSure(null)
     setMsg(r.ok ? { tone: 'good', text: 'This computer now has the online version. Your previous one is kept in History. Apply it to OBS to use it.' } : { tone: 'bad', text: r.error })
   })
-  const toggleOnline = (on: boolean) => run(async () => {
-    const r = await window.obsLoader.presets.setOnline(repo.path, on, ghName.trim() || repo.name, priv, org || undefined)
+  // a repository with that name is already on GitHub: the person may want exactly that one (say, an organisation's) to hold this preset
+  const [replaceAsk, setReplaceAsk] = useState(false)
+  const toggleOnline = (on: boolean, replace = false) => run(async () => {
+    const r = await window.obsLoader.presets.setOnline(repo.path, on, ghName.trim() || repo.name, priv, org || undefined, replace)
+    setReplaceAsk(false)
     if (r.ok) setMsg({ tone: 'good', text: on ? (r.url ? `Backed up online at ${r.url}.` : 'Backed up online.') : 'Online backup is off for this preset. What is already on GitHub stays there.' })
+    else if (on && !replace && /already (has|have) a repository called/.test(r.error)) { setMsg(null); setReplaceAsk(true) }
     else setMsg({ tone: 'warn', text: r.error })
   })
   const saveRemote = () => run(async () => {
@@ -254,6 +269,15 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
               title="Back up online (GitHub)"
               help={gh.connected ? 'Keeps a copy on GitHub, updated whenever you save, so you can use this preset on your other computers. Only the parts ticked in the GitHub column above go up.' : undefined}
             />
+            {replaceAsk && (
+              <Message tone="warn">
+                <strong>“OBS-Config-{ghName.trim() || repo.name}” already exists{org ? ` in ${org}` : ' on your GitHub'}.</strong> Use that one, and replace everything in it with this preset? Whatever is in it now stops being the current version (its older saves stay in GitHub's history).
+                <div className="mt-2 flex gap-2 flex-wrap">
+                  <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => toggleOnline(true, true)}>Yes, replace what is in it</button>
+                  <button className="btn btn-ghost px-3 py-1" onClick={() => setReplaceAsk(false)}>No, pick another name</button>
+                </div>
+              </Message>
+            )}
             {gh.connected && (
               <>
                 <Field label="Name on GitHub" hint="Always starts with OBS-Config- so they are easy to find.">
@@ -335,10 +359,20 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         </Message>
       )}
 
-      {needs.length > 0 && (
+      {renamed.map((r) => (
+        <Message key={r.id} tone="warn">
+          <strong>“{baseName(r.from)}” looks like it was renamed to “{baseName(r.to)}”.</strong> It is the same file, so nothing is lost.
+          <div className="mt-2 flex gap-2 items-center flex-wrap">
+            <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => void useNewName(r)}>Use the new name</button>
+            <span className="text-xs text-muted">{linkedId ? `The preset and ${obsName} will both follow it.` : 'The preset will follow it.'}</span>
+          </div>
+        </Message>
+      ))}
+
+      {needs.filter((n) => !renamed.some((r) => r.id === n.id)).length > 0 && (
         <div className="space-y-1">
           <h3 className="font-semibold text-sm flex items-center gap-2"><Icon name="image" size={14} /> Big files this computer still needs</h3>
-          {needs.map((n) => (
+          {needs.filter((n) => !renamed.some((r) => r.id === n.id)).map((n) => (
             <div key={n.id} className="bt-row flex items-center gap-3 py-1">
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium">{n.filename} {n.reason === 'changed' && <Chip tone="warn">newer version in the preset</Chip>}</div>
@@ -364,6 +398,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
             <Choice checked disabled={busy} onChange={(on) => !on && toggleOnline(false)} title="Back up online (GitHub)" help="Every save is uploaded automatically, so a copy is always on GitHub." />
           </div>}
 
+          <SetupSteps presetPath={repo.path} authoring />
           <Details repo={repo} installId={linkedId} refresh={refresh} obsNote notify={notify} />
           {online && gh.connected && repo.online && <RenameOnline repo={repo} refresh={refresh} notify={notify} />}
           <div className="space-y-1">

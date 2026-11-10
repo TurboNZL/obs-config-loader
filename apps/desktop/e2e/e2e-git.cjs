@@ -46,6 +46,10 @@ const server = http.createServer((req, res) => {
       fs.renameSync(path.join(remotes, old + '.git'), path.join(remotes, nn + '.git'))
       return send(200, row(nn))
     }
+    if (req.method === 'GET' && /^\/repos\/streamer\/[^/]+$/.test(req.url)) {
+      const n = decodeURIComponent(req.url.split('/')[3])
+      return fs.existsSync(path.join(remotes, n + '.git')) ? send(200, { ...row(n), default_branch: 'main' }) : send(404, { message: 'Not Found' })
+    }
     if (req.url.startsWith('/user/repos') && req.method === 'POST') {
       const n = JSON.parse(body).name
       if (fs.existsSync(path.join(remotes, n + '.git'))) return send(422, { message: 'Repository creation failed.', errors: [{ message: 'name already exists on this account' }] })
@@ -160,6 +164,30 @@ const reopen = async (page) => { await page.click('nav >> text=OBS on this compu
   await page.waitForSelector('text=Backed up online at')
   check('second GitHub repository exists with the save', git(path.join(remotes, 'OBS-Config-Second.git'), 'rev-list', '--count', 'main') === '1')
   check('GitHub was asked to create it once', apiCalls.filter((c) => c.startsWith('POST') ).length === 2)
+
+  console.log('6b. the name is already taken on GitHub: use that repository and replace what is in it')
+  {
+    const taken = path.join(remotes, 'OBS-Config-Taken.git')
+    git(remotes, 'init', '-q', '--bare', '--initial-branch=main', 'OBS-Config-Taken.git')
+    const seed = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-seed-')); git(seed, 'init', '-q', '--initial-branch=main')
+    fs.writeFileSync(path.join(seed, 'old-setup.txt'), 'an older, unrelated setup'); git(seed, 'add', '.')
+    git(seed, '-c', 'user.name=x', '-c', 'user.email=x@x', 'commit', '-qm', 'old'); git(seed, 'push', '-q', taken, 'main')
+    await page.click('button:has-text("Make a preset from my OBS")')
+    await page.fill('section.card:has-text("Make a preset from my OBS") input >> nth=0', 'Taken')
+    await page.click('button:has-text("Save preset")')
+    const t = card('Taken')
+    await t.waitFor()
+    await t.locator('label:has-text("Back up online") input').click()
+    await page.waitForSelector('text=already exists')
+    check('it says the repository already exists and asks before touching it', (await t.innerText()).includes('replace everything in it with this preset'))
+    check('nothing was changed on GitHub by asking', git(taken, 'ls-tree', '-r', '--name-only', 'main') === 'old-setup.txt')
+    await page.screenshot({ path: OUT + '/g2b-replace.png', fullPage: true })
+    await t.locator('button:has-text("Yes, replace what is in it")').click()
+    await t.locator('text=/Backed up online at .*OBS-Config-Taken/').waitFor()
+    const held = git(taken, 'ls-tree', '-r', '--name-only', 'main').split('\n')
+    check('the existing repository now holds the preset', held.includes('manifest.json'))
+    check('and no longer holds what was in it', !held.includes('old-setup.txt'))
+  }
 
   console.log('7. get an existing repository from my GitHub list')
   await second.locator('button[aria-label="Show details"]').click()

@@ -88,6 +88,18 @@ export type UpdateState = {
 }
 
 export interface GitState { available: boolean; help: GitInstallHelp; platform: string }
+export interface SetupStepInfo {
+  id: string; title: string; why?: string; mode: 'wait' | 'open'; optional: boolean
+  /** Exactly what will run, for the person to read. Absent when it cannot run here (then `problem` says why). */
+  command?: { program: string; args: string[]; cwd: string }
+  problem?: string
+  ranBefore: boolean
+  /** It was run before, but the step or the program it runs is different now. */
+  changedSince: boolean
+}
+export interface NewSetupStep { title: string; why?: string; windows?: string; unix?: string; args?: string[]; open?: boolean; optional?: boolean }
+export interface SetupPoll { lines: string[]; done: boolean; exitCode?: number | null; message?: string }
+export interface RenamedFile { id: string; filename: string; from: string; to: string }
 export interface GithubState { connected: boolean; login?: string; /** Token is kept for this session only (no system keychain). */ sessionOnly?: boolean }
 export type Done<T> = ({ ok: true } & T) | { ok: false; error: string; cancelled?: boolean }
 
@@ -202,6 +214,15 @@ export interface Api {
     /** Runs the platform's installer route. Always followed by state() to see whether it worked. */
     install(): Promise<{ ok: boolean; message: string }>
   }
+  setup: {
+    /** `folders`: the folder names this preset knows (what a step can point at with `{{var:NAME}}`). */
+    plan(path: string): Promise<{ steps: SetupStepInfo[]; folders: string[] }>
+    /** Starts the step (never by itself: only when the person pressed the button). */
+    run(path: string, stepId: string): Promise<Done<{ runId: string }>>
+    poll(runId: string, from: number): Promise<SetupPoll>
+    add(path: string, step: NewSetupStep): Promise<Done<object>>
+    remove(path: string, stepId: string): Promise<Done<object>>
+  }
   github: {
     state(): Promise<GithubState>
     tokenUrl: string
@@ -225,7 +246,7 @@ export interface Api {
     /** Link the preset to an OBS on this computer, or (null) unlink it: the preset stays exactly as it is. */
     setInstall(path: string, installId: string | null): Promise<void>
     setRemote(path: string, url: string): Promise<Done<object>>
-    publish(path: string, name: string, priv: boolean, org?: string): Promise<Done<{ url: string; pushed: boolean }>>
+    publish(path: string, name: string, priv: boolean, org?: string, replace?: boolean): Promise<Done<{ url: string; pushed: boolean }>>
     /** What OBS has changed since the last save (dry run). */
     /** `changed`: what OBS has that the preset does not. `pending`: what the preset has that this OBS does not (null: not known yet). */
     live(path: string, installId: string, withDiff?: boolean): Promise<{ changed: string[]; details?: ChangeDetail[]; pending?: string[] | null } | { error: string }>
@@ -238,6 +259,10 @@ export interface Api {
     useOnline(path: string): Promise<Done<{ kept: string }>>
     log(path: string): Promise<LogEntry[]>
     needs(path: string): Promise<AssetNeed[]>
+    /** Files renamed outside the app (same contents, same folder), by the name the preset knows. */
+    renamed(path: string): Promise<RenamedFile[]>
+    /** Remember the new name; with an OBS given and closed, its scenes are pointed at it too. */
+    acceptRename(path: string, id: string, to: string, installId?: string): Promise<Done<{ fixedInObs: number; obsRunning: boolean }>>
     setAsset(path: string, assetId: string, file: string): Promise<void>
     openFolder(path: string): Promise<void>
   }
@@ -278,7 +303,7 @@ export interface Api {
     rename(r: RenameRequest): Promise<Done<{ alsoInObs: boolean }>>
     /** Rename the GitHub repository (the app always keeps the `OBS-Config-` start). */
     renameOnline(path: string, name: string): Promise<Done<{ name: string }>>
-    setOnline(path: string, on: boolean, name: string, priv: boolean, org?: string): Promise<Done<{ url?: string; needsAccount?: boolean }>>
+    setOnline(path: string, on: boolean, name: string, priv: boolean, org?: string, replace?: boolean): Promise<Done<{ url?: string; needsAccount?: boolean }>>
     authors(path: string): Promise<AuthorsState>
     /** This preset's own name for saves (null: use the app-wide one). Future saves only. */
     setAuthor(path: string, who: Identity | null): Promise<Done<object>>

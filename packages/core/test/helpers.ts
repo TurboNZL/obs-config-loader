@@ -2,6 +2,9 @@ import * as fs from 'node:fs'
 import * as nodePath from 'node:path'
 import type { Host, ObsInstall, Platform } from '../src/index.js'
 
+/** Paths with `/` only. A pretend-Linux importer writes `/` even when the test itself runs on Windows, whose own join gives `\\`: compare through this. */
+export const fwd = (p: string) => p.replace(/\\/g, '/')
+
 export function host(platform: Platform, home: string): Host {
   return {
     platform, home, env: {},

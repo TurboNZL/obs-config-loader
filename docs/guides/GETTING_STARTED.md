@@ -9,6 +9,9 @@ OBS Config Loader moves your whole OBS setup between computers, and can keep it 
 - **Upload / Get updates**: between a preset and GitHub.
 - **Link**: the chain button on a preset. A linked preset is kept in step with one OBS on this computer.
 
+## Setups that need more than OBS settings
+If a setup comes with a helper program or an installer, applying it shows a **Finish setting up** card with a button for each step. Press it; nothing needs a terminal. See the guide "Setups that install themselves" to make one.
+
 ## Presets
 A **preset** is a complete copy of your OBS setup, kept on this computer: scene layouts, output settings, scripts (with the code files next to them), OBS's remote-control settings, your stream keys and the pictures, sounds and videos your scenes use. Everything lives under **Presets**, shown as tiles side by side.
 

@@ -276,6 +276,36 @@ encoders against what that OBS has (OBS's `plugin_manager/modules.json` lists ea
 not have for `obs_x264` / `ffmpeg_aac` (dropping the old encoder's settings file), telling the person. The file is the setup's
 own bookkeeping and is never written into OBS's folders.
 
+## Setup steps (`setup`)
+
+A setup that needs more than OBS settings (an installer, a helper program) can carry steps that an app runs for the person when they press a button, so nobody opens a terminal. Optional; a manifest without it behaves as before. Unknown fields are kept, so older readers keep it.
+
+```json
+"setup": { "steps": [
+  {
+    "id": "install",
+    "title": "Set up the voice switcher",
+    "why": "Opens the installer. It downloads what it needs and asks a few questions.",
+    "run": {
+      "win32": { "program": "{{var:SCRIPT_FOLDER}}/install.bat" },
+      "linux": { "program": "{{var:SCRIPT_FOLDER}}/install.sh" },
+      "darwin": { "program": "{{var:SCRIPT_FOLDER}}/install.sh" }
+    },
+    "mode": "open",
+    "optional": false
+  }
+] }
+```
+
+- `id`: lower case letters, digits and `-`. `title` is required; `why` is one plain sentence.
+- `run`: per system (`win32`, `darwin`, `linux`), or `any`. A system with no entry has no such step. An entry is `{ "program": string, "args"?: string[] }`: a program and its arguments, never a shell line.
+- `cwd` (optional, templated): the folder to run in. Default: the first script folder, else the preset's folder.
+- `mode`: `wait` (default: run it and show what it prints) or `open` (start it and leave it, for a program with its own window).
+- Templates use the same tokens as the rest of the format: `{{var:NAME}}` (a folder variable, as chosen on that computer when the setup was applied, else its suggested place), `{{home}}`, `{{bundle}}` (the preset's own folder), and `{{python}}` as the program (a Python 3 on that computer).
+- **Safety:** a reader must never run a step by itself. Each step is shown in words first and run only when the person asks. A program must be `{{python}}` or an absolute path **inside** the preset's folder or one of its folder variables; a working folder must be inside them too. A reader should remember what the person ran (a fingerprint of the step and the program file) and ask again when it changes. A step that cannot run on this system says why in words.
+
+See the guide "Setups that install themselves".
+
 ## Which profile OBS opens with
 
 OBS 31 and newer keep `Basic/Profile`, `ProfileDir`, `SceneCollection` and `SceneCollectionFile` in `user.ini` (the old

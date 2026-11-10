@@ -9,7 +9,7 @@ import {
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
   assetBundlePath, attachSecrets, commitAll, fetchRepo, githubRenameRepo, githubRepoName, parseGithubUrl, pendingForObs, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
   renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, renameSourceInObs, RenameError,
-  applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
+  findRenamedAssets, missingFilesInObs, planSetup, setupSteps, findPython, runPlannedStep, resolveString, type PlannedStep, replacePathInObs, applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
   readLocalKeys, readLocalSettings, writeLocalKeys, writeLocalSettings, cloudSkippedPaths, writeExclude, LOCAL_DIR, EXTRAS_EXT, type LocalSettings,
   listPlatformSources, DEFAULT_PLATFORM_MAP, withIdentity, listAuthors, rewriteAuthor, discardNameChangeBackup, putFile, getFile, testStorage, objectKey, validateTarget, regionFromEndpoint, sha256OfFile, localMediaPath,
   type GitIdentity, type StorageTarget, type StorageKeys,
@@ -160,6 +160,27 @@ function rememberAssets(presetPath: string, found: { id: string; filename: strin
     all[m.id] = cur
     writeLocations(all)
   } catch { /* the preset still works; the files are asked for instead */ }
+}
+
+/** Files renamed outside the app, found by their contents in the folder they were in. Uses where this computer REMEMBERS having each file (not the preset's own copy). */
+async function renamedFiles(presetPath: string) {
+  try {
+    const m = readBundleDir(presetPath).manifest
+    // also what the linked OBS's scenes point at that is not there any more: that works even when only the preset's own copy was remembered
+    const linked = loadSettings().repos.find((r) => r.path === presetPath)?.installId
+    const inst = linked ? allInstalls().find((i) => i.id === linked) : undefined
+    return await findRenamedAssets(m, readLocations()[m.id]?.assets ?? {}, inst?.configExists ? missingFilesInObs(inst.configDir) : [])
+  } catch { return [] }
+}
+/** A file that was renamed is still the same file: saving under its new name must keep its identity in the preset. */
+async function assetHintsFor(presetPath: string): Promise<Record<string, string>> {
+  const hints: Record<string, string> = {}
+  try {
+    const m = readBundleDir(presetPath).manifest
+    for (const [id, p] of Object.entries(readLocations()[m.id]?.assets ?? {})) if (m.assets.some((a) => a.id === id)) hints[p] = id
+    for (const r of await renamedFiles(presetPath)) hints[r.to] = r.id
+  } catch { /* no hints: files are named by their names, as before */ }
+  return hints
 }
 
 // ── config repositories ──────────────────────────────────────────────────────
@@ -361,7 +382,7 @@ function memoised<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<
   v.catch(() => { if (memo.get(key)?.v === v) memo.delete(key) })
   return v
 }
-const READ_ONLY = new Set(['installs:list', 'repos:list', 'repos:live', 'repos:needs', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'github:orgs', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
+const READ_ONLY = new Set(['installs:list', 'repos:list', 'repos:live', 'repos:needs', 'repos:renamed', 'setup:plan', 'setup:poll', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'github:orgs', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
 
 // ── IPC ──────────────────────────────────────────────────────────────────────
 function registerIpc() {
@@ -751,11 +772,11 @@ function registerIpc() {
     const r = await setRemote(p, url, gitRunner())
     return r.ok ? { ok: true } : { ok: false, error: r.message }
   })
-  handle('repos:publish', async (_e, p: string, name: string, priv: boolean, org?: string) => {
+  handle('repos:publish', async (_e, p: string, name: string, priv: boolean, org?: string, replace?: boolean) => {
     const t = loadGithubToken()
     if (!t) return { ok: false, error: 'Connect your GitHub account first.' }
     try {
-      const out = await publishToGithub(p, t, name, { private: priv, org })
+      const out = await publishToGithub(p, t, name, { private: priv, org, replaceExisting: replace === true })
       rememberGithub(p, out.repo.fullName)
       if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but pushing failed: ${out.push.message}` }
       return { ok: true, url: out.repo.htmlUrl, pushed: out.push.status === 'pushed' }
@@ -764,7 +785,7 @@ function registerIpc() {
 
   handle('repos:live', (_e, p: string, installId: string, withDiff?: boolean) => memoised(`live|${p}|${installId}|${withDiff === true}`, 30_000, () => heavy(async () => {
     const inst = findInstall(installId)
-    const r = await captureLive({ host, install: inst, dir: p, dryRun: true, withDiff: withDiff === true, keepKeysDefault: keepKeysDefault(), git: gitRunner(p) })
+    const r = await captureLive({ host, install: inst, dir: p, dryRun: true, withDiff: withDiff === true, keepKeysDefault: keepKeysDefault(), git: gitRunner(p), assetIdHints: await assetHintsFor(p) })
     if (r.status === 'error') return { error: r.message }
     // and the other direction: what the preset has that this OBS has not got yet (typically after getting updates)
     return { changed: r.status === 'changes' ? r.files : [], details: r.status === 'changes' ? r.details : undefined, pending: await pendingForObs(p, inst, gitRunner(p)) }
@@ -774,7 +795,7 @@ function registerIpc() {
     const seen: { id: string; filename: string; path: string }[] = []
     const r = await captureLive({
       host, install: inst, dir: p, onDirty: commitDirtyFirst ? 'commit-first' : 'refuse', onConflict,
-      appVersion: app.getVersion(), versions: detectVersions(inst, host), onAsset: (a) => seen.push(a), keepKeysDefault: keepKeysDefault(), git: gitRunner(p),
+      appVersion: app.getVersion(), versions: detectVersions(inst, host), onAsset: (a) => seen.push(a), keepKeysDefault: keepKeysDefault(), git: gitRunner(p), assetIdHints: await assetHintsFor(p),
     })
     rememberAssets(p, seen)
     if (r.status === 'changes') return { status: 'unchanged' }
@@ -809,14 +830,111 @@ function registerIpc() {
     return r.ok ? { ok: true, kept: r.kept } : { ok: false, error: r.message }
   })
   handle('repos:log', (_e, p: string) => repoLog(p, 15, gitRunner()))
+  // ── setup steps: what a preset does beyond OBS settings (see core/setup.ts). Never run by themselves. ──
+  const ranPath = () => path.join(app.getPath('userData'), 'setup-ran.json')
+  const readRan = (): Record<string, Record<string, string>> => { try { return JSON.parse(fs.readFileSync(ranPath(), 'utf8')) } catch { return {} } }
+  let pythonMemo: { at: number; v: ReturnType<typeof findPython> } | undefined
+  const pythonNow = () => { if (!pythonMemo || Date.now() - pythonMemo.at > 60_000) pythonMemo = { at: Date.now(), v: findPython(host.platform) }; return pythonMemo.v }
+  /** Where each folder variable of a preset is on this computer: what was chosen when it was applied, else the suggestion. */
+  const folderVars = (m: ReturnType<typeof readBundleDir>['manifest']): Record<string, string> => {
+    const chosen = locationsFor(m.id).variables ?? {}
+    const out: Record<string, string> = {}
+    const r = { asset: () => undefined, variable: () => undefined, builtin: (n: string) => (n === 'home' ? host.home : n === 'documents' ? path.join(host.home, 'Documents') : n === 'desktop' ? path.join(host.home, 'Desktop') : n === 'music' ? path.join(host.home, 'Music') : n === 'pictures' ? path.join(host.home, 'Pictures') : n === 'videos' ? path.join(host.home, 'Videos') : undefined), missing: () => {} }
+    for (const v of m.variables) if (v.kind === 'path') { const val = (chosen[v.name] || '').trim() || (v.default ? resolveString(v.default, r as never, host.platform) : ''); if (val) out[v.name] = val }
+    return out
+  }
+  const setupPlan = (p: string): (PlannedStep & { ranBefore: boolean; changedSince: boolean })[] => {
+    const m = readBundleDir(p, { keepMissing: true }).manifest
+    const ran = readRan()[m.id] ?? {}
+    return planSetup(m, { platform: host.platform, home: host.home, presetDir: p, folders: folderVars(m), python: pythonNow() }).map((s) => ({ ...s, ranBefore: !!s.fingerprint && ran[s.id] === s.fingerprint, changedSince: !!s.fingerprint && !!ran[s.id] && ran[s.id] !== s.fingerprint }))
+  }
+  const setupRuns = new Map<string, { lines: string[]; done: boolean; exitCode?: number | null; message?: string }>()
+  handle('setup:plan', (_e, p: string) => memoised(`setup|${p}`, 5_000, () => heavy(() => ({ steps: setupPlan(p), folders: Object.keys(folderVars(readBundleDir(p, { keepMissing: true }).manifest)) }))))
+  handle('setup:run', async (_e, p: string, stepId: string) => {
+    try {
+      const step = setupPlan(p).find((s) => s.id === stepId)
+      if (!step) return { ok: false, error: 'That step is not in this preset any more.' }
+      if (!step.command) return { ok: false, error: step.problem ?? 'This step cannot run here.' }
+      const m = readBundleDir(p, { keepMissing: true }).manifest
+      const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const state: { lines: string[]; done: boolean; exitCode?: number | null; message?: string } = { lines: [], done: false }
+      setupRuns.set(runId, state)
+      void runPlannedStep(step, (l) => { state.lines.push(l); if (state.lines.length > 2000) state.lines.splice(0, 500) }, { platform: host.platform }).then((r) => {
+        state.done = true; state.exitCode = r.exitCode
+        if (r.failedToStart) state.message = `It could not be started: ${r.failedToStart}`
+        else if (r.timedOut) state.message = 'It took too long and was stopped.'
+        else if (r.exitCode !== 0) state.message = `It did not finish (it stopped with code ${r.exitCode}).`
+        if (r.exitCode === 0) { const all = readRan(); all[m.id] = { ...(all[m.id] ?? {}), [step.id]: step.fingerprint }; try { fs.writeFileSync(ranPath(), JSON.stringify(all, null, 2)) } catch { /* only a reminder */ } }
+      })
+      return { ok: true, runId }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
+  handle('setup:poll', (_e, runId: string, from: number) => {
+    const s = setupRuns.get(runId)
+    if (!s) return { lines: [], done: true, exitCode: null, message: 'That run is not known any more.' }
+    return { lines: s.lines.slice(from), done: s.done, exitCode: s.exitCode, message: s.message }
+  })
+  handle('setup:add', async (_e, p: string, step: { title: string; why?: string; windows?: string; unix?: string; args?: string[]; open?: boolean; optional?: boolean }) => {
+    try {
+      const id = slug(step.title).slice(0, 40) || 'step'
+      const cmd = (program?: string) => (program && program.trim() ? { program: program.trim(), ...(step.args?.length ? { args: step.args } : {}) } : undefined)
+      const run: Record<string, unknown> = {}
+      const w = cmd(step.windows), u = cmd(step.unix)
+      if (w) run.win32 = w
+      if (u) { run.linux = u; run.darwin = u }
+      const m = readBundleDir(p, { keepMissing: true }).manifest
+      const existing = (m.setup?.steps ?? []) as { id?: string }[]
+      let uid = id; for (let n = 2; existing.some((x) => x.id === uid); n++) uid = `${id}-${n}`
+      const entry = { id: uid, title: step.title.trim(), ...(step.why?.trim() ? { why: step.why.trim() } : {}), run, ...(step.open ? { mode: 'open' } : {}), ...(step.optional ? { optional: true } : {}) }
+      if (!setupSteps({ setup: { steps: [entry] } } as never).length) return { ok: false, error: 'Give the step a name and the program it runs, for Windows, for Linux and Mac, or both.' }
+      m.setup = { steps: [...existing, entry] }
+      fs.writeFileSync(path.join(p, 'manifest.json'), serializeManifest(m))
+      await commitAll(p, `Added the setup step “${entry.title}”`, gitRunner(p))
+      return { ok: true }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
+  handle('setup:remove', async (_e, p: string, stepId: string) => {
+    try {
+      const m = readBundleDir(p, { keepMissing: true }).manifest
+      const steps = ((m.setup?.steps ?? []) as { id?: string; title?: string }[])
+      const gone = steps.find((x) => x.id === stepId)
+      if (!gone) return { ok: false, error: 'That step is not in this preset.' }
+      m.setup = { steps: steps.filter((x) => x.id !== stepId) }
+      if (!m.setup.steps.length) delete (m as { setup?: unknown }).setup
+      fs.writeFileSync(path.join(p, 'manifest.json'), serializeManifest(m))
+      await commitAll(p, `Removed the setup step “${gone.title ?? stepId}”`, gitRunner(p))
+      return { ok: true }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
+
+  handle('repos:renamed', (_e, p: string) => memoised(`renamed|${p}`, 15_000, () => heavy(() => renamedFiles(p))))
+  /** "Use the new name": remember where the file is now and, when OBS is closed, point OBS's scenes at it. */
+  handle('repos:acceptRename', async (_e, p: string, id: string, to: string, installId?: string) => {
+    try {
+      const m = readBundleDir(p).manifest
+      const hit = (await renamedFiles(p)).find((r) => r.id === id && r.to === to)
+      if (!hit) return { ok: false, error: 'That file is not where it was seen a moment ago. Look again.' }
+      const all = readLocations(); const cur = all[m.id] ?? { assets: {}, variables: {} }
+      cur.assets[id] = hit.to; all[m.id] = cur; writeLocations(all)
+      let fixedInObs = 0; let obsRunning = false
+      const inst = installId ? allInstalls().find((i) => i.id === installId) : undefined
+      if (inst?.configExists) {
+        if (await obsRunningFor(inst)) obsRunning = true
+        else fixedInObs = replacePathInObs(inst.configDir, hit.from, hit.to)
+      }
+      return { ok: true, fixedInObs, obsRunning }
+    } catch (e) { return { ok: false, error: errText(e) } }
+  })
   handle('repos:needs', (_e, p: string) => memoised(`needs|${p}`, 30_000, () => heavy(async () => {
     const m = readBundleDir(p).manifest
     const all = readLocations()
     const cur = locationsFor(m.id)
     // files that came with a setup file are already here (in OBS's own folder): do not ask for them
     const here = locateExtracted(m, allInstalls().map((i) => i.configDir))
-    for (const [id, f] of Object.entries(here)) if (!cur.assets[id] || !fs.existsSync(cur.assets[id])) cur.assets[id] = f
-    all[m.id] = cur; writeLocations(all)
+    const remembered = all[m.id] ?? { assets: {}, variables: {} }
+    for (const [id, f] of Object.entries(here)) if (!cur.assets[id] || !fs.existsSync(cur.assets[id])) { cur.assets[id] = f; remembered.assets[id] = f }
+    // only what was really learned is remembered: the preset's own copies are not where the file lives, and must not replace its real place
+    all[m.id] = remembered; writeLocations(all)
     return assetNeeds(m, cur.assets)
   })))
   handle('repos:setAsset', (_e, p: string, assetId: string, file: string) => {
@@ -1172,7 +1290,7 @@ function registerIpc() {
     } catch (e) { return { ok: false, error: errText(e) } }
   })
 
-  handle('presets:setOnline', async (_e, p: string, on: boolean, name: string, priv: boolean, org?: string) => {
+  handle('presets:setOnline', async (_e, p: string, on: boolean, name: string, priv: boolean, org?: string, replace?: boolean) => {
     if (!(await hasGit())) return { ok: false, error: gitMissing }
     const git = gitRunner()
     try {
@@ -1184,9 +1302,9 @@ function registerIpc() {
       if (!st.remote) {
         const t = loadGithubToken()
         if (!t) return { ok: false, needsAccount: true, error: 'Sign in to GitHub first (under Settings), then switch this on.' }
-        const out = await publishToGithub(p, t, name, { private: priv, org })
+        const out = await publishToGithub(p, t, name, { private: priv, org, replaceExisting: replace === true })
         rememberGithub(p, out.repo.fullName)
-        if (out.push.status === 'error') return { ok: false, error: `Created on GitHub, but uploading failed: ${out.push.message}` }
+        if (out.push.status === 'error') return { ok: false, error: out.replaced ? `Found it on GitHub, but replacing what is in it failed: ${out.push.message}` : `Created on GitHub, but uploading failed: ${out.push.message}` }
         return { ok: true, url: out.repo.htmlUrl }
       }
       const pr = await pushRepo(p, git)
