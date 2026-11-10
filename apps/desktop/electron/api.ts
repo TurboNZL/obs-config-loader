@@ -110,6 +110,8 @@ export type SaveResult =
   | ({ status: 'committed'; files: string[]; commit: string; merged: boolean } & SaveExtras)
   | { status: 'conflict'; conflicts: string[] }
   | { status: 'dirty'; files: string[] }
+  /** OBS was never compared with this preset: saving from it would remove these (scene layouts / output settings) from the preset. */
+  | { status: 'would-remove'; removes: string[] }
   | { status: 'error'; message: string }
 
 export type SaveConflictChoice = 'abort' | 'keep-repo' | 'keep-obs'
@@ -249,8 +251,8 @@ export interface Api {
     publish(path: string, name: string, priv: boolean, org?: string, replace?: boolean): Promise<Done<{ url: string; pushed: boolean }>>
     /** What OBS has changed since the last save (dry run). */
     /** `changed`: what OBS has that the preset does not. `pending`: what the preset has that this OBS does not (null: not known yet). */
-    live(path: string, installId: string, withDiff?: boolean): Promise<{ changed: string[]; details?: ChangeDetail[]; pending?: string[] | null } | { error: string }>
-    save(path: string, installId: string, commitDirtyFirst: boolean, onConflict?: SaveConflictChoice): Promise<SaveResult>
+    live(path: string, installId: string, withDiff?: boolean): Promise<{ changed: string[]; details?: ChangeDetail[]; pending?: string[] | null; unsynced?: boolean; presetSaved?: { date: string; by: string; subject: string }; obsChanged?: string } | { error: string }>
+    save(path: string, installId: string, commitDirtyFirst: boolean, onConflict?: SaveConflictChoice, confirmRemoval?: boolean): Promise<SaveResult>
     pull(path: string, onConflict?: PullConflictChoice): Promise<PullResult>
     /** `force`: replace the online copy with this one (refused if someone pushed since we last looked). */
     push(path: string, force?: boolean): Promise<PushResult>

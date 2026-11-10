@@ -93,7 +93,7 @@ fs.writeFileSync(path.join(cfg, 'user.ini'), '[Basic]\nProfile=Main\nProfileDir=
   await page.click('nav >> text=Presets')
   await t.locator('text=/has \\d+ changes? this preset does not have yet/').waitFor()
   const line = await t.locator('text=/has \\d+ changes? this preset does not have yet/').first().innerText()
-  check('it says WHICH OBS has the changes', /Flatpak/.test(line))
+  check('the line says "The linked OBS" (the tile names the OBS once, in its header) and stays short', /^The linked OBS has \d+ changes? this preset does not have yet/.test(line) && (await t.innerText()).includes('linked to OBS Studio (Flatpak)'))
   await t.locator('button:has-text("See what changed")').click()
   await t.locator('ul[aria-label="What changed"] li').first().waitFor()
   check('the preview lists the changed scene layout in plain words', (await t.locator('ul[aria-label="What changed"]').innerText()).includes('Scene layout “main”'))

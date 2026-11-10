@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as nodePath from 'node:path'
-import { captureLive, commitAll, findRenamedAssets, initRepo, markSynced, missingFilesInObs, pendingForObs, readBundleDir, replacePathInObs } from '../src/index.js'
+import { captureLive, commitAll, findRenamedAssets, initRepo, markSynced, missingFilesInObs, obsLastChanged, pendingForObs, presetLastSaved, readBundleDir, replacePathInObs } from '../src/index.js'
 import { host, install, makeSource } from './helpers.js'
 
 let tmp: string
@@ -110,5 +110,58 @@ describe('a media file renamed outside the app', () => {
     expect(assets.map((a) => [a.id, a.filename])).toEqual([['mix', 'mix v2.mp3']])
     expect(fs.readdirSync(nodePath.join(dir, 'local/media/mix'))).toEqual(['mix v2.mp3'])
     expect(await captureLive({ host: h, install: inst, dir, dryRun: true, assetIdHints: { [now]: 'mix' } })).toEqual({ status: 'unchanged' })
+  })
+})
+
+describe('an OBS that was never compared with the preset', () => {
+  /** A preset made from one OBS (with two scene layouts); a second OBS that only has one of them. */
+  async function twoComputers() {
+    const { dir, h, inst, cfg, home } = setup()
+    fs.writeFileSync(nodePath.join(cfg, 'basic/scenes/Extra.json'), JSON.stringify({ name: 'Extra', current_scene: 'S', sources: [{ id: 'scene', name: 'S', uuid: 'u-s', settings: { items: [] } }] }))
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'M' })
+    // the other computer: the same preset (cloned), its OBS has the first layout only
+    const home2 = nodePath.join(tmp, 'home2'); const cfg2 = nodePath.join(home2, 'obs'); fs.mkdirSync(nodePath.join(cfg2, 'basic/scenes'), { recursive: true }); fs.mkdirSync(nodePath.join(cfg2, 'basic/profiles'), { recursive: true })
+    fs.copyFileSync(nodePath.join(cfg, 'basic/scenes/Main.json'), nodePath.join(cfg2, 'basic/scenes/Main.json'))
+    fs.cpSync(nodePath.join(cfg, 'basic/profiles'), nodePath.join(cfg2, 'basic/profiles'), { recursive: true })
+    const inst2 = { ...install(cfg2), id: 'second-pc' }
+    return { dir, h, inst, inst2 }
+  }
+
+  it('says so instead of calling the preset\'s own content "OBS changes"', async () => {
+    const { dir, h, inst, inst2 } = await twoComputers()
+    const a = await captureLive({ host: h, install: inst2, dir, dryRun: true })
+    expect(a).toMatchObject({ status: 'changes', unsynced: true })
+    expect('files' in a && a.files).toContain('collections/extra.json') // the layout the preset has and this OBS lacks
+    // the OBS that made the preset is matched: no such claim
+    expect(await captureLive({ host: h, install: inst, dir, dryRun: true })).toEqual({ status: 'unchanged' })
+  })
+
+  it('will not remove the preset\'s layouts without a clear yes, and then it is matched', async () => {
+    const { dir, h, inst2 } = await twoComputers()
+    const ask = await captureLive({ host: h, install: inst2, dir })
+    expect(ask).toEqual({ status: 'would-remove', removes: ['collections/extra.json'] })
+    expect(fs.existsSync(nodePath.join(dir, 'collections/extra.json'))).toBe(true) // nothing was touched by asking
+    const done = await captureLive({ host: h, install: inst2, dir, confirmRemoval: true })
+    expect(done.status).toBe('committed')
+    expect(fs.existsSync(nodePath.join(dir, 'collections/extra.json'))).toBe(false)
+    const after = await captureLive({ host: h, install: inst2, dir, dryRun: true })
+    expect(after.status === 'unchanged' || !('unsynced' in after && after.unsynced)).toBe(true)
+  })
+
+  it('applying the preset matches it too (nothing left to ask)', async () => {
+    const { dir, h, inst2 } = await twoComputers()
+    await markSynced(dir, inst2) // what Apply does
+    expect((await captureLive({ host: h, install: inst2, dir, dryRun: true })).status).toBe('changes') // now they ARE OBS's changes: the preset has an extra layout OBS lacks
+    const r = await captureLive({ host: h, install: inst2, dir, dryRun: true })
+    expect('unsynced' in r && r.unsynced).toBeFalsy()
+  })
+
+  it('tells when each side was last changed', async () => {
+    const { dir, inst2 } = await twoComputers()
+    const saved = await presetLastSaved(dir)
+    expect(saved?.date).toMatch(/^\d{4}-\d\d-\d\dT/)
+    expect(obsLastChanged(inst2.configDir)).toMatch(/^\d{4}-\d\d-\d\dT/)
+    expect(obsLastChanged(nodePath.join(tmp, 'nothing-here'))).toBeNull()
   })
 })
