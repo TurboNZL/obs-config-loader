@@ -253,6 +253,19 @@ function sceneItem(name: string, uuid: string, id: number) {
   }
 }
 
+const KNOWN_FOLDER_NAMES: Record<string, BuiltinToken> = { videos: 'videos', movies: 'videos', music: 'music', pictures: 'pictures', documents: 'documents', desktop: 'desktop' }
+
+/**
+ * Where a folder from another computer goes on this one: inside the same kind of folder in the home folder when the original sat in one
+ * (`/mnt/Disk/Videos/OBS` -> `<Videos>/OBS`), else directly in the home folder under its own last name.
+ */
+export function fallbackFolder(original: string, folders: Record<string, string>, p: typeof nodePath.posix): string {
+  const segs = original.split(/[\\/]/).filter(Boolean)
+  const at = segs.findIndex((s) => KNOWN_FOLDER_NAMES[s.toLowerCase()] !== undefined)
+  if (at >= 0) return p.join(folders[KNOWN_FOLDER_NAMES[segs[at].toLowerCase()]] ?? folders.home, ...segs.slice(at + 1))
+  return p.join(folders.home, segs.at(-1) ?? 'OBS')
+}
+
 export function planImport(o: ImportOptions): ImportPlan {
   const { bundle, install, host } = o
   const m = bundle.manifest
@@ -290,6 +303,12 @@ export function planImport(o: ImportOptions): ImportPlan {
     else if (v.default !== undefined) {
       let d = resolveFolderTokens(v.default)
       if (v.kind === 'path') d = target === 'win32' ? d.replace(/\//g, '\\') : d
+      // A suggested folder from another computer (a drive or mount that is not here) is no use: use the same kind of folder in the home folder.
+      if (v.kind === 'path' && /^(\/|[A-Za-z]:[\\/])/.test(d) && !host.exists(d) && !host.isDir(p.dirname(d))) {
+        const alt = fallbackFolder(d, folders, p)
+        warnings.push(`${v.label ?? v.name}: the suggested folder ${d} does not exist on this computer, so ${alt} is used instead.`)
+        d = alt
+      }
       varValue.set(v.name, d)
       usedDefaults.push(v.name)
     } else {

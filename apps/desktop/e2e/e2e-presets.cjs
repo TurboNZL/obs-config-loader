@@ -276,6 +276,7 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   check('the person is told about the swapped encoders before loading', (await page.locator('main').innerText()).includes('is not available in this OBS, so obs_x264 is used instead'))
   await page.click('button:has-text("Apply to OBS")')
   await page.waitForSelector('text=Done.')
+  check('a preset with no setup steps shows no "Finish setting up" card (no empty "one more thing")', !(await page.locator('main').innerText()).includes('Finish setting up') && !(await page.locator('main').innerText()).includes('One more thing'))
   const loaded = JSON.parse(fs.readFileSync(path.join(cfg, 'basic/scenes/Win scenes.json'), 'utf8'))
   check('the chosen stand-in was used', loaded.sources.find((x) => x.name === 'Game window').id === 'xcomposite_input')
   check('the hidden source stays but is hidden where it is used', loaded.sources.find((x) => x.name === 'Mic').id === 'wasapi_input_capture')

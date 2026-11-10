@@ -172,7 +172,7 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
             <strong>Done.</strong> Your setup is now in {install.label}.
             {done.backedUp > 0 && <> {plural(done.backedUp, 'file')} it replaced {done.backedUp === 1 ? 'was' : 'were'} backed up first.</>}
           </Message>
-          {bundle?.repoDir && <Card title="One more thing"><SetupSteps presetPath={bundle.repoDir} title="Finish setting up" /></Card>}
+          {bundle?.repoDir && <SetupSteps presetPath={bundle.repoDir} title="Finish setting up" card />}
           <Card title="What now?">
             <div className="flex gap-2 flex-wrap">
               {install.launch && <button className="btn btn-accent px-4 py-2" onClick={() => void window.obsLoader.installs.launch(install.id).then((r) => setNote(r.ok ? 'Starting OBS…' : r.message))}>Start OBS</button>}
