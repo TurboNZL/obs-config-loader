@@ -60,3 +60,15 @@ describe('{{obs}} in a setup step', () => {
     expect(planSetup(m, base)[0].command?.args).toEqual(['--obs', '', '--kind', ''])
   })
 })
+
+describe('OBS starter profile', () => {
+  it('is left out when it is empty and there are real profiles next to it', async () => {
+    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'untp-'))
+    const { host, install, makeSource } = await import('./helpers.js')
+    const home = nodePath.join(dir, 'home'); const { cfg } = makeSource(home)
+    const u = nodePath.join(cfg, 'basic/profiles/Untitled'); fs.mkdirSync(u, { recursive: true }); fs.writeFileSync(nodePath.join(u, 'basic.ini'), '[General]\nName=Untitled\n')
+    const b = exportBundle({ host: host('linux', home), install: install(cfg), name: 'x' })
+    expect(b.manifest.profiles.map((p) => p.name)).not.toContain('Untitled')
+    expect(b.manifest.profiles.length).toBeGreaterThan(0)
+  })
+})

@@ -448,6 +448,7 @@ function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest[
     // No name filter: OBS is the source of truth for which scenes/profiles exist. (Filtering by the names saved
     // earlier made a renamed collection or profile vanish, and the folder was then wiped.)
     bundleBelowBytes: o.bundleBelowBytes, alsoBundle: uploadMedia, appVersion: o.appVersion, versions: o.versions, exclude: excludeNow ?? pm?.exclude ?? o.exclude, onAsset: o.onAsset, assetIdHints: o.assetIdHints,
+    knownProjects: (pm?.projects ?? []).map((p) => pm!.variables.find((v) => v.name === p.variable && v.kind === 'path' && v.mustContain?.length)).filter((v): v is NonNullable<typeof v> => !!v),
     // the stream keys are read here and kept apart: they go into the preset's own local-only area, never into what git tracks
     includeSecrets: true,
     // the repo's history is its revision list: keep these two still so they never cause a merge conflict
@@ -473,7 +474,18 @@ function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest[
         const vf = variantsPathFor(c.file)
         const variants = extractVariants(next, o.host.platform, parseVariants(prev.files.get(vf)), oldJson)
         if (Object.keys(variants).length) bundle.files.set(vf, Buffer.from(serializeVariants(variants))); else bundle.files.delete(vf)
-        if (preservePlatformSources(next, oldJson, o.host.platform)) {
+        // a script the preset registers (one that lives in a script folder) stays registered when OBS here does not list it yet:
+        // a computer whose installer has not run would otherwise erase it from the preset for everyone
+        const keepScripts = !(excludeNow ?? pm?.exclude ?? o.exclude)?.scripts && Array.isArray(oldJson?.modules?.['scripts-tool'])
+        let scriptsKept = false
+        if (keepScripts) {
+          const nextList: any[] = Array.isArray(next.modules?.['scripts-tool']) ? next.modules['scripts-tool'] : []
+          const baseOf = (x: unknown) => String(x ?? '').replace(/\\/g, '/').split('/').pop()
+          const have = new Set(nextList.map((x) => baseOf(x?.path)))
+          const lost = (oldJson.modules['scripts-tool'] as any[]).filter((x) => typeof x?.path === 'string' && x.path.includes('{{var:') && !have.has(baseOf(x.path)))
+          if (lost.length) { next.modules = { ...(next.modules ?? {}), 'scripts-tool': [...nextList, ...lost] }; scriptsKept = true }
+        }
+        if (preservePlatformSources(next, oldJson, o.host.platform) || scriptsKept) {
           bundle.files.set(c.file, Buffer.from(JSON.stringify(next, null, 4) + '\n'))
         }
       } catch { /* leave as exported */ }
@@ -498,6 +510,12 @@ function writeLiveInto(o: CaptureOptions, target: string, excludeNow?: Manifest[
   } else {
     delete (bundle.manifest as Partial<Manifest>).revision
     if (o.exclude && Object.values(o.exclude).some((v) => (Array.isArray(v) ? v.length : v))) bundle.manifest.exclude = o.exclude
+  }
+  // a script folder that is not on this computer yet (its setup step has not run) keeps the files the preset already holds for it
+  for (const pr of prev?.manifest.projects ?? []) {
+    if (!bundle.manifest.variables.some((v) => v.name === pr.variable)) continue
+    for (const rel of pr.files) { const key = `scripts/projects/${pr.variable}/${rel}`; let f = prev!.files.get(key); if (!f) { try { f = fs.readFileSync(nodePath.join(target, key)) } catch { /* not there */ } } if (f && !bundle.files.has(key)) bundle.files.set(key, f) }
+    if (!bundle.manifest.projects?.some((x) => x.variable === pr.variable)) bundle.manifest.projects = [...(bundle.manifest.projects ?? []), pr]
   }
   deriveManifestFields(bundle) // from the final files (canonical + every platform's variants), not from this machine alone
   applyVersions(bundle.manifest, prev?.manifest, o.versions)

@@ -39,6 +39,8 @@ export interface ExportOptions {
    * getting a new one from its new name, so the preset still knows it is the same file.
    */
   assetIdHints?: Record<string, string>
+  /** Script folders the preset already knows (its variables). A script whose file is not on this computer yet (the folder is made by the setup step later) is still that folder, so saving does not lose it. */
+  knownProjects?: Variable[]
   /**
    * Put the stream keys and other secrets INTO the file. Off by default, and the file is then labelled everywhere
    * (`containsSecrets`, a warning in the manifest, a README in the zip). Never allowed for the git folder form.
@@ -163,8 +165,28 @@ class Collector {
    * it would lose them. When its folder holds other files and the script looks around itself, the folder is a project: the setup
    * does not copy the script, it asks where the folder is on each computer, and every path inside it is kept relative to that.
    */
+  /** Script folders the preset already has (see `ExportOptions.knownProjects`). */
+  known: Variable[] = []
+
+  /** Known script folders OBS here does not register a script for: still those folders, at their suggested place on this computer. */
+  registerKnownAtDefaults(): void {
+    for (const k of this.known) {
+      if (this.projects.some((p) => p.name === k.name) || !k.default) continue
+      const d = k.default.replace(/^\{\{home\}\}/, this.host.home.replace(/\\/g, '/'))
+      if (!looksLikeAbsolutePath(d) || d.includes('{{')) continue
+      this.projects.push({ dir: d, name: k.name }); this.variables.push({ ...k })
+    }
+  }
+
   addScript(scriptPath: string): void {
     if (!looksLikeAbsolutePath(scriptPath)) return
+    if (!fs.existsSync(scriptPath)) {
+      // not here yet: when exactly one known script folder expects a script of this name, it is that folder
+      const { dir, base } = splitFile(scriptPath)
+      const hit = this.known.filter((k) => k.mustContain?.includes(base))
+      if (hit.length === 1 && !this.projects.some((p) => p.name === hit[0].name)) { this.projects.push({ dir, name: hit[0].name }); this.variables.push({ ...hit[0] }) }
+      return
+    }
     let text: string
     try { if (!fs.statSync(scriptPath).isFile()) return; text = fs.readFileSync(scriptPath, 'utf8').slice(0, 256 * 1024) } catch { return }
     const { dir, base } = splitFile(scriptPath)
@@ -392,6 +414,7 @@ export function exportBundle(opts: ExportOptions): Bundle {
   const { host, install } = opts
   const cfg = install.configDir
   const col = new Collector(host, opts.bundleBelowBytes ?? 5 * 1024 * 1024, new Set(opts.alsoBundle ?? []), opts.onAsset, opts.assetIdHints)
+  col.known = opts.knownProjects ?? []
   const ex = opts.exclude ?? {}
   const scrub = new SecretScrubber(opts.includeSecrets === true)
   const files = col.files
@@ -411,6 +434,7 @@ export function exportBundle(opts: ExportOptions): Bundle {
       for (const s of Array.isArray(j.modules?.['scripts-tool']) ? j.modules['scripts-tool'] : []) if (typeof s?.path === 'string') col.addScript(s.path)
     }
   }
+  col.registerKnownAtDefaults()
   for (const file of sourceNames) {
     const name = file.replace(/\.json$/, '')
     if (opts.collections && !opts.collections.includes(name)) continue
@@ -441,6 +465,8 @@ export function exportBundle(opts: ExportOptions): Bundle {
   for (const dir of profDirs) {
     if (opts.profiles && !opts.profiles.includes(dir)) continue
     if (ex.profiles?.includes(dir)) continue
+    // OBS's own empty starter profile ("Untitled", no streaming service set up) next to real ones is not part of anyone's setup
+    if (profDirs.length > 1 && /^untitled$/i.test(dir) && !fs.existsSync(nodePath.join(profRoot, dir, 'service.json'))) continue
     const id = slug(dir) + (profiles.some((p) => p.id === slug(dir)) ? `-${profiles.length + 1}` : '')
     const base = `profiles/${id}`
     let display = dir
