@@ -59,7 +59,7 @@ export const WEBSOCKET_FILE = 'global/obs-websocket.json'
 const MAX_SCRIPT_BYTES = 1024 * 1024
 /** Script folders: where their files are kept in a setup, and which of them are (code only, nothing hidden, nothing big). */
 export const PROJECT_DIR = 'scripts/projects'
-export const PROJECT_FILE = /\.(py|lua|sh|bat|cmd|ps1|txt|html?|css|m?js)$/i  // code, and the web page a script serves next to it (a dashboard)
+export const PROJECT_FILE = /\.(py|lua|sh|bat|cmd|ps1|txt|md|html?|css|m?js)$/i  // code, and the web page a script serves next to it (a dashboard)
 /** What a setup may put into a script folder on import: code plus the pictures, sounds and data files the scenes use. Never programs. */
 export const PROJECT_KEEP = /\.(py|lua|sh|bat|cmd|ps1|txt|html?|css|m?js|md|json|ini|cfg|yaml|yml|png|jpe?g|gif|webp|bmp|svg|mp3|wav|ogg|flac|m4a|aac|opus|mp4|mov|mkv|webm|avi|flv|ttf|otf|woff2?)$/i
 const PROJECT_SKIP_DIRS = new Set(['venv', 'env', 'node_modules', '__pycache__', 'site-packages', 'dist', 'build', 'images', 'media', 'assets'])
