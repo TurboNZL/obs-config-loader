@@ -167,3 +167,53 @@ describe('remote-control password', () => {
     expect(typed.writes.some((w) => w.kind === 'websocket')).toBe(true)
   })
 })
+
+describe('saving before the setup step has made the script folder', () => {
+  it('keeps the folder question, its files and the tokens in the scenes', async () => {
+    const { home, cfg, proj } = projectSetup()
+    const dir = nodePath.join(tmp, 'preset')
+    await initRepo(dir)
+    const h = host('linux', home), inst = install(cfg)
+    expect((await captureLive({ host: h, install: inst, dir, name: 'x' })).status).toBe('committed')
+    const first = readBundleDir(dir).manifest
+    expect(first.projects?.[0]?.files).toContain('helper.py')
+    // the folder is gone (a new computer where the installer has not run yet) but OBS still points at it
+    fs.rmSync(proj, { recursive: true, force: true })
+    const second = await captureLive({ host: h, install: inst, dir })
+    const now = readBundleDir(dir)
+    expect(now.manifest.variables.some((v) => v.name === 'SCRIPT_FOLDER')).toBe(true)
+    expect(now.manifest.projects?.[0]?.files).toContain('helper.py')
+    expect(fs.existsSync(nodePath.join(dir, 'scripts/projects/SCRIPT_FOLDER/helper.py'))).toBe(true)
+    expect(fs.readFileSync(nodePath.join(dir, 'collections/main.json'), 'utf8')).toContain('{{var:SCRIPT_FOLDER}}/tool.py')
+  })
+})
+
+describe('a script the preset registers', () => {
+  it('stays registered when a save is made from an OBS that does not list it', async () => {
+    const { home, cfg, proj, scenes } = projectSetup()
+    const dir = nodePath.join(tmp, 'preset2')
+    await initRepo(dir)
+    const h = host('linux', home), inst = install(cfg)
+    await captureLive({ host: h, install: inst, dir, name: 'x' })
+    const j = JSON.parse(fs.readFileSync(scenes, 'utf8')); j.modules['scripts-tool'] = []; fs.writeFileSync(scenes, JSON.stringify(j))
+    await captureLive({ host: h, install: inst, dir })
+    const col = fs.readFileSync(nodePath.join(dir, 'collections/main.json'), 'utf8')
+    expect(col).toContain('{{var:SCRIPT_FOLDER}}/tool.py')
+    void proj
+  })
+})
+
+describe('a known script folder whose script OBS does not list', () => {
+  it('still turns the files inside it into paths relative to the folder', async () => {
+    const { home, cfg, scenes } = projectSetup()
+    const dir = nodePath.join(tmp, 'preset3')
+    await initRepo(dir)
+    const h = host('linux', home), inst = install(cfg)
+    await captureLive({ host: h, install: inst, dir, name: 'x' })
+    const j = JSON.parse(fs.readFileSync(scenes, 'utf8')); j.modules['scripts-tool'] = []; fs.writeFileSync(scenes, JSON.stringify(j))
+    await captureLive({ host: h, install: inst, dir })
+    const col = fs.readFileSync(nodePath.join(dir, 'collections/main.json'), 'utf8')
+    expect(col).toContain('{{var:SCRIPT_FOLDER}}/images/bg.png')
+    expect(col).not.toContain('{{asset:bg')
+  })
+})
