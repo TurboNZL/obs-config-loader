@@ -89,7 +89,7 @@ const withKeys = path.join(root, 'with-keys.obsbundle'), noKeys = path.join(root
   const kept = JSON.parse(fs.readFileSync(path.join(p1, 'local/keys.json'), 'utf8')).keys
   check('the keys are inside the preset, in its own private part', Object.values(kept).sort().join() === 'live_SECRET123,yt-SECRET456')
   check('and nowhere git can see', !fs.readFileSync(path.join(p1, 'manifest.json'), 'utf8').match(/SECRET/) && !require('child_process').execFileSync('git', ['log', '-p', '--all'], { cwd: p1, encoding: 'utf8' }).match(/SECRET/))
-  await page.click('section[aria-label^="Preset "] button:has-text("Apply to OBS")')
+  await (async (t) => { await t.locator('button[aria-label="Show details"], button[title="Show details"]').first().click(); await t.locator('button:has-text("Review before applying")').click() })(page.locator('section[aria-label^="Preset "]').first())
   await page.waitForSelector('text=Apply a setup to OBS')
   await page.selectOption('select[aria-label="Which OBS"]', { label: 'OBS Studio (portable: portable) (OBS in a folder)' })
   await page.waitForSelector('text=Here is what will happen')
@@ -107,7 +107,7 @@ const withKeys = path.join(root, 'with-keys.obsbundle'), noKeys = path.join(root
   await app.evaluate(({ dialog }, p) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] }) }, noKeys)
   await page.click('button:has-text("Import a file")')
   await page.waitForFunction(() => document.querySelectorAll('section[aria-label^="Preset "]').length === 2)
-  await page.locator('section[aria-label^="Preset "]').last().locator('button:has-text("Apply to OBS")').click()
+  await (async (t) => { await t.locator('button[aria-label="Show details"], button[title="Show details"]').first().click(); await t.locator('button:has-text("Review before applying")').click() })(page.locator('section[aria-label^="Preset "]').last())
   await page.waitForSelector('text=Your stream keys')
   check('no red warning for a file without keys', (await page.locator('text=This file contains stream keys').count()) === 0)
   await page.selectOption('select[aria-label="Which OBS"]', { label: 'OBS Studio (portable: portable) (OBS in a folder)' })

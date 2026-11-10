@@ -343,7 +343,7 @@ export interface Api {
     onState(cb: (maximized: boolean) => void): () => void
     restart(): Promise<void>
   }
-  app: { version(): Promise<string>; openExternal(url: string): Promise<void> }
+  app: { version(): Promise<string>; openExternal(url: string): Promise<void>; refresh(): Promise<boolean> }
   /** Real path of a dropped file (the renderer has no other way to get it). */
   pathForFile(f: File): string
 }

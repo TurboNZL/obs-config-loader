@@ -201,7 +201,7 @@ const reopen = async (page) => { await page.click('nav >> text=OBS on this compu
   await page.screenshot({ path: OUT + '/g4-downloaded.png', fullPage: true })
 
   console.log('8. apply the repository to OBS')
-  await main.locator('button:has-text("Apply to OBS")').click()
+  await (async (t) => { await t.locator('button[aria-label="Show details"], button[title="Show details"]').first().click(); await t.locator('button:has-text("Review before applying")').click() })(main)
   await page.waitForSelector('text=Here is what will happen')
   await page.click('button:has-text("Apply to OBS")')
   await page.waitForSelector('text=Done.')
@@ -237,7 +237,7 @@ const reopen = async (page) => { await page.click('nav >> text=OBS on this compu
   // getting updates only updates the preset: the card then says OBS does not have them yet, and one button puts them there
   await main.locator('text=/This preset has \\d+ updates? that .* does not have yet/').waitFor()
   check('after getting updates it says OBS does not have them yet', true)
-  await main.locator('button:has-text("Apply to OBS")').click()
+  await (async (t) => { await t.locator('button[aria-label="Show details"], button[title="Show details"]').first().click(); await t.locator('button:has-text("Review before applying")').click() })(main)
   await page.waitForSelector('text=Here is what will happen')
   await page.click('button:has-text("Apply to OBS")')
   await page.waitForSelector('text=Done.')
@@ -255,7 +255,7 @@ const reopen = async (page) => { await page.click('nav >> text=OBS on this compu
   await page.click('button:has-text("Import a file")')
   await page.waitForSelector('text=latest version from its GitHub copy')
   check('it was downloaded as a preset of its own', fs.existsSync(path.join(docs, 'Main stream-2/.git')))
-  await card('Main stream').locator('button:has-text("Apply to OBS")').click()
+  await (async (t) => { await t.locator('button[aria-label="Show details"], button[title="Show details"]').first().click(); await t.locator('button:has-text("Review before applying")').click() })(card('Main stream'))
   await page.waitForSelector('text=Here is what will happen')
   await page.click('button:has-text("Apply to OBS")')
   await page.waitForSelector('text=Done.')

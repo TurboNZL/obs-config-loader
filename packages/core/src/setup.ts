@@ -61,6 +61,8 @@ export interface SetupContext {
   folders: Record<string, string>
   /** The Python 3 on this computer, when there is one. */
   python?: SetupCommand
+  /** The OBS this preset is linked to on this computer: `{{obs}}` is its folder when it is a portable copy (else empty), `{{obskind}}` says which. */
+  obs?: { kind: string; configDir: string }
 }
 
 export interface PlannedStep {
@@ -110,7 +112,9 @@ export function planSetup(manifest: Pick<Manifest, 'setup'>, ctx: SetupContext):
     if (!cmd) return { ...base, problem: 'This step is not needed on this kind of computer.', fingerprint: '' }
     const missing: string[] = []
     const r = resolver(ctx, missing)
-    const fill = (x: string) => resolveString(x, r, ctx.platform)
+    const portableRoot = ctx.obs?.kind === 'portable' ? p.dirname(p.dirname(ctx.obs.configDir)) : ''
+    const obsKind = !ctx.obs ? '' : ctx.obs.kind === 'portable' ? 'portable' : 'installed'
+    const fill = (x: string) => resolveString(x.replace(/\{\{obs\}\}/g, () => portableRoot).replace(/\{\{obskind\}\}/g, () => obsKind), r, ctx.platform)
     let program = cmd.program.trim()
     let lead: string[] = []
     if (program === '{{python}}') {

@@ -32,6 +32,7 @@ A step runs **a file that is part of the preset**, written with a folder in doub
 |---|---|
 | `{{var:SCRIPT_FOLDER}}/install.bat` | a file inside the script folder the preset keeps (the folder name is shown in the form) |
 | `{{bundle}}/scripts/tool/setup.py` | a file inside the preset's own folder |
+| `{{obs}}` / `{{obskind}}` | In arguments only: the portable OBS folder this preset is linked to (empty if none), and `portable` / `installed` / empty |
 | `{{python}}` | Python 3, whichever one that computer has (the app finds it) |
 | `{{home}}` | the person's home folder |
 

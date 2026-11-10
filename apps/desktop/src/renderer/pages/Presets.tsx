@@ -26,6 +26,10 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
   const refreshGit = () => window.obsLoader.git.state().then(setGit)
   useEffect(() => { void refresh(); void refreshGit(); void window.obsLoader.github.state().then(setGh) }, [])
 
+  const [tick, setTick] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
+  /** Forget what was worked out a moment ago and look at OBS, the preset folders and GitHub again. */
+  const reload = async () => { setRefreshing(true); try { await window.obsLoader.app.refresh(); await refresh(); setTick((t) => t + 1) } finally { setRefreshing(false) } }
   const done = async (m: Msg) => { setNotice(m); setAdding(null); await refresh() }
 
   const importFile = async () => {
@@ -33,7 +37,7 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
     const r = await window.obsLoader.presets.importFile()
     setImporting(false)
     if (!r.ok) { if (!r.cancelled) setNotice({ tone: 'bad', text: r.error }); return }
-    if (r.kind === 'preset') setNotice({ tone: r.keys ? 'warn' : 'good', text: `Added the preset “${r.repo.name}”.${r.keys ? ` It had ${plural(r.keys, 'stream key')} inside, which stay inside the preset on this computer.` : ''}${r.files ? ` ${plural(r.files, 'file')} came with it.` : ''}${r.latest ? ' It is the latest version from its GitHub copy, and you can get updates from there.' : r.online ? ' It is linked to its GitHub copy, so you can get updates.' : ' It is yours now: switch on online backup to give it its own GitHub copy.'} Press “Apply to OBS…” on it to use it.` })
+    if (r.kind === 'preset') setNotice({ tone: r.keys ? 'warn' : 'good', text: `Added the preset “${r.repo.name}”.${r.keys ? ` It had ${plural(r.keys, 'stream key')} inside, which stay inside the preset on this computer.` : ''}${r.files ? ` ${plural(r.files, 'file')} came with it.` : ''}${r.latest ? ' It is the latest version from its GitHub copy, and you can get updates from there.' : r.online ? ' It is linked to its GitHub copy, so you can get updates.' : ' It is yours now: switch on online backup to give it its own GitHub copy.'} Press “Apply to OBS” on it to use it.` })
     else if (r.kind === 'existing') setNotice({ tone: 'good', text: `You already have this as the preset “${r.repo.name}”.` })
     else setNotice({ tone: 'good', text: `Added ${plural(r.applied.files, 'part')}, ${plural(r.applied.media, 'file')}${r.applied.keys ? ` and ${plural(r.applied.keys, 'stream key')}` : ''} to “${r.repo.name}”.` })
     await refresh()
@@ -51,6 +55,7 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
       <div className="flex gap-2 flex-wrap">
         <button className="btn btn-accent px-4 py-2 inline-flex items-center gap-2" disabled={!git?.available} onClick={() => setAdding(adding === 'new' ? null : 'new')}><Icon name="save" /> Make a preset from my OBS</button>
         <button className="btn px-3 py-2 inline-flex items-center gap-2" disabled={!git?.available} onClick={() => setAdding(adding === 'get' ? null : 'get')}><Icon name="download" /> Get one from GitHub…</button>
+        <button className="btn px-3 py-2 inline-flex items-center gap-2 ml-auto" disabled={refreshing} onClick={reload} title="Look again at OBS and GitHub"><Icon name="refresh" /> {refreshing ? 'Refreshing…' : 'Refresh'}</button>
         <button className="btn px-3 py-2 inline-flex items-center gap-2" disabled={!git?.available || importing} onClick={importFile}><Icon name="fileUp" className="rotate-180" /> {importing ? 'Importing…' : 'Import a file…'}</button>
       </div>
 
@@ -61,7 +66,7 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
       <div className="grid gap-4 grid-cols-1 min-[820px]:grid-cols-2 min-[1500px]:grid-cols-3 items-stretch">
         {repos?.map((r) => (
           <PresetTile
-            key={r.path} repo={r} installs={installs ?? []} gh={gh} refresh={refresh} patch={patch} apply={applyRepo} go={go} notify={setNotice}
+            key={r.path} repo={r} installs={installs ?? []} gh={gh} refresh={refresh} patch={patch} apply={applyRepo} go={go} notify={setNotice} tick={tick}
             wide={!!wide[r.path]} onWide={(on) => setWide((w) => (w[r.path] === on ? w : { ...w, [r.path]: on }))}
           />
         ))}
@@ -270,7 +275,7 @@ function GetPreset({ gh, count, go, onDone, onCancel }: { gh: GithubState; count
           setBusy(true); setError(null)
           const r = await window.obsLoader.repos.clone(url, folder)
           setBusy(false)
-          if (r.ok) await onDone({ tone: 'good', text: `Downloaded “${r.repo.name}”. Press “Apply to OBS…” on it to use it.` }); else setError(r.error)
+          if (r.ok) await onDone({ tone: 'good', text: `Downloaded “${r.repo.name}”. Press “Apply to OBS” on it to use it.` }); else setError(r.error)
         }}>{busy ? 'Downloading…' : 'Download'}</button>
         <button className="btn px-3 py-2" onClick={async () => {
           setError(null)

@@ -848,10 +848,11 @@ function registerIpc() {
     for (const v of m.variables) if (v.kind === 'path') { const val = (chosen[v.name] || '').trim() || (v.default ? resolveString(v.default, r as never, host.platform) : ''); if (val) out[v.name] = val }
     return out
   }
+  const linkedObs = (p: string) => { const id = loadSettings().repos.find((r) => r.path === p)?.installId; let i: ObsInstall | undefined; try { i = id ? findInstall(id) : undefined } catch { i = undefined }; return i ? { kind: i.kind, configDir: i.configDir } : undefined }
   const setupPlan = (p: string): (PlannedStep & { ranBefore: boolean; changedSince: boolean })[] => {
     const m = readBundleDir(p, { keepMissing: true }).manifest
     const ran = readRan()[m.id] ?? {}
-    return planSetup(m, { platform: host.platform, home: host.home, presetDir: p, folders: folderVars(m), python: pythonNow() }).map((s) => ({ ...s, ranBefore: !!s.fingerprint && ran[s.id] === s.fingerprint, changedSince: !!s.fingerprint && !!ran[s.id] && ran[s.id] !== s.fingerprint }))
+    return planSetup(m, { platform: host.platform, home: host.home, presetDir: p, folders: folderVars(m), python: pythonNow(), ...(linkedObs(p) ? { obs: linkedObs(p)! } : {}) }).map((s) => ({ ...s, ranBefore: !!s.fingerprint && ran[s.id] === s.fingerprint, changedSince: !!s.fingerprint && !!ran[s.id] && ran[s.id] !== s.fingerprint }))
   }
   const setupRuns = new Map<string, { lines: string[]; done: boolean; exitCode?: number | null; message?: string }>()
   handle('setup:plan', (_e, p: string) => memoised(`setup|${p}`, 5_000, () => heavy(() => ({ steps: setupPlan(p), folders: Object.keys(folderVars(readBundleDir(p, { keepMissing: true }).manifest)) }))))
@@ -1473,6 +1474,7 @@ function registerIpc() {
   })
 
   handle('app:version', () => app.getVersion())
+  handle('app:refresh', () => true) // not in READ_ONLY on purpose: any such call clears the shared answers, so the next read is fresh
   handle('app:openExternal', (_e, url: string) => {
     if (/^https:\/\//.test(url)) return shell.openExternal(url) // only web links, never file: or custom schemes
   })

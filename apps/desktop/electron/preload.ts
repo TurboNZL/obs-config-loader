@@ -151,6 +151,7 @@ const api: Api = {
   app: {
     version: () => call('app:version'),
     openExternal: (u) => call('app:openExternal', u),
+    refresh: () => call('app:refresh'),
   },
   pathForFile: (f) => webUtils.getPathForFile(f),
 }

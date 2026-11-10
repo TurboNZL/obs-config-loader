@@ -60,6 +60,13 @@ const MAX_SCRIPT_BYTES = 1024 * 1024
 /** Script folders: where their files are kept in a setup, and which of them are (code only, nothing hidden, nothing big). */
 export const PROJECT_DIR = 'scripts/projects'
 export const PROJECT_FILE = /\.(py|lua|sh|bat|cmd|ps1|txt|md|html?|css|m?js)$/i  // code, and the web page a script serves next to it (a dashboard)
+/** OBS's own empty starter layout: called "Untitled" and holding no sources except at most empty scenes. */
+export function isBlankDefault(j: any): boolean {
+  if (typeof j?.name !== 'string' || !/^untitled$/i.test(j.name.trim())) return false
+  const sources: any[] = Array.isArray(j.sources) ? j.sources : []
+  return sources.every((s) => s?.id === 'scene' && !(Array.isArray(s?.settings?.items) && s.settings.items.length > 0))
+}
+
 /** What a setup may put into a script folder on import: code plus the pictures, sounds and data files the scenes use. Never programs. */
 export const PROJECT_KEEP = /\.(py|lua|sh|bat|cmd|ps1|txt|html?|css|m?js|md|json|ini|cfg|yaml|yml|png|jpe?g|gif|webp|bmp|svg|mp3|wav|ogg|flac|m4a|aac|opus|mp4|mov|mkv|webm|avi|flv|ttf|otf|woff2?)$/i
 const PROJECT_SKIP_DIRS = new Set(['venv', 'env', 'node_modules', '__pycache__', 'site-packages', 'dist', 'build', 'images', 'media', 'assets'])
@@ -409,6 +416,9 @@ export function exportBundle(opts: ExportOptions): Bundle {
     if (opts.collections && !opts.collections.includes(name)) continue
     const json = readJson(nodePath.join(scenesDir, file))
     if (!json) { col.warnings.push(`Skipped ${file}: not valid JSON.`); continue }
+    // OBS makes an empty "Untitled" layout of its own on first start. It is not part of anyone's setup, and the person cannot see or delete it
+    // from this app, so it must never show up as a change or be copied into a preset.
+    if (isBlankDefault(json)) continue
     if (ex.collections?.includes(name) || (typeof json.name === 'string' && ex.collections?.includes(json.name))) continue
     if (ex.scripts && json.modules && typeof json.modules === 'object') { json.modules = { ...json.modules }; delete json.modules['scripts-tool'] }
     const u = usedIds(json)
