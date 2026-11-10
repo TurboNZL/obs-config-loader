@@ -259,7 +259,7 @@ path inside that folder is written as `{{var:SCRIPT_FOLDER}}/<relative path>`. A
 never rewritten by a later save.
 
 The files of such a folder are kept in the setup: `projects` (optional) is a list of `{ variable, files[] }`, and each file is stored at
-`scripts/projects/<variable>/<relative path>`. Only plain code is kept (`.py .lua .sh .bat .cmd .ps1 .txt`), not hidden files or
+`scripts/projects/<variable>/<relative path>`. Only plain code and its notes are kept (`.py .lua .sh .bat .cmd .ps1 .txt .md`, and web files `.html .css .js`), not hidden files or
 environment/media folders, at most two folders deep, at most 1 MB per file, 200 files and 5 MB in all. Importers write a file into the
 folder the variable resolved to **only if** that folder is new or empty or already holds one of the variable's `mustContain` files (so a
 file can never put code into an unrelated folder), only for the same allowed extensions, never outside the folder (no `..`, no hidden

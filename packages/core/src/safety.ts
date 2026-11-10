@@ -23,7 +23,7 @@ export function looksSecret(text: string): boolean {
 }
 
 /** Text-like files whose contents are worth checking before they are kept (code is not checked: it mentions "token" as a word). */
-export const DATA_FILE = /\.(txt|json|ini|cfg|conf|env|ya?ml|toml|properties)$/i
+export const DATA_FILE = /\.(txt|md|json|ini|cfg|conf|env|ya?ml|toml|properties)$/i
 
 /**
  * A small .gitignore reader: what the project itself says it does not want shared (its own secrets, its build and its

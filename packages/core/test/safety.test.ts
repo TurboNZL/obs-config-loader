@@ -48,6 +48,10 @@ describe('nothing secret reaches a preset', () => {
     fs.writeFileSync(nodePath.join(proj, 'main.py'), 'import os\nHERE = os.path.dirname(os.path.abspath(__file__))\n')
     fs.writeFileSync(nodePath.join(proj, 'tools/helper.py'), 'x = 1\n')
     fs.writeFileSync(nodePath.join(proj, 'requirements.txt'), 'PyNaCl==1.6.2\n')
+    fs.mkdirSync(nodePath.join(proj, 'docs'))
+    fs.writeFileSync(nodePath.join(proj, 'README.md'), '# My tool\nSet DISCORD_BOT_TOKEN= in your .env file.\n')
+    fs.writeFileSync(nodePath.join(proj, 'docs/guide.md'), 'How to use it.\n')
+    fs.writeFileSync(nodePath.join(proj, 'docs/oops.md'), 'my login: OBS_WS_PASSWORD=hunter2hunter2\n')  // someone pasted a real one
     fs.writeFileSync(nodePath.join(proj, 'dashboard.html'), '<html><body>live</body></html>')  // a web page the script serves
     fs.writeFileSync(nodePath.join(proj, 'lib/their_copy.py'), 'y = 2\n')
     fs.writeFileSync(nodePath.join(proj, '.gitignore'), '.env\n/lib/\nsetup-code.txt\n')
@@ -64,7 +68,7 @@ describe('nothing secret reaches a preset', () => {
     const { home, cfg } = withProject()
     const b = exportBundle({ host: host('linux', home), install: install(cfg), name: 'x' })
     const kept = b.manifest.projects![0].files
-    expect(kept.sort()).toEqual(['dashboard.html', 'main.py', 'requirements.txt', 'tools/helper.py'])
+    expect(kept.sort()).toEqual(['README.md', 'dashboard.html', 'docs/guide.md', 'main.py', 'requirements.txt', 'tools/helper.py'])
     for (const [name, data] of b.files) expect(data.toString('utf8'), name).not.toMatch(/MTIzNDU2Nzg5|hunter2/)
   })
 
