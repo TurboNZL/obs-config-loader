@@ -35,3 +35,28 @@ describe('a suggested folder from another computer', () => {
     expect(plan.report.warnings.join(' ')).toMatch(/\/mnt\/TurboFILES\/Videos\/OBS does not exist on this computer/)
   })
 })
+
+import { isBlankDefault } from '../src/export.js'
+describe('OBS starter layout', () => {
+  it('is recognised when it is the empty Untitled layout only', () => {
+    expect(isBlankDefault({ name: 'Untitled', sources: [{ id: 'scene', settings: { items: [] } }] })).toBe(true)
+    expect(isBlankDefault({ name: 'Untitled', sources: [{ id: 'scene', settings: { items: [{ name: 'x' }] } }] })).toBe(false)
+    expect(isBlankDefault({ name: 'Untitled', sources: [{ id: 'image_source' }] })).toBe(false)
+    expect(isBlankDefault({ name: 'My layout', sources: [] })).toBe(false)
+  })
+})
+
+import { planSetup } from '../src/index.js'
+describe('{{obs}} in a setup step', () => {
+  it('gives the portable folder of the linked OBS', () => {
+    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'obsstep-'))
+    fs.writeFileSync(nodePath.join(dir, 'go.sh'), '#!/bin/sh\n')
+    const m = { setup: { steps: [{ id: 'a', title: 'A', run: { linux: { program: '{{bundle}}/go.sh', args: ['--obs', '{{obs}}', '--kind', '{{obskind}}'] } } }] } } as never
+    const base = { platform: 'linux' as const, home: '/h', presetDir: dir, folders: {} }
+    const a = planSetup(m, { ...base, obs: { kind: 'portable', configDir: '/p/prismalite obs/config/obs-studio' } })[0]
+    expect(a.command?.args).toEqual(['--obs', '/p/prismalite obs', '--kind', 'portable'])
+    const b = planSetup(m, { ...base, obs: { kind: 'flatpak', configDir: '/x' } })[0]
+    expect(b.command?.args).toEqual(['--obs', '', '--kind', 'installed'])
+    expect(planSetup(m, base)[0].command?.args).toEqual(['--obs', '', '--kind', ''])
+  })
+})

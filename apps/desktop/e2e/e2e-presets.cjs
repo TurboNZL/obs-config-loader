@@ -258,7 +258,7 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   await app.evaluate(({ dialog }, p) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] }) }, winFile)
   await page.click('button:has-text("Import a file")')
   await page.waitForSelector('text=Added the preset')
-  await card('From Windows').locator('button:has-text("Apply to OBS")').click()
+  await (async (t) => { await t.locator('button[aria-label="Show details"], button[title="Show details"]').first().click(); await t.locator('button:has-text("Review before applying")').click() })(card('From Windows'))
   await page.waitForSelector('text=Here is what will happen')
   const mic = page.locator('select[aria-label="What Mic becomes"]')
   const win = page.locator('select[aria-label="What Game window becomes"]')

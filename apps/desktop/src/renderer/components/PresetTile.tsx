@@ -12,13 +12,15 @@ import { SetupSteps } from './SetupSteps'
 type Pending = { kind: 'save'; files: string[] } | { kind: 'pull'; files: string[] } | null
 
 /** One preset as a tile: what is in it, how it stands against the linked OBS (this computer) and against GitHub, and what you can do. */
-export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, notify, wide, onWide }: {
+export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, notify, wide, onWide, tick }: {
   repo: RepoInfo; installs: InstallInfo[]; gh: GithubState; refresh: () => Promise<void>
   /** Replace just this preset's entry (after asking GitHub), without re-reading everything else. */
   patch: (r: RepoInfo) => void
   apply: (dir: string, installId?: string) => void; go: (t: 'settings' | 'import') => void; notify: (m: Msg) => void
   /** The tile needs the whole row (its panels are open). */
   wide: boolean; onWide: (on: boolean) => void
+  /** Goes up when the person presses Refresh: look at everything again. */
+  tick?: number
 }) {
   const st = repo.status
   const usable = installs.filter((i) => i.configExists)
@@ -62,16 +64,16 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     setDetails(undefined) // the line-by-line preview is only read when it is asked for
     setPending('error' in r ? null : r.pending ?? null)
   }
-  useEffect(() => { void check(); setShowDiff(false) }, [linkedId, st.dirtyFiles.length, st.commits]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void check(); setShowDiff(false) }, [linkedId, st.dirtyFiles.length, st.commits, tick]) // eslint-disable-line react-hooks/exhaustive-deps
   // the coloured preview reads every changed file, so it is only made when someone opens it
   useEffect(() => {
     if (!showDiff || !linkedId || details) return
     void window.obsLoader.repos.live(repo.path, linkedId, true).then((r) => { if (!('error' in r)) setDetails(r.details) })
   }, [showDiff]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { void window.obsLoader.repos.needs(repo.path).then(setNeeds).catch(() => setNeeds([])) }, [repo.path, st.behind])
+  useEffect(() => { void window.obsLoader.repos.needs(repo.path).then(setNeeds).catch(() => setNeeds([])) }, [repo.path, st.behind, tick])
   // a file renamed outside the app is the same file: say so, instead of asking for it again
   const [renamed, setRenamed] = useState<RenamedFile[]>([])
-  useEffect(() => { void window.obsLoader.repos.renamed(repo.path).then(setRenamed).catch(() => setRenamed([])) }, [repo.path, st.behind, st.commits])
+  useEffect(() => { void window.obsLoader.repos.renamed(repo.path).then(setRenamed).catch(() => setRenamed([])) }, [repo.path, st.behind, st.commits, tick])
   const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p
   const useNewName = async (r: RenamedFile) => {
     const res = await window.obsLoader.repos.acceptRename(repo.path, r.id, r.to, linkedId)
@@ -85,8 +87,40 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
   const [cmp, setCmp] = useState<OnlineComparison | null>(null)
   const [sure, setSure] = useState<'mine' | 'theirs' | null>(null)
   const disagree = !!cmp && cmp.unrelated && st.ahead > 0
-  useEffect(() => { if (online) void window.obsLoader.repos.check(repo.path).then((r) => { setChecked(true); patch(r.repo) }); else setChecked(true) }, [repo.path, online]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (online) void window.obsLoader.repos.check(repo.path).then((r) => { setChecked(true); patch(r.repo) }); else setChecked(true) }, [repo.path, online, tick]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (online && checked && (st.behind > 0 || st.ahead > 0)) void window.obsLoader.repos.compare(repo.path).then(setCmp); else setCmp(null) }, [online, checked, st.behind, st.ahead, repo.path])
+
+  /**
+   * One click: apply the whole preset to the OBS it is linked to (or the only OBS there is), with no review.
+   * Anything that needs a person (OBS open, a question nobody has answered, real unsaved OBS edits that would be replaced,
+   * several OBS to choose from) opens the review page instead, and says why.
+   */
+  const applyNow = async (installId?: string) => {
+    const target = installId ?? (usable.length === 1 ? usable[0].id : undefined)
+    if (!target) { apply(repo.path); return }
+    const review = (why: string) => { notify({ tone: 'warn', text: why }); apply(repo.path, target) }
+    setBusy(true); setMsg(null)
+    try {
+      const b = await window.obsLoader.bundle.openPath(repo.path)
+      if (!b || 'error' in b) { setMsg({ tone: 'bad', text: b && 'error' in b ? b.error : 'Could not open the preset.' }); return }
+      const [loc, secrets] = await Promise.all([window.obsLoader.locations.load(b.manifest.id), window.obsLoader.secrets.load(b.manifest.id)])
+      const req = {
+        handle: b.handle, installId: target, collections: b.manifest.collections.map((c) => c.id), profiles: b.manifest.profiles.map((c) => c.id),
+        variables: Object.fromEntries(Object.entries({ ...loc.variables, ...secrets }).filter(([, x]) => x !== '')), assetFiles: loc.assets,
+        conflict: 'replace' as const, activate: true, preferPipewire: true, sourceChoices: {},
+      }
+      const plan = await window.obsLoader.import.plan(req)
+      if (plan.blockers.length > 0) return review(plan.blockers[0])
+      if (plan.missingVariables.some((v) => v.kind !== 'secret' && v.required)) return review('This preset needs an answer before it can be applied. Fill it in below.')
+      const lv = await window.obsLoader.repos.live(repo.path, target)
+      if (!('error' in lv) && lv.changed.length > 0 && !lv.unsynced) return review('OBS has changes the preset does not have, and applying would replace them. Save them to the preset first, or apply anyway from here.')
+      const r = await window.obsLoader.import.apply(req)
+      await window.obsLoader.locations.save(b.manifest.id, { assets: loc.assets, variables: Object.fromEntries(Object.entries(loc.variables)) })
+      const where = installs.find((i) => i.id === target)?.label ?? 'OBS'
+      notify({ tone: 'good', text: `Applied “${repo.name}” to ${where}.${r.backedUp > 0 ? ` ${plural(r.backedUp, 'file')} it replaced ${r.backedUp === 1 ? 'was' : 'were'} backed up first.` : ''}` })
+      await refresh()
+    } catch (e) { setMsg({ tone: 'bad', text: (e as Error).message }) } finally { setBusy(false) }
+  }
 
   const changes = live?.length ?? 0
   const toObs = pending?.length ?? 0
@@ -131,7 +165,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
 
   const showPull = (r: PullResult) => {
     setConflict(null)
-    if (r.status === 'updated') setMsg({ tone: 'good', text: `Got ${r.files.length} changed file${r.files.length === 1 ? '' : 's'}. Press “Apply to OBS…” to put them into OBS.` })
+    if (r.status === 'updated') setMsg({ tone: 'good', text: `Got ${r.files.length} changed file${r.files.length === 1 ? '' : 's'}. Press “Apply to OBS” to put them into OBS.` })
     else if (r.status === 'conflict') { setConflict({ kind: 'pull', files: r.conflicts }); setMsg(null) }
     else if (r.status === 'dirty') setMsg({ tone: 'warn', text: `Save your changes first (${r.files.length} file${r.files.length === 1 ? ' was' : 's were'} changed by hand). Use “Update preset from OBS”.` })
     else if (r.status === 'error') setMsg({ tone: 'bad', text: r.message })
@@ -231,7 +265,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           <div className="space-y-2">
             <p className="text-sm min-h-[3.75rem]">{obsLine}</p>
             <div className="grid grid-cols-2 gap-2">
-              <button className={'btn px-3 py-2 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => apply(repo.path, linkedId)}>Apply to OBS…</button>
+              <button className={'btn px-3 py-2 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => void applyNow(linkedId)}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
               <button className={'btn px-3 py-2 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy} onClick={() => save(false)}>Update preset from OBS</button>
             </div>
             <div className="min-h-[1.75rem]">
@@ -248,7 +282,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           <div className="space-y-2">
             <p className="text-sm min-h-[3.75rem]">This preset stands on its own: it only changes when you change it here.</p>
             <div className="grid grid-cols-2 gap-2">
-              <button className="btn px-3 py-2" disabled={busy} onClick={() => apply(repo.path)}>Apply to OBS…</button>
+              <button className="btn px-3 py-2" disabled={busy} onClick={() => void applyNow()}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
               <span />
             </div>
             <div className="min-h-[1.75rem]" />
@@ -341,7 +375,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
             <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => save(false, undefined, true)}>Yes, remove them from the preset</button>
             <button className="btn px-3 py-1" onClick={() => setRemoveAsk(null)}>No, keep the preset as it is</button>
           </div>
-          <p className="text-xs text-muted mt-1">To put them into OBS instead, press “Apply to OBS…”. Nothing has been changed yet.</p>
+          <p className="text-xs text-muted mt-1">To put them into OBS instead, press “Apply to OBS”. Nothing has been changed yet.</p>
         </Message>
       )}
 
@@ -416,6 +450,12 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
             <h3 className="font-semibold text-sm flex items-center gap-2"><Icon name="cloud" size={14} /> Online backup</h3>
             <Choice checked disabled={busy} onChange={(on) => !on && toggleOnline(false)} title="Back up online (GitHub)" help="Every save is uploaded automatically, so a copy is always on GitHub." />
           </div>}
+
+          <div className="space-y-1">
+            <h3 className="font-semibold text-sm">Apply with a review</h3>
+            <p className="text-xs text-muted">“Apply to OBS” on the tile puts the whole preset into OBS straight away. This opens a page where you can see what will happen and choose parts first.</p>
+            <button className="btn px-3 py-1.5" disabled={busy} onClick={() => apply(repo.path, linkedId)}>Review before applying…</button>
+          </div>
 
           <SetupSteps presetPath={repo.path} authoring />
           <Details repo={repo} installId={linkedId} refresh={refresh} obsNote notify={notify} />
