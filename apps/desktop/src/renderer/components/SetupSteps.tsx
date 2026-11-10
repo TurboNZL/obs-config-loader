@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { SetupStepInfo } from '../../../electron/api'
-import { Chip, Choice, Field, Message } from '../ui'
+import { Card, Chip, Choice, Field, Message } from '../ui'
 
 type Run = { id: string; lines: string[]; done: boolean; exitCode?: number | null; message?: string }
 
@@ -8,7 +8,7 @@ type Run = { id: string; lines: string[]; done: boolean; exitCode?: number | nul
  * What a preset can do for you beyond OBS settings: set up the program it needs, run its own installer. Nobody opens a terminal: each
  * step is a button, shown in words first. Nothing runs by itself, because a preset can come from anyone.
  */
-export function SetupSteps({ presetPath, authoring, onChanged, title }: { presetPath: string; authoring?: boolean; onChanged?: () => void; title?: string }) {
+export function SetupSteps({ presetPath, authoring, onChanged, title, card }: { presetPath: string; authoring?: boolean; onChanged?: () => void; title?: string; /** Show it as a card of its own, and show nothing at all when there are no steps (no empty card). */ card?: boolean }) {
   const [steps, setSteps] = useState<SetupStepInfo[] | null>(null)
   const [folders, setFolders] = useState<string[]>([])
   const [run, setRun] = useState<Run | null>(null)
@@ -38,9 +38,9 @@ export function SetupSteps({ presetPath, authoring, onChanged, title }: { preset
   if (!steps.length && !authoring) return null
   const busy = !!run && !run.done
 
+  const Wrap = ({ children }: { children: React.ReactNode }) => (card ? <Card title={title ?? 'Setup steps'}>{children}</Card> : <div className="space-y-2"><h3 className="font-semibold text-sm">{title ?? 'Setup steps'}</h3>{children}</div>)
   return (
-    <div className="space-y-2">
-      <h3 className="font-semibold text-sm">{title ?? 'Setup steps'}</h3>
+    <Wrap>
       {steps.length > 0 && <p className="text-xs text-muted">{authoring ? 'These run on whoever uses this preset, when they press the button. Nothing runs by itself, and nobody needs a terminal.' : 'This setup can finish the job for you. Nothing runs until you press a button, and you never need a terminal.'}</p>}
       {steps.map((s) => (
         <div key={s.id} className="bt-row py-2 space-y-1">
@@ -83,7 +83,7 @@ export function SetupSteps({ presetPath, authoring, onChanged, title }: { preset
       {authoring && (adding
         ? <AddStep presetPath={presetPath} folders={folders} onDone={async (added) => { setAdding(false); if (added) { await load(); onChanged?.() } }} />
         : <button className="btn btn-ghost px-3 py-1 text-sm" onClick={() => setAdding(true)}>Add a setup step…</button>)}
-    </div>
+    </Wrap>
   )
 }
 
