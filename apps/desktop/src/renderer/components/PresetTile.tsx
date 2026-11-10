@@ -95,6 +95,17 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
    * Anything that needs a person (OBS open, a question nobody has answered, real unsaved OBS edits that would be replaced,
    * several OBS to choose from) opens the review page instead, and says why.
    */
+  const [renaming, setRenaming] = useState(false)
+  const [newName, setNewName] = useState('')
+  const renameHere = async () => {
+    setBusy(true)
+    const r = await window.obsLoader.presets.rename({ path: repo.path, kind: 'preset', to: newName })
+    setBusy(false)
+    if (!r.ok) { notify({ tone: 'bad', text: r.error }); return }
+    setRenaming(false)
+    notify({ tone: 'good', text: `Renamed to “${newName.trim()}”.${repo.online ? ' The GitHub copy keeps its own name: rename it under the details if you want them to match.' : ''}` })
+    await refresh()
+  }
   const applyNow = async (installId?: string) => {
     const target = installId ?? (usable.length === 1 ? usable[0].id : undefined)
     if (!target) { apply(repo.path); return }
@@ -231,7 +242,18 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
       {/* header: name, then the link and export buttons */}
       <div className="flex items-center gap-2">
         <Icon name="layers" size={18} className="text-muted" />
-        <h2 className="bt-panel-title font-semibold flex-1 min-w-0 truncate" title={repo.name}>{repo.name}</h2>
+        {renaming ? (
+          <form className="flex-1 min-w-0 flex gap-1.5" onSubmit={(e) => { e.preventDefault(); void renameHere() }}>
+            <input className="input flex-1 min-w-0 px-2 py-1" autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} aria-label="New name for this preset" onKeyDown={(e) => e.key === 'Escape' && setRenaming(false)} />
+            <button className="btn btn-accent px-3 py-1" type="submit" disabled={busy || !newName.trim()}>Rename</button>
+          </form>
+        ) : (
+          <>
+            <h2 className="bt-panel-title font-semibold min-w-0 truncate" title={repo.name}>{repo.name}</h2>
+            <button className="btn btn-ghost p-1 text-muted" aria-label={`Rename ${repo.name}`} title="Rename this preset" onClick={() => { setNewName(repo.name); setRenaming(true) }}><Icon name="pencil" size={14} /></button>
+            <span className="flex-1" />
+          </>
+        )}
         {linkedId || repo.installId
           ? <IconButton icon="link" kind="local" active label={`Linked to ${obsName}. Press to unlink (the preset stays as it is)`} onClick={unlink} />
           : <IconButton icon="unlink" label="Not linked to an OBS. Press to link it to one" active={linking} onClick={() => { setLinking(!linking); setLinkTo(usable[0]?.id ?? '') }} disabled={usable.length === 0} />}
@@ -263,12 +285,12 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         {repo.installId && !linkedId && <p className="text-sm">This preset is linked to an OBS that cannot be found any more. Unlink it with the chain button.</p>}
         {linkedId ? (
           <div className="space-y-2">
-            <p className="text-sm min-h-[3.75rem]">{obsLine}</p>
+            <p className="text-sm min-h-[2.75rem]">{obsLine}</p>
             <div className="grid grid-cols-2 gap-2">
               <button className={'btn px-3 py-2 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => void applyNow(linkedId)}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
               <button className={'btn px-3 py-2 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy} onClick={() => save(false)}>Update preset from OBS</button>
             </div>
-            <div className="min-h-[1.75rem]">
+            <div>
               {changes > 0 && (
               <div>
                 <button className="btn btn-ghost px-2 py-0.5 text-xs inline-flex items-center gap-1" aria-expanded={showDiff} onClick={() => setShowDiff(!showDiff)}><Icon name="diff" size={13} /> {showDiff ? 'Hide what changed' : 'See what changed'}</button>
@@ -280,12 +302,11 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           </div>
         ) : !repo.installId && (
           <div className="space-y-2">
-            <p className="text-sm min-h-[3.75rem]">This preset stands on its own: it only changes when you change it here.</p>
+            <p className="text-sm min-h-[2.75rem]">This preset stands on its own: it only changes when you change it here.</p>
             <div className="grid grid-cols-2 gap-2">
               <button className="btn px-3 py-2" disabled={busy} onClick={() => void applyNow()}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
               <span />
             </div>
-            <div className="min-h-[1.75rem]" />
           </div>
         )}
       </KindPanel>

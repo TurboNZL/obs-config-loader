@@ -12,7 +12,7 @@ import {
   findRenamedAssets, missingFilesInObs, presetLastSaved, obsLastChanged, planSetup, setupSteps, findPython, runPlannedStep, resolveString, type PlannedStep, replacePathInObs, applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
   readLocalKeys, readLocalSettings, writeLocalKeys, writeLocalSettings, cloudSkippedPaths, writeExclude, LOCAL_DIR, EXTRAS_EXT, type LocalSettings,
   listPlatformSources, DEFAULT_PLATFORM_MAP, withIdentity, listAuthors, rewriteAuthor, discardNameChangeBackup, putFile, getFile, testStorage, objectKey, validateTarget, regionFromEndpoint, sha256OfFile, localMediaPath,
-  type GitIdentity, type StorageTarget, type StorageKeys,
+  type GitIdentity, type StorageTarget, type StorageKeys, encodePairCode, decodePairCode,
 } from '@obs-config-loader/core'
 import { Updates } from './updater'
 import type { BundleSummary, ExportRequest, ExportResult, GithubState, ImportRequest, InstallInfo, Locations, PresetOverview, RepoInfo } from './api'
@@ -342,6 +342,18 @@ function loadStorageKeys(): StorageKeys | undefined {
 function storageReady(t?: StorageTarget): boolean {
   const mine = loadSettings().storage
   return !!mine && !!loadStorageKeys() && (!t || (mine.endpoint === t.endpoint && mine.bucket === t.bucket))
+}
+/**
+ * The storage a preset uses: its own (paired with a code, kept in its private local/ part next to the stream keys, never uploaded)
+ * or else the one set up in Settings. Each preset can therefore have its own bucket and keys.
+ */
+const presetStorageFile = (p: string) => path.join(p, 'local', 'storage.json')
+function storageFor(p: string): { target?: StorageTarget; keys?: StorageKeys; own: boolean } {
+  try {
+    const j = JSON.parse(fs.readFileSync(presetStorageFile(p), 'utf8')) as { target?: StorageTarget; keys?: StorageKeys }
+    if (j.target && j.keys?.accessKeyId && j.keys.secretAccessKey) return { target: j.target, keys: j.keys, own: true }
+  } catch { /* this preset has no storage of its own */ }
+  return { target: loadSettings().storage, keys: loadStorageKeys(), own: false }
 }
 const storageError = (e: unknown) => redactKeys((e as Error).message)
 function redactKeys(text: string): string {
@@ -1173,7 +1185,7 @@ function registerIpc() {
       remoteControl: { present: rc, local: !ex.remoteControl, cloud: !skip.remoteControl },
       keys: { count: keyCount, keep: set.keepKeys ?? keepKeysDefault() },
       onlyHere, sizeBytes: dirSize(p), maxUploadBytes: MAX_UPLOAD_FILE,
-      storage: set.storage ? { label: set.storage.label || set.storage.bucket, connected: storageReady(set.storage), target: set.storage } : undefined,
+      storage: set.storage ? { label: set.storage.label || set.storage.bucket, connected: (() => { const s = storageFor(p); return !!s.target && !!s.keys && s.target.endpoint === set.storage!.endpoint && s.target.bucket === set.storage!.bucket })(), target: set.storage, own: storageFor(p).own } : undefined,
     }
   })))
 
@@ -1407,6 +1419,25 @@ function registerIpc() {
     const st = loadSettings(); st.storage = t; saveSettings(st)
     return { ok: true, sessionOnly: storageSessionOnly }
   })
+  /** The pairing code of a preset's storage: one line to send to someone (privately) so their copy can use the same bucket. */
+  handle('storage:pairCode', (_e, p: string) => {
+    const s = storageFor(p)
+    if (!s.target || !s.keys) return { ok: false, error: 'This preset has no storage set up yet.' }
+    return { ok: true, code: encodePairCode(s.target, s.keys) }
+  })
+  /** Use a pairing code for this preset only: checked against the bucket first, then kept in its private local/ part. */
+  handle('storage:pair', async (_e, p: string, code: string) => {
+    try {
+      const { target, keys } = decodePairCode(code)
+      const test = await testStorage(target, keys)
+      if (!test.ok) return { ok: false, error: test.message.split(keys.secretAccessKey).join('***') }
+      fs.mkdirSync(path.join(p, 'local'), { recursive: true })
+      fs.writeFileSync(presetStorageFile(p), JSON.stringify({ target, keys }), { mode: 0o600 })
+      const cur = readLocalSettings(p)
+      writeLocalSettings(p, { ...cur, storage: target })
+      return { ok: true }
+    } catch (e) { return { ok: false, error: (e as Error).message.split(/OBSSTORE1:[^\s.]*/).join('…') } }
+  })
   handle('storage:forget', () => {
     storageKeysMem = undefined; storageSessionOnly = false
     try { fs.rmSync(storageKeysPath(), { force: true }) } catch { /* nothing saved */ }
@@ -1418,9 +1449,8 @@ function registerIpc() {
       const cur = readLocalSettings(p)
       const had = new Set(cur.cloud?.stored ?? [])
       const adding = ids.filter((i) => !had.has(i))
-      const target = loadSettings().storage
-      const keys = loadStorageKeys()
-      if (adding.length && (!target || !keys)) return { ok: false, error: 'Set up your big-file storage first (Settings).' }
+      const { target, keys } = storageFor(p)
+      if (adding.length && (!target || !keys)) return { ok: false, error: 'Set up this preset\'s big-file storage first (paste a pairing code under “Where each part is kept”, or set one up in Settings).' }
       const m = readBundleDir(p, { keepMissing: true }).manifest
       const own = localMediaLocations(p, m)
       const known = locationsFor(m.id).assets
@@ -1455,9 +1485,8 @@ function registerIpc() {
       const set = readLocalSettings(p)
       const wanted = new Set(set.cloud?.stored ?? [])
       if (!wanted.size) return { ok: true, downloaded: 0, failed: [] as { filename: string; error: string }[] }
-      const target = loadSettings().storage
-      const keys = loadStorageKeys()
-      if (!target || !keys || !storageReady(set.storage)) return { ok: false, error: set.storage ? `This preset keeps big files in “${set.storage.label || set.storage.bucket}”. Connect to it in Settings first (you only need its access keys).` : 'Set up your big-file storage first (Settings).' }
+      const { target, keys } = storageFor(p)
+      if (!target || !keys || (set.storage && (target.endpoint !== set.storage.endpoint || target.bucket !== set.storage.bucket))) return { ok: false, error: set.storage ? `This preset keeps big files in “${set.storage.label || set.storage.bucket}”. Paste its pairing code under “Where each part is kept” (or enter its keys).` : 'Set up this preset\'s big-file storage first.' }
       const m = readBundleDir(p, { keepMissing: true }).manifest
       const own = localMediaLocations(p, m)
       const known = locationsFor(m.id).assets

@@ -165,3 +165,20 @@ describe('an OBS that was never compared with the preset', () => {
     expect(obsLastChanged(nodePath.join(tmp, 'nothing-here'))).toBeNull()
   })
 })
+
+describe('a preset\'s setup steps survive saves from OBS', () => {
+  it('manifest.setup is still there, and still tracked, after OBS changes and is saved again', async () => {
+    const { dir, h, inst, cfg } = setup()
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'M' })
+    const mf = nodePath.join(dir, 'manifest.json')
+    const m = JSON.parse(fs.readFileSync(mf, 'utf8'))
+    m.setup = { steps: [{ id: 'go', title: 'Go', run: { any: { program: '{{python}}' } } }] }
+    fs.writeFileSync(mf, JSON.stringify(m, null, 2) + '\n'); await commitAll(dir, 'add a step')
+    await markSynced(dir, inst)
+    const scenes = nodePath.join(cfg, 'basic/scenes'); const f = nodePath.join(scenes, fs.readdirSync(scenes).find((x) => x.endsWith('.json'))!)
+    const j = JSON.parse(fs.readFileSync(f, 'utf8')); j.current_scene = 'changed'; fs.writeFileSync(f, JSON.stringify(j))
+    expect((await captureLive({ host: h, install: inst, dir })).status).toBe('committed')
+    expect(readBundleDir(dir).manifest.setup?.steps?.[0]?.id).toBe('go')
+  })
+})
