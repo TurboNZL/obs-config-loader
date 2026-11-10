@@ -51,10 +51,14 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
   useEffect(() => { void loadOverview() }, [repo.path, st.commits, st.dirtyFiles.length]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { onWide(open || exporting) }, [open, exporting]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // never matched on this computer: the app cannot say which side changed, so it shows when each was last changed instead
+  const [unsync, setUnsync] = useState<{ saved?: { date: string; by: string }; obs?: string } | null>(null)
+  const [removeAsk, setRemoveAsk] = useState<string[] | null>(null)
   const check = async () => {
-    if (!linkedId) { setLive(null); setPending(null); setDetails(undefined); return }
+    if (!linkedId) { setLive(null); setPending(null); setDetails(undefined); setUnsync(null); return }
     const r = await window.obsLoader.repos.live(repo.path, linkedId)
     setLive('error' in r ? null : r.changed)
+    setUnsync('error' in r || !r.unsynced ? null : { saved: r.presetSaved, obs: r.obsChanged })
     setDetails(undefined) // the line-by-line preview is only read when it is asked for
     setPending('error' in r ? null : r.pending ?? null)
   }
@@ -88,13 +92,15 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
   const toObs = pending?.length ?? 0
   // say WHAT: a number alone tells nobody what the button will do
   const namesOf = (files: string[]) => { const n = [...new Set(files.map(friendlyFile))]; return n.length > 3 ? `${n.slice(0, 3).join('; ')}; and ${n.length - 3} more` : n.join('; ') }
+  const when = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'not known')
   const obsLine = !linkedId ? ''
-    : live === null ? `Checking ${obsName}…`
-    : changes > 0 && toObs > 0 ? `${obsName} has changes the preset does not have, and the preset has changes ${obsName} does not have.`
-    : changes > 0 ? `${obsName} has ${plural(changes, 'change')} this preset does not have yet: ${namesOf(live ?? [])}.`
-    : toObs > 0 ? `This preset has ${plural(toObs, 'update')} that ${obsName} does not have yet: ${namesOf(pending ?? [])}.`
-    : `${obsName} and this preset match.`
-  const obsAccent: 'save' | 'apply' | null = changes > 0 ? 'save' : toObs > 0 ? 'apply' : null
+    : live === null ? `Checking the linked OBS…`
+    : unsync && changes > 0 ? `Not compared yet: they differ in ${plural(changes, 'place')}. The preset was last saved ${when(unsync.saved?.date)}${unsync.saved?.by ? ` (by ${unsync.saved.by})` : ''}; the linked OBS last changed ${when(unsync.obs)}. Apply the preset if it is right, or update it from OBS if OBS is.`
+    : changes > 0 && toObs > 0 ? `The linked OBS has changes the preset does not have, and the preset has changes the linked OBS does not have.`
+    : changes > 0 ? `The linked OBS has ${plural(changes, 'change')} this preset does not have yet: ${namesOf(live ?? [])}.`
+    : toObs > 0 ? `This preset has ${plural(toObs, 'update')} that the linked OBS does not have yet: ${namesOf(pending ?? [])}.`
+    : `The linked OBS and this preset match.`
+  const obsAccent: 'save' | 'apply' | null = unsync ? null : changes > 0 ? 'save' : toObs > 0 ? 'apply' : null
   const ghLine = !checked ? 'Asking GitHub…'
     : st.ahead > 0 && st.behind > 0 ? 'Both this computer and GitHub have changed: choose below.'
     : st.behind > 0 ? `GitHub has ${plural(st.behind, 'newer change')}.`
@@ -105,7 +111,8 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
 
   const showSave = (r: SaveResult) => {
     if (r.status === 'dirty') { setDirtyAsk(r.files); return }
-    setDirtyAsk(null); setConflict(null)
+    if (r.status === 'would-remove') { setRemoveAsk(r.removes); setMsg(null); return }
+    setDirtyAsk(null); setConflict(null); setRemoveAsk(null)
     if (r.status === 'error') { setMsg({ tone: 'bad', text: r.message }); return }
     if (r.status === 'conflict') { setConflict({ kind: 'save', files: r.conflicts }); setMsg(null); return }
     const extra = [
@@ -116,9 +123,9 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     else if (r.status === 'unchanged') setMsg({ tone: 'good', text: `Already up to date: OBS has nothing new.${extra ? ' (' + extra + ')' : ''}` })
     else setMsg({ tone: 'good', text: `Saved${r.merged ? ' and combined with newer changes that were already in the preset' : ''}${extra ? '; ' + extra : ''}.` })
   }
-  const save = (commitDirty: boolean, onConflict?: 'abort' | 'keep-repo' | 'keep-obs') => run(async () => {
+  const save = (commitDirty: boolean, onConflict?: 'abort' | 'keep-repo' | 'keep-obs', confirmRemoval?: boolean) => run(async () => {
     if (!linkedId) return
-    showSave(await window.obsLoader.repos.save(repo.path, linkedId, commitDirty, onConflict))
+    showSave(await window.obsLoader.repos.save(repo.path, linkedId, commitDirty, onConflict, confirmRemoval))
     await check(); await loadOverview()
   })
 
@@ -231,6 +238,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
               {changes > 0 && (
               <div>
                 <button className="btn btn-ghost px-2 py-0.5 text-xs inline-flex items-center gap-1" aria-expanded={showDiff} onClick={() => setShowDiff(!showDiff)}><Icon name="diff" size={13} /> {showDiff ? 'Hide what changed' : 'See what changed'}</button>
+                {showDiff && unsync && <p className="text-xs text-muted mt-1">In this list, + is in OBS and not in the preset; − is in the preset and not in OBS.</p>}
                 {showDiff && <div className="mt-1"><DiffView details={details} files={live ?? []} /></div>}
               </div>
               )}
@@ -323,6 +331,17 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
               </div>
             </div>
           )}
+        </Message>
+      )}
+
+      {removeAsk && (
+        <Message tone="bad">
+          <strong>Updating the preset from the linked OBS would remove things from the preset.</strong> It has never been compared with this preset, and does not have: {removeAsk.map(friendlyFile).join('; ')}. They are in the preset (probably saved on another computer).
+          <div className="mt-2 flex gap-2 flex-wrap">
+            <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => save(false, undefined, true)}>Yes, remove them from the preset</button>
+            <button className="btn px-3 py-1" onClick={() => setRemoveAsk(null)}>No, keep the preset as it is</button>
+          </div>
+          <p className="text-xs text-muted mt-1">To put them into OBS instead, press “Apply to OBS…”. Nothing has been changed yet.</p>
         </Message>
       )}
 

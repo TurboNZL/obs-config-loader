@@ -9,6 +9,7 @@ import { exportBundle, deriveManifestFields, stripSecrets } from './export.js'
 import { readBundleDir, serializeManifest, writeBundleDir, BundleError } from './bundleIO.js'
 import { availableOn, isPlatformSpecific, DEFAULT_PLATFORM_MAP } from './sources.js'
 import { unversioned } from './plugins.js'
+import { BACKUP_FILE } from './safety.js'
 import { applyVersions, type DetectedVersions } from './versions.js'
 import { mergeProfileVariants } from './profilevariants.js'
 import {
@@ -317,6 +318,8 @@ export interface CaptureOptions {
   onConflict?: 'abort' | 'keep-repo' | 'keep-obs'
   /** With `dryRun`: also say what changed line by line. */
   withDiff?: boolean
+  /** The person has seen what saving from a never-compared OBS would remove from the preset, and said yes. */
+  confirmRemoval?: boolean
   /** Also keep this computer's own part of the preset up to date (stream keys, copies of big files, parts not uploaded). Default yes. */
   keepLocal?: boolean
   /** Whether a preset that has not said otherwise keeps stream keys. Default yes. */
@@ -329,7 +332,9 @@ export interface ChangeDetail { file: string; status: 'added' | 'modified' | 'de
 
 export type CaptureResult =
   | { status: 'unchanged' }
-  | { status: 'changes'; files: string[]; details?: ChangeDetail[]; localChanges?: string[] } // dry run only
+  | { status: 'changes'; files: string[]; details?: ChangeDetail[]; localChanges?: string[]; /** This OBS was never matched to the preset here: the differences cannot be called OBS's changes. */ unsynced?: boolean } // dry run only
+  /** Saving from an OBS that was never matched to this preset would remove these from the preset (scene layouts / output settings): ask first. */
+  | { status: 'would-remove'; removes: string[] }
   | { status: 'committed'; files: string[]; commit: string; merged: boolean; keys?: number; copied?: number }
   | { status: 'conflict'; conflicts: string[] }
   | { status: 'dirty'; files: string[] }
@@ -346,12 +351,39 @@ async function revParse(dir: string, rev: string, git: GitRunner): Promise<strin
 }
 
 /** The commit live edits are measured against: what OBS last matched, if that is still part of this history. */
-async function baseFor(dir: string, install: ObsInstall, git: GitRunner): Promise<{ head: string | null; base: string | null }> {
+async function baseFor(dir: string, install: ObsInstall, git: GitRunner): Promise<{ head: string | null; base: string | null; unsynced: boolean }> {
   const head = await revParse(dir, 'HEAD', git)
-  if (!head) return { head: null, base: null }
+  if (!head) return { head: null, base: null, unsynced: false }
   const marked = await revParse(dir, syncRef(install), git)
-  if (marked && (await git(['merge-base', '--is-ancestor', marked, head], dir)).code === 0) return { head, base: marked }
-  return { head, base: head }
+  if (marked && (await git(['merge-base', '--is-ancestor', marked, head], dir)).code === 0) return { head, base: marked, unsynced: false }
+  // This OBS was never matched to this preset on this computer (the preset came from GitHub, or was linked without applying or saving):
+  // there is no common starting point, so nobody can say which side changed. Differences are measured from the preset's newest state.
+  return { head, base: head, unsynced: true }
+}
+
+/** When this preset was last saved, and by whom (so a person can tell which side is newer). */
+export async function presetLastSaved(dir: string, git: GitRunner = defaultGit): Promise<{ date: string; by: string; subject: string } | null> {
+  const r = await git(['log', '-1', '--date=iso-strict', '--pretty=format:%ad%x1f%an%x1f%s', 'HEAD'], dir)
+  const [date, by, subject] = r.stdout.split('\x1f')
+  return r.code === 0 && date ? { date, by, subject } : null
+}
+
+/** When this OBS's scene and output files last changed (newest file date, ISO), or null when it has none. */
+export function obsLastChanged(configDir: string): string | null {
+  let newest = 0
+  const walk = (d: string, depth: number) => {
+    let ents: fs.Dirent[] = []
+    try { ents = fs.readdirSync(d, { withFileTypes: true }) } catch { return }
+    for (const e of ents) {
+      const full = nodePath.join(d, e.name)
+      if (e.isDirectory()) { if (depth < 2) walk(full, depth + 1); continue }
+      if (BACKUP_FILE.test(e.name)) continue
+      try { newest = Math.max(newest, fs.statSync(full).mtimeMs) } catch { /* vanished */ }
+    }
+  }
+  walk(nodePath.join(configDir, 'basic', 'scenes'), 0)
+  walk(nodePath.join(configDir, 'basic', 'profiles'), 0)
+  return newest ? new Date(newest).toISOString() : null
 }
 
 /**
@@ -538,7 +570,7 @@ export async function captureLive(o0: CaptureOptions): Promise<CaptureResult> {
     if (o.onDirty !== 'commit-first') return { status: 'dirty', files: st.dirtyFiles }
     await commitAll(o.dir, 'Changes made outside OBS Config Loader', git)
   }
-  const { head, base } = await baseFor(o.dir, o.install, git)
+  const { head, base, unsynced } = await baseFor(o.dir, o.install, git)
   // What the preset leaves out is what it says NOW (its current files), not what it said at the commit OBS last matched.
   let excludeNow: Manifest['exclude'] | undefined
   try { excludeNow = readBundleDir(o.dir).manifest.exclude ?? {} } catch { /* first save: nothing yet */ }
@@ -598,7 +630,14 @@ export async function captureLive(o0: CaptureOptions): Promise<CaptureResult> {
       if (o.dryRun) {
         let details: ChangeDetail[] | undefined
         if (o.withDiff) details = [...(await describeStaged(wt, git)), ...shown.map((f): ChangeDetail => ({ file: f, status: 'modified', added: 0, removed: 0, local: true }))]
-        return { status: 'changes', files: [...files, ...shown], ...(details ? { details } : {}), ...(shown.length ? { localChanges: shown } : {}) }
+        return { status: 'changes', files: [...files, ...shown], ...(details ? { details } : {}), ...(shown.length ? { localChanges: shown } : {}), ...(unsynced ? { unsynced: true } : {}) }
+      }
+      // An OBS this preset was never compared with has fewer things than a preset that other computers added to: saving from it would
+      // delete those from the preset. That needs a clear yes, not a button press.
+      if (unsynced && !o.confirmRemoval) {
+        const removes = (await git(['diff', '--cached', '--name-status', '--no-renames'], wt)).stdout.split('\n')
+          .filter((l) => l.startsWith('D\t')).map((l) => l.slice(2)).filter((f) => /^collections\/[^/]+\.json$/.test(f) || /^profiles\/[^/]+\/basic\.ini$/.test(f))
+        if (removes.length) return { status: 'would-remove', removes }
       }
 
       if (!files.length && !stopped) {

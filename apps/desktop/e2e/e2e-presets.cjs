@@ -327,6 +327,28 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   check('a program that is not part of the setup is refused, in words', true)
   await page.screenshot({ path: OUT + '/p9-setup-steps.png', fullPage: true })
 
+  console.log('13. an OBS that was never compared with the preset (a preset that came from GitHub, then linked): no guessing about who changed what')
+  {
+    const gitDir = path.join(root, 'MyPresets/Other')
+    const { execFileSync } = require('child_process')
+    for (const r of execFileSync('git', ['for-each-ref', '--format=%(refname)', 'refs/obs-config-loader/synced'], { cwd: gitDir, encoding: 'utf8' }).split('\n').filter(Boolean)) execFileSync('git', ['update-ref', '-d', r], { cwd: gitDir })
+    // make this OBS differ from the preset, as a different computer's OBS would
+    fs.rmSync(path.join(cfg, 'basic/scenes/Gameplay.json')) // a layout the preset has and this OBS does not (saved on another computer)
+    await page.click('nav >> text=Home'); await page.click('nav >> text=Presets')
+    const o = card('Other')
+    await o.locator('text=/Not compared yet/').waitFor({ timeout: 30000 })
+    const t = await o.innerText()
+    check('it says they were never compared, and when each side last changed', /Not compared yet: they differ in/.test(t) && /was last saved/.test(t) && /the linked OBS last changed/.test(t))
+    check('it does not claim OBS made changes', !/has \d+ changes? this preset does not have yet/.test(t))
+    check('neither button is pushed as the right one', (await o.locator('button.btn-accent:has-text("Update preset from OBS")').count()) === 0 && (await o.locator('button.btn-accent:has-text("Apply to OBS")').count()) === 0)
+    await o.locator('button:has-text("Update preset from OBS")').click()
+    await o.locator('text=/would remove things from the preset/').waitFor({ timeout: 30000 })
+    check('updating from it asks first, and names what would go', (await o.innerText()).includes('Scene layout'))
+    check('nothing was removed by asking', fs.readdirSync(path.join(gitDir, 'collections')).length > 0)
+    await page.screenshot({ path: OUT + '/p10-unsynced.png', fullPage: true })
+    await o.locator('button:has-text("No, keep the preset as it is")').click()
+  }
+
   await app.close()
   console.log(process.exitCode ? 'E2E-PRESETS FAILED' : 'E2E-PRESETS OK')
 })().catch((e) => { console.error('E2E-PRESETS FAIL', e); process.exit(1) })

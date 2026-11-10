@@ -444,6 +444,7 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
                       if (r.status === 'dirty') setError('Some files in the preset were changed by hand. Open “Presets” to deal with them first.')
                       else if (r.status === 'error') setError(r.message)
                       else if (r.status === 'conflict') setError('Your OBS and the preset both changed the same part. Open “Presets” to choose which to keep.')
+                      else if (r.status === 'would-remove') setError('This OBS does not have some of what is in the preset, so saving from it would remove those. Open “Presets” to see what, and choose.')
                       else await checkLive()
                     }}>{saving ? 'Saving…' : 'Save them to the preset now'}</button>
                   </div>
