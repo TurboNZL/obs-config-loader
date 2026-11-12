@@ -96,6 +96,7 @@ function InstallCard({ i, refresh, go }: { i: InstallInfo; refresh: () => Promis
         </Message>
       )}
 
+      {i.launch && <StartOptions id={i.id} />}
       <div className="flex gap-2 flex-wrap">
         {i.launch && <button className="btn px-3 py-1.5" disabled={start.phase === 'starting' || start.phase === 'checking'} onClick={launch}>Start OBS</button>}
         <button className="btn btn-accent px-3 py-1.5" onClick={() => go('import', i.id)}>Apply a setup here</button>
@@ -168,5 +169,31 @@ function NewInstance({ installs, refresh }: { installs: InstallInfo[]; refresh: 
         if (r.ok) await refresh(); else setError(r.error)
       }}>{busy ? 'Making it…' : 'Make it'}</button>
     </Card>
+  )
+}
+
+
+/** Extra start options for this OBS: known switches (checked against OBS's own source) and a free line for anything else. */
+function StartOptions({ id }: { id: string }) {
+  const [state, setState] = useState<{ options: { flags: string[]; custom: string }; flags: { id: string; label: string; help: string }[] } | null>(null)
+  useEffect(() => { void window.obsLoader.installs.getLaunch(id).then(setState) }, [id])
+  if (!state) return null
+  const save = (o: { flags: string[]; custom: string }) => { setState({ ...state, options: o }); void window.obsLoader.installs.setLaunch(id, o) }
+  const on = state.options.flags
+  return (
+    <details className="text-sm">
+      <summary className="cursor-pointer text-muted">Start options{on.length || state.options.custom ? ` (${on.length + (state.options.custom ? 1 : 0)} on)` : ''}</summary>
+      <div className="mt-2 space-y-1">
+        <p className="text-xs text-muted">Used whenever you press “Start OBS” here. These switches are the ones OBS itself understands.</p>
+        {state.flags.map((f) => (
+          <label key={f.id} className="flex items-start gap-2">
+            <input type="checkbox" className="mt-1" checked={on.includes(f.id)} onChange={(e) => save({ ...state.options, flags: e.target.checked ? [...on, f.id] : on.filter((x) => x !== f.id) })} />
+            <span>{f.label}{f.help && <span className="text-xs text-muted"> — {f.help}</span>}</span>
+          </label>
+        ))}
+        <label className="block text-xs text-muted pt-1">Anything else (passed on exactly as typed, for example browser-engine switches)</label>
+        <input className="input w-full px-2 py-1.5 mono" value={state.options.custom} onChange={(e) => save({ ...state.options, custom: e.target.value })} aria-label="Other start options" placeholder="--some-switch --another=value" />
+      </div>
+    </details>
   )
 }

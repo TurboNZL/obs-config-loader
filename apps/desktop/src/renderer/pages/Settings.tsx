@@ -26,6 +26,9 @@ export function SettingsPage() {
 
   return (
     <Page icon="settings" title="Settings" intro="Where your presets are kept, how stream keys are handled, your online backup account, who your saves are by, and where big files go.">
+      <Card title={<span className="inline-flex items-center gap-2"><Icon name="home" /> When the app opens</span>}>
+          <StartTabChoice />
+        </Card>
       {s && (
         <Card title={<span className="inline-flex items-center gap-2"><Icon name="folder" /> Where presets are kept</span>}>
           <p className="text-sm text-muted">Every preset gets its own folder here, in the place your system keeps an app's own data. Changing this does not move presets you already have; they stay where they are.</p>
@@ -69,5 +72,23 @@ export function SettingsPage() {
       <IdentityCard key={gh.login ?? (gh.connected ? 'on' : 'off')} />
       <StorageCard />
     </Page>
+  )
+}
+
+
+/** Which tab the app opens on. Kept in this computer's browser storage (it is only a convenience). */
+function StartTabChoice() {
+  const get = () => { try { return localStorage.getItem('obscl.startTab') ?? 'home' } catch { return 'home' } }
+  const [v, setV] = useState(get)
+  return (
+    <label className="block text-sm">
+      <span className="text-muted">Open on</span>
+      <select className="input w-full px-2 py-1.5 mt-1" value={v} onChange={(e) => { setV(e.target.value); try { localStorage.setItem('obscl.startTab', e.target.value) } catch { /* not kept */ } }} aria-label="Tab to open on">
+        <option value="home">Home</option>
+        <option value="presets">Presets</option>
+        <option value="installs">OBS on this computer</option>
+        <option value="last">The tab I was on last time</option>
+      </select>
+    </label>
   )
 }

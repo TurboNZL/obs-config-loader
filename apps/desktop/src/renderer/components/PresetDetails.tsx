@@ -60,6 +60,7 @@ export function Details({ repo, installId, refresh, obsNote, notify }: { repo: R
         {d.layouts.map((l) => (
           <div key={l.id}>
             <RenameRow label="Scene layout" value={l.name} onRename={rename({ kind: 'layout', id: l.id })} />
+            <RemovePart repo={repo} kind="layout" id={l.id} name={l.name} refresh={refresh} notify={notify} load={load} />
             {l.scenes.length > 0 && l.scenes.map((s) => <RenameRow key={'s' + s} indent label="Scene" value={s} onRename={rename({ kind: 'scene', layoutId: l.id, from: s })} />)}
             {l.sources.length > 0 && (
               <details className="pl-4 text-sm">
@@ -69,7 +70,13 @@ export function Details({ repo, installId, refresh, obsNote, notify }: { repo: R
             )}
           </div>
         ))}
-        {d.outputs.map((o) => <RenameRow key={o.id} label="Output settings" value={o.name} onRename={rename({ kind: 'output', id: o.id })} />)}
+        {d.outputs.map((o) => (
+          <div key={o.id}>
+            <RenameRow label="Output settings" value={o.name} onRename={rename({ kind: 'output', id: o.id })} />
+            <p className="text-xs text-muted pl-1">{o.systems && o.systems.length ? `Saved on: ${o.systems.join(', ')}.` : 'No per-system details saved.'} {o.id}</p>
+            <RemovePart repo={repo} kind="output" id={o.id} name={o.name} refresh={refresh} notify={notify} load={load} />
+          </div>
+        ))}
       </div>
 
       <Translations repo={repo} d={d} reload={load} />
@@ -249,3 +256,27 @@ export function MoveIt({ repo, refresh, notify }: { repo: RepoInfo; refresh: () 
   )
 }
 
+
+
+/** Take a scene layout or output settings out of the preset (not out of OBS), after asking. */
+function RemovePart({ repo, kind, id, name, refresh, notify, load }: { repo: RepoInfo; kind: 'layout' | 'output'; id: string; name: string; refresh: () => Promise<void>; notify: (m: Msg) => void; load: () => unknown }) {
+  const [ask, setAsk] = useState(false)
+  const [busy, setBusy] = useState(false)
+  if (!ask) return <button className="btn btn-ghost px-2 py-0.5 text-xs" aria-label={`Remove ${name} from this preset`} onClick={() => setAsk(true)}>Remove from preset…</button>
+  return (
+    <div className="text-xs space-y-1 py-1">
+      <p>Remove “{name}” from this preset? OBS keeps its own copy. If OBS still has it, “Update preset from OBS” would add it back, so delete it in OBS too if you do not want it.</p>
+      <div className="flex gap-2">
+        <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={async () => {
+          setBusy(true)
+          const r = await window.obsLoader.presets.removePart({ path: repo.path, kind, id })
+          setBusy(false)
+          if (!r.ok) { notify({ tone: 'bad', text: r.error }); setAsk(false); return }
+          notify({ tone: 'good', text: `Removed “${name}” from the preset.` })
+          await refresh(); void load()
+        }}>{busy ? 'Removing…' : 'Yes, remove it'}</button>
+        <button className="btn px-3 py-1" onClick={() => setAsk(false)}>Keep it</button>
+      </div>
+    </div>
+  )
+}

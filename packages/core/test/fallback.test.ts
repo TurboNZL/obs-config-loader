@@ -53,8 +53,8 @@ describe('{{obs}} in a setup step', () => {
     fs.writeFileSync(nodePath.join(dir, 'go.sh'), '#!/bin/sh\n')
     const m = { setup: { steps: [{ id: 'a', title: 'A', run: { linux: { program: '{{bundle}}/go.sh', args: ['--obs', '{{obs}}', '--kind', '{{obskind}}'] } } }] } } as never
     const base = { platform: 'linux' as const, home: '/h', presetDir: dir, folders: {} }
-    const a = planSetup(m, { ...base, obs: { kind: 'portable', configDir: '/p/prismalite obs/config/obs-studio' } })[0]
-    expect(a.command?.args).toEqual(['--obs', '/p/prismalite obs', '--kind', 'portable'])
+    const a = planSetup(m, { ...base, obs: { kind: 'portable', configDir: '/p/exampleorg obs/config/obs-studio' } })[0]
+    expect(a.command?.args).toEqual(['--obs', '/p/exampleorg obs', '--kind', 'portable'])
     const b = planSetup(m, { ...base, obs: { kind: 'flatpak', configDir: '/x' } })[0]
     expect(b.command?.args).toEqual(['--obs', '', '--kind', 'installed'])
     expect(planSetup(m, base)[0].command?.args).toEqual(['--obs', '', '--kind', ''])

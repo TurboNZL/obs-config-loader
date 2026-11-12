@@ -24,7 +24,7 @@ function fakeGithub(over: { cloneUrl?: string; status?: number; body?: unknown }
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
     if (over.status && over.status !== 200) return json(over.status, over.body ?? { message: 'nope' })
     if (url.endsWith('/user')) return json(200, { login: 'streamer' })
-    if (url.includes('/user/orgs')) return json(200, [{ login: 'Zeta' }, { login: 'Prismalite' }])
+    if (url.includes('/user/orgs')) return json(200, [{ login: 'Zeta' }, { login: 'ExampleOrg' }])
     if (url.includes('/orgs/') && init.method === 'POST') {
       const org = decodeURIComponent(url.split('/orgs/')[1].split('/')[0]); const name = JSON.parse(String(init.body)).name
       return json(201, { name, full_name: `${org}/${name}`, clone_url: `https://github.com/${org}/${name}.git`, html_url: `https://github.com/${org}/${name}`, private: true })
@@ -94,14 +94,14 @@ describe('GitHub calls', () => {
   })
   it('can make the repository under an organisation, and lists the organisations and their repositories', async () => {
     const g = fakeGithub()
-    expect(await githubOrgs('t', g.f)).toEqual(['Prismalite', 'Zeta'])
-    const made = await githubCreateRepo('t', 'OBS-Config-Prismalite', { private: true, org: 'Prismalite' }, g.f)
-    expect(made).toMatchObject({ fullName: 'Prismalite/OBS-Config-Prismalite', cloneUrl: 'https://github.com/Prismalite/OBS-Config-Prismalite.git' })
-    expect(g.calls.at(-1)!.url).toMatch(/\/orgs\/Prismalite\/repos$/)
+    expect(await githubOrgs('t', g.f)).toEqual(['ExampleOrg', 'Zeta'])
+    const made = await githubCreateRepo('t', 'OBS-Config-ExampleOrg', { private: true, org: 'ExampleOrg' }, g.f)
+    expect(made).toMatchObject({ fullName: 'ExampleOrg/OBS-Config-ExampleOrg', cloneUrl: 'https://github.com/ExampleOrg/OBS-Config-ExampleOrg.git' })
+    expect(g.calls.at(-1)!.url).toMatch(/\/orgs\/ExampleOrg\/repos$/)
     await githubListRepos('t', g.f)
     expect(g.calls.at(-1)!.url).toContain('organization_member')
-    await expect(githubCreateRepo('t', 'x', { private: true, org: 'Prismalite' }, fakeGithub({ status: 403 }).f)).rejects.toThrow(/would not let this account make a repository in Prismalite/)
-    await expect(githubCreateRepo('t', 'x', { private: true, org: 'Prismalite' }, fakeGithub({ status: 422 }).f)).rejects.toThrow(/Prismalite already has a repository called "x"/)
+    await expect(githubCreateRepo('t', 'x', { private: true, org: 'ExampleOrg' }, fakeGithub({ status: 403 }).f)).rejects.toThrow(/would not let this account make a repository in ExampleOrg/)
+    await expect(githubCreateRepo('t', 'x', { private: true, org: 'ExampleOrg' }, fakeGithub({ status: 422 }).f)).rejects.toThrow(/ExampleOrg already has a repository called "x"/)
   })
   it('turns failures into plain sentences', async () => {
     await expect(githubWhoAmI('bad', fakeGithub({ status: 401 }).f)).rejects.toThrow(/did not accept that token/)
@@ -199,7 +199,7 @@ describe('putting a preset into a repository that already exists', () => {
       const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
       if (url.endsWith('/user')) return json(200, { login: 'streamer' })
       if (init.method === 'POST') return json(422, { message: 'Repository creation failed.', errors: [{ message: 'name already exists on this account' }] })
-      if (/\/repos\/[^/]+\/OBS-Config-mine$/.test(url)) return json(200, { name: 'OBS-Config-mine', full_name: 'Prismalite/OBS-Config-mine', clone_url: bare, html_url: 'https://github.com/Prismalite/OBS-Config-mine', private: true, default_branch: defaultBranch })
+      if (/\/repos\/[^/]+\/OBS-Config-mine$/.test(url)) return json(200, { name: 'OBS-Config-mine', full_name: 'ExampleOrg/OBS-Config-mine', clone_url: bare, html_url: 'https://github.com/ExampleOrg/OBS-Config-mine', private: true, default_branch: defaultBranch })
       return json(404, { message: 'Not Found' })
     }) as unknown as typeof fetch
     return { f, calls }
@@ -214,12 +214,12 @@ describe('putting a preset into a repository that already exists', () => {
     await captureLive({ host: host('linux', home), install: install(cfg), dir, name: 'Mine' })
     const g = existing(bare)
 
-    await expect(publishToGithub(dir, 't', 'mine', { private: true, org: 'Prismalite' }, g.f)).rejects.toThrow(/already has a repository called "OBS-Config-mine"/)
+    await expect(publishToGithub(dir, 't', 'mine', { private: true, org: 'ExampleOrg' }, g.f)).rejects.toThrow(/already has a repository called "OBS-Config-mine"/)
     expect((await repoStatus(dir)).remote).toBeUndefined() // nothing was changed by the refusal
 
-    const out = await publishToGithub(dir, 't', 'mine', { private: true, org: 'Prismalite', replaceExisting: true }, g.f)
+    const out = await publishToGithub(dir, 't', 'mine', { private: true, org: 'ExampleOrg', replaceExisting: true }, g.f)
     expect(out).toMatchObject({ replaced: true, push: { status: 'pushed' } })
-    expect(g.calls.some((c) => c.startsWith('GET') && c.endsWith('/repos/Prismalite/OBS-Config-mine'))).toBe(true)
+    expect(g.calls.some((c) => c.startsWith('GET') && c.endsWith('/repos/ExampleOrg/OBS-Config-mine'))).toBe(true)
     const files = git(tmp, '--git-dir', bare, 'ls-tree', '-r', '--name-only', 'main').split('\n')
     expect(files).toContain('manifest.json')       // the preset is what the repository holds now
     expect(files).not.toContain('old.txt')         // and what was there is gone from it
@@ -232,7 +232,7 @@ describe('putting a preset into a repository that already exists', () => {
     const dir = nodePath.join(tmp, 'mine2'); await initRepo(dir)
     git(dir, 'branch', '-M', 'master')
     await captureLive({ host: host('linux', home), install: install(cfg), dir, name: 'Mine' })
-    const out = await publishToGithub(dir, 't', 'mine', { private: true, org: 'Prismalite', replaceExisting: true }, existing(bare, 'trunk').f)
+    const out = await publishToGithub(dir, 't', 'mine', { private: true, org: 'ExampleOrg', replaceExisting: true }, existing(bare, 'trunk').f)
     expect(out.push.status).toBe('pushed')
     expect(git(tmp, '--git-dir', bare, 'ls-tree', '-r', '--name-only', 'trunk')).toContain('manifest.json')
     expect(git(tmp, '--git-dir', bare, 'branch', '--list')).not.toContain('master')
@@ -241,7 +241,7 @@ describe('putting a preset into a repository that already exists', () => {
   it('a repository that cannot be seen is explained, not guessed at', async () => {
     const dir = nodePath.join(tmp, 'mine3'); await initRepo(dir)
     const f = (async (url: string, init: RequestInit = {}) => new Response(JSON.stringify({ message: 'x' }), { status: init.method === 'POST' ? 422 : 404 })) as unknown as typeof fetch
-    await expect(publishToGithub(dir, 't', 'mine', { private: true, org: 'Prismalite', replaceExisting: true }, f)).rejects.toThrow(/would not show the repository “Prismalite\/OBS-Config-mine”/)
+    await expect(publishToGithub(dir, 't', 'mine', { private: true, org: 'ExampleOrg', replaceExisting: true }, f)).rejects.toThrow(/would not show the repository “ExampleOrg\/OBS-Config-mine”/)
   })
 })
 

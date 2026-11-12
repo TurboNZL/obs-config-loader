@@ -23,7 +23,7 @@ describe('what looks like a secret', () => {
 })
 
 describe('a project\'s own .gitignore', () => {
-  const ig = makeIgnore(['# secrets', '.env', 'members.json', 'venv/', '/lib/', '/config/', '*.log', 'prismalite-preset.txt', 'docs/*.tmp', '!keep.log'].join('\n'))
+  const ig = makeIgnore(['# secrets', '.env', 'members.json', 'venv/', '/lib/', '/config/', '*.log', 'exampleorg-preset.txt', 'docs/*.tmp', '!keep.log'].join('\n'))
   it('says what is ignored', () => {
     expect(ig('.env', false)).toBe(true)
     expect(ig('venv', true)).toBe(true)
@@ -33,7 +33,7 @@ describe('a project\'s own .gitignore', () => {
     expect(ig('tools/lib/x.py', false)).toBe(false) // "/lib/" is only the top one
     expect(ig('switcher.log', false)).toBe(true)
     expect(ig('keep.log', false)).toBe(false)
-    expect(ig('prismalite-preset.txt', false)).toBe(true)
+    expect(ig('exampleorg-preset.txt', false)).toBe(true)
     expect(ig('docs/a.tmp', false)).toBe(true)
     expect(ig('switcher.py', false)).toBe(false)
     expect(ig('tools/manager.py', false)).toBe(false)
