@@ -255,9 +255,10 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           </form>
         ) : (
           <>
-            <h2 className="bt-panel-title font-semibold min-w-0 truncate" title={repo.name}>{repo.name}</h2>
-            <button className="btn btn-ghost p-1 text-muted" aria-label={`Rename ${repo.name}`} title="Rename this preset" onClick={() => { setNewName(repo.name); setRenaming(true) }}><Icon name="pencil" size={14} /></button>
-            <span className="flex-1" />
+            <div className="group/name flex items-center gap-1.5 flex-1 min-w-0" onDoubleClick={() => { setNewName(repo.name); setRenaming(true) }} title="Double-click to rename">
+              <h2 className="bt-panel-title font-semibold min-w-0 truncate" title={repo.name}>{repo.name}</h2>
+              <button className="btn btn-ghost px-1.5 py-0.5 text-xs text-muted shrink-0 hidden group-hover/name:inline-block focus:inline-block" aria-label={`Rename ${repo.name}`} onClick={() => { setNewName(repo.name); setRenaming(true) }}>Rename</button>
+            </div>
           </>
         )}
         {linkedId || repo.installId
@@ -291,7 +292,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         {repo.installId && !linkedId && <p className="text-sm">This preset is linked to an OBS that cannot be found any more. Unlink it with the chain button.</p>}
         {linkedId ? (
           <div className="space-y-2">
-            <p className="text-sm min-h-[2.75rem]">{obsLine}</p>
+            <p className="text-sm">{obsLine}</p>
             <div className="grid grid-cols-2 gap-2">
               <button className={'btn px-3 py-1.5 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => void applyNow(linkedId)}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
               <button className={'btn px-3 py-1.5 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy} onClick={() => save(false)}>Update preset from OBS</button>
@@ -308,7 +309,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           </div>
         ) : !repo.installId && (
           <div className="space-y-2">
-            <p className="text-sm min-h-[2.75rem]">This preset stands on its own: it only changes when you change it here.</p>
+            <p className="text-sm">This preset stands on its own: it only changes when you change it here.</p>
             <div className="grid grid-cols-2 gap-2">
               <button className="btn px-3 py-1.5" disabled={busy} onClick={() => void applyNow()}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
               <span />
@@ -324,7 +325,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
       >
         {online ? (
           <div className="space-y-2">
-            <p className="text-sm min-h-[2.5rem]">{ghLine}</p>
+            <p className="text-sm">{ghLine}</p>
             <div className="grid grid-cols-2 gap-2">
               <button className={'btn px-3 py-1.5 ' + (checked && st.behind > 0 && st.ahead === 0 ? 'btn-accent' : '')} disabled={busy} onClick={() => pull()}>Get updates</button>
               <button className={'btn px-3 py-1.5 ' + (checked && st.ahead > 0 && st.behind === 0 ? 'btn-accent' : '')} disabled={busy} onClick={push}>Upload</button>
