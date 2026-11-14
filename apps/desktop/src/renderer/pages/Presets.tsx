@@ -15,6 +15,7 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
   const [git, setGit] = useState<GitState | null>(null)
   const [gh, setGh] = useState<GithubState>({ connected: false })
   const [notice, setNotice] = useState<Msg | null>(null)
+  const [skipped, setSkipped] = useState(() => { try { return localStorage.getItem('obscl.onboardingSkipped') === '1' } catch { return false } })
   const [adding, setAdding] = useState<'new' | 'get' | null>(startWith ? 'new' : null)
   const [wide, setWide] = useState<Record<string, boolean>>({})
   const [importing, setImporting] = useState(false)
@@ -62,7 +63,8 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
       {adding === 'new' && git?.available && <SaveSetup installs={installs ?? []} start={startWith} gh={gh} go={go} onDone={done} onCancel={() => setAdding(null)} />}
       {adding === 'get' && git?.available && <GetPreset gh={gh} count={repos?.length ?? 0} go={go} onDone={done} onCancel={() => setAdding(null)} />}
 
-      {repos?.length === 0 && !adding && <Message tone="warn">You have no presets yet. Press “Make a preset from my OBS” to make your first one, or “Import a file…” if someone sent you one.</Message>}
+      {repos?.length === 0 && !adding && !skipped && <Onboarding gitOk={!!git?.available} ghConnected={gh.connected} onFile={importFile} onObs={() => setAdding('new')} onGithub={() => setAdding('get')} onSettings={() => go('settings')} onSkip={() => { setSkipped(true); try { localStorage.setItem('obscl.onboardingSkipped', '1') } catch { /* not kept */ } }} />}
+      {repos?.length === 0 && !adding && skipped && <Message tone="warn">You have no presets yet. Press “Make a preset from my OBS” to make your first one, or “Import a file…” if someone sent you one.</Message>}
       <div className="grid gap-4 grid-cols-1 min-[820px]:grid-cols-2 min-[1500px]:grid-cols-3 items-stretch">
         {repos?.map((r) => (
           <PresetTile
@@ -285,5 +287,34 @@ function GetPreset({ gh, count, go, onDone, onCancel }: { gh: GithubState; count
         <button className="btn btn-ghost px-3 py-2" onClick={onCancel}>Cancel</button>
       </div>
     </Card>
+  )
+}
+
+
+/** First run: three ways to get a first preset. The skip cross is small on purpose; skipping leaves the plain message instead. */
+function Onboarding({ gitOk, ghConnected, onFile, onObs, onGithub, onSettings, onSkip }: { gitOk: boolean; ghConnected: boolean; onFile: () => void; onObs: () => void; onGithub: () => void; onSettings: () => void; onSkip: () => void }) {
+  const way = (icon: Parameters<typeof Icon>[0]['name'], title: string, text: string, go: () => void, disabled?: boolean) => (
+    <button type="button" className="btn p-4 text-left !flex !flex-col !items-start gap-1 whitespace-normal h-auto" disabled={disabled} onClick={go}>
+      <span className="font-semibold flex items-center gap-2"><Icon name={icon} size={16} /> {title}</span>
+      <span className="text-sm text-muted">{text}</span>
+    </button>
+  )
+  return (
+    <section className="card p-5 space-y-3" aria-label="Add your first preset">
+      <div className="flex items-start gap-2">
+        <div className="flex-1">
+          <h2 className="font-semibold text-lg">Let’s add your first preset</h2>
+          <p className="text-sm text-muted">A preset is a saved copy of an OBS setup. Pick the one that sounds like you.</p>
+        </div>
+        <button className="btn btn-ghost p-1 text-muted opacity-50 hover:opacity-100" aria-label="Skip this" title="Skip" onClick={onSkip}><Icon name="x" size={14} /></button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {way('fileUp', 'I have a file', 'Someone sent me a setup file (.obsbundle). I will open it here.', onFile, !gitOk)}
+        {way('monitor', 'I have OBS set up already', 'Make a preset from the OBS on this computer so it is saved and can be moved or shared.', onObs, !gitOk)}
+        {way('cloud', 'I have a GitHub link', ghConnected ? 'Get a preset from GitHub that you or a friend made.' : 'You will be asked to sign in to GitHub first (free), then pick the preset.', ghConnected ? onGithub : onGithub, !gitOk)}
+      </div>
+      {!ghConnected && <p className="text-xs text-muted">Signing in to GitHub is under <button className="underline" onClick={onSettings}>Settings</button>.</p>}
+      {!gitOk && <p className="text-xs text-muted">The app needs “git” installed first; the notice above explains how.</p>}
+    </section>
   )
 }
