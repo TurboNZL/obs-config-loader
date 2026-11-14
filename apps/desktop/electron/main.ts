@@ -8,7 +8,7 @@ import {
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
   assetBundlePath, attachSecrets, commitAll, fetchRepo, githubRenameRepo, githubRepoName, parseGithubUrl, pendingForObs, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
-  renamePreset, renameSceneLayout, renameOutputSetting, renameSceneOrSource, renameSourceInObs, RenameError,
+  LAUNCH_FLAGS, launchArgs, renamePreset, renameSceneLayout, renameOutputSetting, removeSceneLayout, removeOutputSetting, systemsSavedOn, renameSceneOrSource, renameSourceInObs, RenameError,
   findRenamedAssets, missingFilesInObs, presetLastSaved, obsLastChanged, planSetup, setupSteps, findPython, runPlannedStep, resolveString, type PlannedStep, replacePathInObs, applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
   readLocalKeys, readLocalSettings, writeLocalKeys, writeLocalSettings, cloudSkippedPaths, writeExclude, LOCAL_DIR, EXTRAS_EXT, type LocalSettings,
   listPlatformSources, DEFAULT_PLATFORM_MAP, withIdentity, listAuthors, rewriteAuthor, discardNameChangeBackup, putFile, getFile, testStorage, objectKey, validateTarget, regionFromEndpoint, sha256OfFile, localMediaPath,
@@ -61,6 +61,8 @@ interface Settings {
   github?: { login: string; name: string; email: string }
   /** Where big files are kept (an S3-compatible bucket). The access keys are not here: they are in storage.bin, encrypted. */
   storage?: StorageTarget
+  /** Extra start options per OBS (ticked known flags + typed ones). */
+  launchOptions?: Record<string, { flags?: string[]; custom?: string }>
 }
 function loadSettings(): Settings {
   try { return { customInstalls: [], repos: [], ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) } } catch { return { customInstalls: [], repos: [] } }
@@ -105,11 +107,38 @@ async function runningMap(installs: ObsInstall[]): Promise<Map<string, boolean>>
   if (process.platform === 'linux') {
     const procs = findObsProcessesLinux()
     for (const i of installs) out.set(i.id, isInstallRunning(i, procs, host))
+  } else if (process.platform === 'win32') {
+    // each running obs64.exe is matched to the OBS it belongs to by where its program file is: a portable copy is its own folder
+    const exes = await winObsExes()
+    if (exes === null) { const any = await anyObsRunning(); for (const i of installs) out.set(i.id, any) }
+    else {
+      const low = (x: string) => x.replace(/\//g, '\\').toLowerCase()
+      const portableRoots = allInstalls().filter((x) => x.kind === 'windows-portable' || x.kind === 'linux-portable').map((x) => low(path.win32.dirname(path.win32.dirname(x.configDir))))
+      for (const i of installs) {
+        if (i.kind === 'windows-portable') {
+          const root = low(path.win32.dirname(path.win32.dirname(i.configDir)))
+          out.set(i.id, exes.some((e) => low(e).startsWith(root + '\\')))
+        } else out.set(i.id, exes.some((e) => !portableRoots.some((r) => low(e).startsWith(r + '\\'))))
+      }
+    }
   } else {
     const any = await anyObsRunning()
     for (const i of installs) out.set(i.id, any)
   }
   return out
+}
+
+/** The program file of every running obs64.exe, or null when Windows would not say (then any OBS counts). Cached for a moment. */
+let winExesCache: { at: number; v: string[] | null } | undefined
+function winObsExes(): Promise<string[] | null> {
+  if (winExesCache && Date.now() - winExesCache.at < 2500) return Promise.resolve(winExesCache.v)
+  return new Promise((resolve) => {
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', "Get-Process obs64 -ErrorAction SilentlyContinue | ForEach-Object { $_.Path }"], { windowsHide: true, timeout: 8000 }, (e, out) => {
+      const v = e ? null : out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+      winExesCache = { at: Date.now(), v }
+      resolve(v)
+    })
+  })
 }
 const obsRunningFor = async (i: ObsInstall) => (await runningMap([i])).get(i.id) ?? false
 
@@ -394,7 +423,7 @@ function memoised<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<
   v.catch(() => { if (memo.get(key)?.v === v) memo.delete(key) })
   return v
 }
-const READ_ONLY = new Set(['installs:list', 'repos:list', 'repos:live', 'repos:needs', 'repos:renamed', 'setup:plan', 'setup:poll', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'github:orgs', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
+const READ_ONLY = new Set(['installs:list', 'installs:getLaunch', 'repos:list', 'repos:live', 'repos:needs', 'repos:renamed', 'setup:plan', 'setup:poll', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'github:orgs', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
 
 // ── IPC ──────────────────────────────────────────────────────────────────────
 function registerIpc() {
@@ -425,10 +454,15 @@ function registerIpc() {
   handle('installs:openFolder', async (_e, id: string) => { await shell.openPath(findInstall(id).configDir) })
 
   // ── starting OBS, and separate OBS instances ──
+  handle('installs:getLaunch', (_e, id: string) => ({ options: loadSettings().launchOptions?.[id] ?? { flags: [], custom: '' }, flags: LAUNCH_FLAGS }))
+  handle('installs:setLaunch', (_e, id: string, o: { flags: string[]; custom: string }) => {
+    const s = loadSettings(); s.launchOptions = { ...(s.launchOptions ?? {}), [id]: { flags: o.flags ?? [], custom: o.custom ?? '' } }; saveSettings(s)
+  })
   handle('installs:launch', async (_e, id: string) => {
     const i = findInstall(id)
     if (!i.launch) return { ok: false, message: 'This app does not know how to start that OBS. Start it the usual way.' }
-    const { command, args, env } = i.launch
+    const { command, env } = i.launch
+    const args = [...i.launch.args, ...launchArgs(loadSettings().launchOptions?.[id])]
     // a portable OBS must be started from its own folder (its settings are found relative to it)
     const cwd = path.isAbsolute(command) ? path.dirname(command) : undefined
     try {
@@ -1034,7 +1068,7 @@ function registerIpc() {
       scripts: [...m.assets.filter((a) => a.role === 'script').map((a) => a.filename), ...scriptFolderNames(m)],
       remoteControl: b.files.has(WEBSOCKET_FILE),
       layouts: m.collections.map((c) => ({ id: c.id, name: c.name, ...listNames(p, c.id) })),
-      outputs: m.profiles.map((x) => ({ id: x.id, name: x.name })),
+      outputs: m.profiles.map((x) => ({ id: x.id, name: x.name, systems: systemsSavedOn(p, `${x.dir}/platforms.json`).map((k) => label[k]) })),
       exclude: m.exclude ?? {},
       translations: m.platformMap.filter((e) => SOURCE_PLATFORMS[e.from]).map((e) => ({ from: e.from, name: sourceName(e.from), targets: targetsOf(e.from, e.to, overrides[e.from]) })),
       // and the same per source, for when two sources of one kind should not be treated alike
@@ -1101,12 +1135,12 @@ function registerIpc() {
   handle('presets:scanFile', (_e, p: string) => presetFiles(p, locationsFor(readBundleDir(p).manifest.id).assets))
 
   /** A setup file made from a preset: everything it holds, the big files that were chosen, the keys only when asked. */
-  handle('presets:exportFile', async (_e, p: string, o: { includeKeys: boolean; bigFiles: string[]; independent: boolean }) => {
+  handle('presets:exportFile', async (_e, p: string, o: { includeKeys: boolean; bigFiles: string[]; independent: boolean; mediaIds?: string[]; leaveOut?: { collections?: string[]; profiles?: string[]; scripts?: boolean; remoteControl?: boolean } }) => {
     try {
       const m = readBundleDir(p).manifest
       const remote = (await repoStatus(p, gitRunner())).remote ? await getRemoteUrl(p, gitRunner()) : undefined
       const built = buildPresetFile({
-        dir: p, includeKeys: o.includeKeys, bigFiles: o.bigFiles, independent: o.independent, locations: locationsFor(m.id).assets,
+        dir: p, includeKeys: o.includeKeys, bigFiles: o.bigFiles, independent: o.independent, mediaIds: o.mediaIds, leaveOut: o.leaveOut, locations: locationsFor(m.id).assets,
         repository: remote && !o.independent ? publicRemoteUrl(remote) : undefined,
       })
       const b = built.bundle
@@ -1226,6 +1260,21 @@ function registerIpc() {
     } catch (e) { return { ok: false, error: errText(e) } }
   })
 
+  /** Remove a scene layout or output settings from a preset (the preset only; OBS is left alone). */
+  handle('presets:removePart', async (_e, r: { path: string; kind: 'layout' | 'output'; id: string }) => {
+    const git = gitRunner(r.path)
+    try {
+      const st = await repoStatus(r.path, git)
+      if (st.dirtyFiles.length) return { ok: false, error: 'This preset has changes that are not saved yet. Save them first, then remove.' }
+      const m = readBundleDir(r.path, { keepMissing: true }).manifest
+      const name = r.kind === 'layout' ? m.collections.find((c) => c.id === r.id)?.name : m.profiles.find((c) => c.id === r.id)?.name
+      try { if (r.kind === 'layout') removeSceneLayout(r.path, r.id); else removeOutputSetting(r.path, r.id) }
+      catch (e) { await git(['checkout', '--', '.'], r.path); await git(['clean', '-fdq'], r.path); throw e }
+      await commitAll(r.path, `Removed ${r.kind === 'layout' ? 'scene layout' : 'output settings'} “${name ?? r.id}”`, git)
+      if (st.remote) await pushRepo(r.path, git)
+      return { ok: true }
+    } catch (e) { return { ok: false, error: e instanceof RenameError ? e.message : (e as Error).message } }
+  })
   handle('presets:rename', async (_e, r: { path: string; installId?: string; kind: 'preset' | 'layout' | 'output' | 'scene'; id?: string; layoutId?: string; from?: string; to: string }) => {
     const git = gitRunner()
     try {

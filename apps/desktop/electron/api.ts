@@ -162,7 +162,7 @@ export interface PresetDetails {
   scripts: string[]
   remoteControl: boolean
   layouts: { id: string; name: string; scenes: string[]; sources: string[] }[]
-  outputs: { id: string; name: string }[]
+  outputs: { id: string; name: string; /** Systems it was saved on (Windows, Linux, macOS). */ systems?: string[] }[]
 }
 export interface RenameRequest { path: string; installId?: string; kind: 'preset' | 'layout' | 'output' | 'scene'; id?: string; layoutId?: string; from?: string; to: string }
 
@@ -182,6 +182,9 @@ export interface Api {
     list(): Promise<InstallInfo[]>
     /** Start this OBS (any install that has a known way to start it). */
     launch(id: string): Promise<{ ok: boolean; message: string; command?: string }>
+    /** Extra start options for this OBS: the known flags (from OBS's own source) and anything typed. */
+    getLaunch(id: string): Promise<{ options: { flags: string[]; custom: string }; flags: { id: string; label: string; help: string }[] }>
+    setLaunch(id: string, o: { flags: string[]; custom: string }): Promise<void>
     /** After a start (at time `since`, ms): has this OBS written to its own settings folder since? (A separate OBS that has not is using the main settings.) */
     verify(id: string, since: number): Promise<{ usesOwnSettings: boolean }>
     addPortable(): Promise<{ added?: InstallInfo; error?: string; cancelled?: boolean }>
@@ -294,7 +297,7 @@ export interface Api {
     details(path: string): Promise<PresetDetails>
     keys(path: string): Promise<{ count: number; canStore: boolean }>
     /** A setup file (.obsbundle) from a preset. `independent`: whoever opens it gets a preset of their own, with their own GitHub copy. */
-    exportFile(path: string, o: { includeKeys: boolean; bigFiles: string[]; independent: boolean }): Promise<Done<{ path: string; keys: number; missingMedia: string[]; independent: boolean }>>
+    exportFile(path: string, o: { includeKeys: boolean; bigFiles: string[]; independent: boolean; /** Exactly these files go in (small ones too). */ mediaIds?: string[]; leaveOut?: { collections?: string[]; profiles?: string[]; scripts?: boolean; remoteControl?: boolean } }): Promise<Done<{ path: string; keys: number; missingMedia: string[]; independent: boolean }>>
     scanFile(path: string): Promise<FileChoice[]>
     /** What only this computer has of the preset (not on GitHub), as a companion file (.obsextras). */
     extrasInfo(path: string): Promise<ExtrasInfo>
@@ -307,6 +310,8 @@ export interface Api {
     setOverrides(path: string, overrides: Record<string, Record<string, string | null>>): Promise<Done<object>>
     move(path: string, parentFolder: string): Promise<Done<{ repo: RepoInfo }>>
     rename(r: RenameRequest): Promise<Done<{ alsoInObs: boolean }>>
+    /** Take a scene layout or output settings out of a preset (OBS itself is not touched). */
+    removePart(r: { path: string; kind: 'layout' | 'output'; id: string }): Promise<Done<object>>
     /** Rename the GitHub repository (the app always keeps the `OBS-Config-` start). */
     renameOnline(path: string, name: string): Promise<Done<{ name: string }>>
     setOnline(path: string, on: boolean, name: string, priv: boolean, org?: string, replace?: boolean): Promise<Done<{ url?: string; needsAccount?: boolean }>>

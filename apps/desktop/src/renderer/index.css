@@ -39,7 +39,6 @@ pre.cmd { background: hsl(var(--raised)); border: 1px solid hsl(var(--line)); pa
 .kind-store { --k: var(--k-store); }
 .kind-panel {
   background-color: hsl(var(--k) / 0.09);
-  box-shadow: inset 4px 0 0 hsl(var(--k));
   border-radius: var(--radius, 0.6rem);
 }
 .kind-text { color: hsl(var(--k)); }

@@ -51,7 +51,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
 
   const loadOverview = () => window.obsLoader.presets.overview(repo.path).then(setOv).catch(() => setOv(null))
   useEffect(() => { void loadOverview() }, [repo.path, st.commits, st.dirtyFiles.length]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { onWide(open || exporting) }, [open, exporting]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { onWide(open) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // never matched on this computer: the app cannot say which side changed, so it shows when each was last changed instead
   const [unsync, setUnsync] = useState<{ saved?: { date: string; by: string }; obs?: string } | null>(null)
@@ -108,8 +108,9 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
   }
   const applyNow = async (installId?: string) => {
     const target = installId ?? (usable.length === 1 ? usable[0].id : undefined)
-    if (!target) { apply(repo.path); return }
-    const review = (why: string) => { notify({ tone: 'warn', text: why }); apply(repo.path, target) }
+    if (!target) { notify({ tone: 'warn', text: 'Link this preset to an OBS (the chain button) so it knows where to apply, or use “Review before applying…” in its details to pick one.' }); return }
+    // never forces the review page open: say why it did not apply, and point to the advanced button
+    const review = (why: string) => { notify({ tone: 'warn', text: `${why} To go through it step by step, open this preset’s details (the arrow at the top right) and press “Review before applying…”.` }) }
     setBusy(true); setMsg(null)
     try {
       const b = await window.obsLoader.bundle.openPath(repo.path)
@@ -122,13 +123,18 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
       }
       const plan = await window.obsLoader.import.plan(req)
       if (plan.blockers.length > 0) return review(plan.blockers[0])
-      if (plan.missingVariables.some((v) => v.kind !== 'secret' && v.required)) return review('This preset needs an answer before it can be applied. Fill it in below.')
+      if (plan.missingVariables.some((v) => v.kind !== 'secret' && v.required)) return review('This preset needs an answer (a folder or file) before it can be applied.')
       const lv = await window.obsLoader.repos.live(repo.path, target)
-      if (!('error' in lv) && lv.changed.length > 0 && !lv.unsynced) return review('OBS has changes the preset does not have, and applying would replace them. Save them to the preset first, or apply anyway from here.')
+      if (!('error' in lv) && lv.changed.length > 0 && !lv.unsynced) return review('OBS has changes the preset does not have, and applying would replace them. Press “Update preset from OBS” to keep them, or use the advanced apply to replace them anyway.')
       const r = await window.obsLoader.import.apply(req)
       await window.obsLoader.locations.save(b.manifest.id, { assets: loc.assets, variables: Object.fromEntries(Object.entries(loc.variables)) })
       const where = installs.find((i) => i.id === target)?.label ?? 'OBS'
       notify({ tone: 'good', text: `Applied “${repo.name}” to ${where}.${r.backedUp > 0 ? ` ${plural(r.backedUp, 'file')} it replaced ${r.backedUp === 1 ? 'was' : 'were'} backed up first.` : ''}` })
+      // still different after applying? Say which button fixes it, instead of leaving the same warning to come back
+      const after = await window.obsLoader.repos.live(repo.path, target)
+      if (!('error' in after) && after.changed.length > 0) {
+        notify({ tone: 'warn', text: `Applied “${repo.name}” to ${where}, but ${plural(after.changed.length, 'part')} of OBS still differ from the preset (${[...new Set(after.changed.map(friendlyFile))].slice(0, 3).join('; ')}). That means OBS changed them itself or could not use the preset’s version, so applying again will not help. If OBS’s version is the right one, press “Update preset from OBS”.` })
+      }
       await refresh()
     } catch (e) { setMsg({ tone: 'bad', text: (e as Error).message }) } finally { setBusy(false) }
   }
@@ -142,7 +148,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     : live === null ? `Checking the linked OBS…`
     : unsync && changes > 0 ? `Not compared yet: they differ in ${plural(changes, 'place')}. The preset was last saved ${when(unsync.saved?.date)}${unsync.saved?.by ? ` (by ${unsync.saved.by})` : ''}; the linked OBS last changed ${when(unsync.obs)}. Apply the preset if it is right, or update it from OBS if OBS is.`
     : changes > 0 && toObs > 0 ? `The linked OBS has changes the preset does not have, and the preset has changes the linked OBS does not have.`
-    : changes > 0 ? `The linked OBS has ${plural(changes, 'change')} this preset does not have yet: ${namesOf(live ?? [])}.`
+    : changes > 0 ? `The linked OBS has ${plural(changes, 'change')} this preset does not have yet: ${namesOf(live ?? [])}. “Update preset from OBS” keeps them; “Apply to OBS” replaces them with the preset’s version.`
     : toObs > 0 ? `This preset has ${plural(toObs, 'update')} that the linked OBS does not have yet: ${namesOf(pending ?? [])}.`
     : `The linked OBS and this preset match.`
   const obsAccent: 'save' | 'apply' | null = unsync ? null : changes > 0 ? 'save' : toObs > 0 ? 'apply' : null
@@ -287,8 +293,8 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           <div className="space-y-2">
             <p className="text-sm min-h-[2.75rem]">{obsLine}</p>
             <div className="grid grid-cols-2 gap-2">
-              <button className={'btn px-3 py-2 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => void applyNow(linkedId)}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
-              <button className={'btn px-3 py-2 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy} onClick={() => save(false)}>Update preset from OBS</button>
+              <button className={'btn px-3 py-1.5 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => void applyNow(linkedId)}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
+              <button className={'btn px-3 py-1.5 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy} onClick={() => save(false)}>Update preset from OBS</button>
             </div>
             <div>
               {changes > 0 && (
@@ -304,7 +310,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           <div className="space-y-2">
             <p className="text-sm min-h-[2.75rem]">This preset stands on its own: it only changes when you change it here.</p>
             <div className="grid grid-cols-2 gap-2">
-              <button className="btn px-3 py-2" disabled={busy} onClick={() => void applyNow()}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
+              <button className="btn px-3 py-1.5" disabled={busy} onClick={() => void applyNow()}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
               <span />
             </div>
           </div>
@@ -320,8 +326,8 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           <div className="space-y-2">
             <p className="text-sm min-h-[2.5rem]">{ghLine}</p>
             <div className="grid grid-cols-2 gap-2">
-              <button className={'btn px-3 py-2 ' + (checked && st.behind > 0 && st.ahead === 0 ? 'btn-accent' : '')} disabled={busy} onClick={() => pull()}>Get updates</button>
-              <button className={'btn px-3 py-2 ' + (checked && st.ahead > 0 && st.behind === 0 ? 'btn-accent' : '')} disabled={busy} onClick={push}>Upload</button>
+              <button className={'btn px-3 py-1.5 ' + (checked && st.behind > 0 && st.ahead === 0 ? 'btn-accent' : '')} disabled={busy} onClick={() => pull()}>Get updates</button>
+              <button className={'btn px-3 py-1.5 ' + (checked && st.ahead > 0 && st.behind === 0 ? 'btn-accent' : '')} disabled={busy} onClick={push}>Upload</button>
             </div>
           </div>
         ) : (

@@ -244,3 +244,38 @@ export function replacePathInObs(configDir: string, from: string, to: string): n
 
 export const obsHasLayout = (configDir: string, name: string) => fs.existsSync(nodePath.join(configDir, 'basic', 'scenes', fileSafe(name) + '.json'))
 export const obsHasOutput = (configDir: string, name: string) => fs.existsSync(nodePath.join(configDir, 'basic', 'profiles', fileSafe(name)))
+
+/** Take a scene layout out of the preset (its files too). The preset must keep at least one. OBS itself is not touched. */
+export function removeSceneLayout(dir: string, id: string): string[] {
+  const b = readBundleDir(dir, { keepMissing: true })
+  const c = b.manifest.collections.find((x) => x.id === id)
+  if (!c) throw new RenameError('That scene layout is not in this preset any more.')
+  if (b.manifest.collections.length <= 1) throw new RenameError('A preset needs at least one scene layout, so the last one cannot be removed.')
+  fs.rmSync(nodePath.join(dir, c.file), { force: true })
+  fs.rmSync(nodePath.join(dir, variantsPathFor(c.file)), { force: true })
+  b.manifest.collections = b.manifest.collections.filter((x) => x.id !== id)
+  if (b.manifest.activeCollection === id) b.manifest.activeCollection = b.manifest.collections[0].id
+  writeManifest(dir, b.manifest)
+  return ['manifest.json', c.file]
+}
+
+/** Take output settings (OBS: a profile) out of the preset, with its folder. At least one must stay. */
+export function removeOutputSetting(dir: string, id: string): string[] {
+  const b = readBundleDir(dir, { keepMissing: true })
+  const p = b.manifest.profiles.find((x) => x.id === id)
+  if (!p) throw new RenameError('That output setting is not in this preset any more.')
+  if (b.manifest.profiles.length <= 1) throw new RenameError('A preset needs at least one set of output settings, so the last one cannot be removed.')
+  fs.rmSync(nodePath.join(dir, p.dir), { recursive: true, force: true })
+  b.manifest.profiles = b.manifest.profiles.filter((x) => x.id !== id)
+  if (b.manifest.activeProfile === id) b.manifest.activeProfile = b.manifest.profiles[0].id
+  writeManifest(dir, b.manifest)
+  return ['manifest.json', p.dir]
+}
+
+/** Which systems a part was saved on (from the per-system files next to it), for telling two look-alikes apart. */
+export function systemsSavedOn(dir: string, rel: string): ('win32' | 'darwin' | 'linux')[] {
+  try {
+    const j = JSON.parse(fs.readFileSync(nodePath.join(dir, rel), 'utf8')) as Record<string, unknown>
+    return (['win32', 'darwin', 'linux'] as const).filter((k) => k in j || (k === 'linux' && Object.keys(j).some((x) => x.startsWith('linux'))))
+  } catch { return [] }
+}

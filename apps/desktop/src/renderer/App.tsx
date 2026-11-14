@@ -17,8 +17,21 @@ const TABS: [Tab, string, IconName][] = [
   ['guides', 'Help', 'help'], ['appearance', 'Look', 'palette'], ['about', 'About', 'info'],
 ]
 
+const ls = {
+  get: (k: string) => { try { return localStorage.getItem(k) } catch { return null } },
+  set: (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* private window or blocked storage: the setting just does not stick */ } },
+}
+/** Which tab the app opens on: the one the person chose in Settings, or the one they were on last time. */
+function startTab(): Tab {
+  const ids = TABS.map((t) => t[0]) as string[]
+  const want = ls.get('obscl.startTab') ?? 'home'
+  const pick = want === 'last' ? ls.get('obscl.lastTab') : want
+  return pick && ids.includes(pick) ? (pick as Tab) : 'home'
+}
+
 export function App() {
-  const [tab, setTab] = useState<Tab>('home')
+  const [tab, setTab] = useState<Tab>(startTab)
+  useEffect(() => { if (tab !== 'import') ls.set('obscl.lastTab', tab) }, [tab])
   const [installs, setInstalls] = useState<InstallInfo[] | null>(null)
   const [preselect, setPreselect] = useState<string | undefined>()
   const [openPath, setOpenPath] = useState<string | undefined>()

@@ -8,6 +8,7 @@ import {
   cloudSkippedPaths, isSkipped, localMediaLocations, localMediaPath, readLocalKeys, safeSegment, readLocalSettings, writeExclude, writeLocalKeys, writeLocalSettings, type CloudSkip,
 } from './local.js'
 import type { Bundle } from './types.js'
+import { variantsPathFor } from './variants.js'
 
 export const SMALL_FILE = 5 * 1024 * 1024
 
@@ -29,6 +30,10 @@ export interface PresetFileOptions {
   independent?: boolean
   /** The online address of this preset (no password in it), for a file that stays linked. */
   repository?: string
+  /** Exactly which files (asset ids) to put inside, small ones included. Left out: every small file plus `bigFiles`. */
+  mediaIds?: string[]
+  /** Parts to leave out of the file (the preset keeps them). */
+  leaveOut?: { collections?: string[]; profiles?: string[]; scripts?: boolean; remoteControl?: boolean }
 }
 
 export interface PresetFile { bundle: Bundle; keys: number; missingMedia: string[] }
@@ -42,8 +47,19 @@ export function buildPresetFile(o: PresetFileOptions): PresetFile {
     if (a.role === 'script') continue
     const have = b.files.has(assetBundlePath(a))
     const f = [own[a.id], o.locations?.[a.id]].find((x) => x && fs.existsSync(x))
-    if (!have && f && (fs.statSync(f).size <= SMALL_FILE || chosen.has(a.id))) { a.mode = 'bundled'; b.files.set(assetBundlePath(a), fs.readFileSync(f)) }
+    const want = o.mediaIds ? o.mediaIds.includes(a.id) : true
+    if (!want) { b.files.delete(assetBundlePath(a)); a.mode = 'external'; continue }
+    if (!have && f && (o.mediaIds ? true : (fs.statSync(f).size <= SMALL_FILE || chosen.has(a.id)))) { a.mode = 'bundled'; b.files.set(assetBundlePath(a), fs.readFileSync(f)) }
     else if (have) a.mode = 'bundled'
+  }
+  const lo = o.leaveOut
+  if (lo) {
+    for (const id of lo.collections ?? []) { const c = b.manifest.collections.find((x) => x.id === id); if (c) { b.files.delete(c.file); b.files.delete(variantsPathFor(c.file)); b.manifest.collections = b.manifest.collections.filter((x) => x.id !== id) } }
+    for (const id of lo.profiles ?? []) { const p = b.manifest.profiles.find((x) => x.id === id); if (p) { for (const k of [...b.files.keys()]) if (k.startsWith(p.dir + '/')) b.files.delete(k); b.manifest.profiles = b.manifest.profiles.filter((x) => x.id !== id) } }
+    if (lo.scripts) { for (const k of [...b.files.keys()]) if (k.startsWith('scripts/')) b.files.delete(k); b.manifest.assets = b.manifest.assets.filter((a) => a.role !== 'script'); delete b.manifest.projects }
+    if (lo.remoteControl) b.files.delete('global/obs-websocket.json')
+    if (b.manifest.activeCollection && !b.manifest.collections.some((c) => c.id === b.manifest.activeCollection)) b.manifest.activeCollection = b.manifest.collections[0]?.id
+    if (b.manifest.activeProfile && !b.manifest.profiles.some((c) => c.id === b.manifest.activeProfile)) b.manifest.activeProfile = b.manifest.profiles[0]?.id
   }
   delete b.manifest.exclude // the file is a complete copy of what it holds; leave-outs belong to the preset, not to the file
   delete b.manifest.repository
