@@ -89,7 +89,7 @@ export type UpdateState = {
 
 export interface GitState { available: boolean; help: GitInstallHelp; platform: string }
 export interface SetupStepInfo {
-  id: string; title: string; why?: string; mode: 'wait' | 'open'; optional: boolean
+  id: string; title: string; why?: string; mode: 'wait' | 'open' | 'tab'; tab?: string; optional: boolean
   /** Exactly what will run, for the person to read. Absent when it cannot run here (then `problem` says why). */
   command?: { program: string; args: string[]; cwd: string }
   problem?: string
@@ -219,9 +219,16 @@ export interface Api {
     /** Runs the platform's installer route. Always followed by state() to see whether it worked. */
     install(): Promise<{ ok: boolean; message: string }>
   }
+  /** A script that draws its screens in a tab of the app. Events arrive through `onEvent`. */
+  script: {
+    start(path: string, stepId: string, label: string): Promise<Done<{ id: string }>>
+    send(id: string, msg: { t: 'submit'; id: string; button: string; values: Record<string, string | boolean> } | { t: 'closed' }): Promise<boolean>
+    stop(id: string): Promise<void>
+    onEvent(cb: (e: { id: string; msg: Record<string, any> }) => void): () => void
+  }
   setup: {
     /** `folders`: the folder names this preset knows (what a step can point at with `{{var:NAME}}`). */
-    plan(path: string): Promise<{ steps: SetupStepInfo[]; folders: string[] }>
+    plan(path: string): Promise<{ steps: SetupStepInfo[]; folders: string[]; name?: string }>
     /** Starts the step (never by itself: only when the person pressed the button). */
     run(path: string, stepId: string): Promise<Done<{ runId: string }>>
     poll(runId: string, from: number): Promise<SetupPoll>

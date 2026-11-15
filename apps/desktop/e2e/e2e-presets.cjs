@@ -326,6 +326,56 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   check('a program that is not part of the setup is refused, in words', true)
   await page.screenshot({ path: OUT + '/p9-setup-steps.png', fullPage: true })
 
+  console.log('12b. a script that draws its screens in a tab of the app (no terminal, no window of its own)')
+  {
+    const { execFileSync } = require('child_process')
+    const showDir = path.join(root, 'MyPresets/Show')
+    fs.writeFileSync(path.join(showDir, 'scripts/switcher/screens.py'), [
+      'import sys, json',
+      'P = "@@obscl "',
+      'def send(m): sys.stdout.write(P + json.dumps(m) + "\\n"); sys.stdout.flush()',
+      'def read():',
+      '    for line in sys.stdin:',
+      '        if line.startswith(P): return json.loads(line[len(P):])',
+      '    sys.exit(0)',
+      'send({"t": "hello", "title": "Demo"})',
+      'send({"t": "screen", "id": "a", "title": "Welcome to the demo", "sub": "Drawn by the app", "wait": True,',
+      '      "blocks": [{"k": "field", "name": "who", "label": "Your name", "value": "friend"}, {"k": "check", "name": "ok", "label": "I agree", "value": True}],',
+      '      "buttons": [{"id": "next", "label": "Go on", "primary": True}]})',
+      'r = read()',
+      'send({"t": "screen", "id": "b", "title": "Working", "wait": False, "blocks": [{"k": "steps", "items": [{"id": "x", "title": "Step one", "state": "run"}]}], "buttons": []})',
+      'send({"t": "update", "id": "b", "item": {"id": "x", "state": "ok", "text": "hello " + r["values"]["who"]}})',
+      'send({"t": "update", "id": "b", "buttons": [{"id": "done", "label": "Finish", "primary": True}]})',
+      'read()',
+      'send({"t": "exit", "code": 0})',
+    ].join('\n') + '\n')
+    const mm = JSON.parse(fs.readFileSync(path.join(showDir, 'manifest.json'), 'utf8'))
+    mm.setup.steps.push({ id: 'demo-screens', title: 'Demo installer', why: 'Opens in its own tab.', mode: 'tab', tab: 'Installer', run: { any: { program: '{{python}}', args: ['{{bundle}}/scripts/switcher/screens.py'] } } })
+    fs.writeFileSync(path.join(showDir, 'manifest.json'), JSON.stringify(mm, null, 2) + '\n')
+    execFileSync('git', ['add', '-A'], { cwd: showDir }); execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'demo step'], { cwd: showDir })
+    await page.click('nav >> text=Home'); await page.click('nav >> text=Presets')
+    await page.click('button:has-text("Refresh")')
+    await page.waitForTimeout(500)
+    const d = card('Show')
+    await d.locator('button[aria-label="Show details"]').click()
+    check('no tab bar is shown before a script is opened', (await page.locator('[role="tablist"]').count()) === 0)
+    await d.locator('div.bt-row:has-text("Demo installer") button:has-text("Open it")').click()
+    await page.locator('text=Welcome to the demo').waitFor({ timeout: 30000 })
+    check('a tab appears: [Installer] with the preset name', (await page.locator('[role="tablist"]').innerText()).includes('[Installer] Show'))
+    check('the script\'s own screen is drawn by the app (field with its value)', (await page.locator('input[aria-label="Your name"]').inputValue()) === 'friend')
+    await page.locator('input[aria-label="Your name"]').fill('Ada')
+    await page.click('button:has-text("Go on")')
+    await page.locator('text=hello Ada').waitFor({ timeout: 30000 })
+    check('live updates reach the screen', true)
+    await page.click('button:has-text("Finish")')
+    await page.locator('text=The script has ended').waitFor({ timeout: 30000 })
+    await page.click('[role="tablist"] button:has-text("Config Loader")')
+    check('back on the app itself, the preset tile is still there', await card('Show').count() === 1)
+    await page.click('button[aria-label^="Close Installer"]')
+    await page.waitForFunction(() => document.querySelectorAll('[role="tablist"]').length === 0)
+    check('closing the tab removes the bar again', true)
+  }
+
   console.log('13. an OBS that was never compared with the preset (a preset that came from GitHub, then linked): no guessing about who changed what')
   {
     const gitDir = path.join(root, 'MyPresets/Other')

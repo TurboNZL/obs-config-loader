@@ -20,8 +20,10 @@ export interface SetupStep {
   run: Partial<Record<Platform | 'any', SetupCommand>>
   /** Folder to run in (templated). Default: the preset's script folder when it has one, else the preset's own. */
   cwd?: string
-  /** `wait` (default): run it and show what it says. `open`: start it and leave it (a program with its own window). */
-  mode?: 'wait' | 'open'
+  /** `wait` (default): run it and show what it says. `open`: start it and leave it (a program with its own window). `tab`: run it in a tab of this app: it describes its own screens (docs/SCRIPT_UI.md) and the app draws them. */
+  mode?: 'wait' | 'open' | 'tab'
+  /** For `tab`: the short name of the tab ("Installer", "Manager"). */
+  tab?: string
   /** Offered but not needed (shown without the "needed" emphasis). */
   optional?: boolean
 }
@@ -46,7 +48,7 @@ export function setupSteps(m: Pick<Manifest, 'setup'>): SetupStep[] {
     if (!Object.keys(run).length) continue
     out.push({
       id: s.id, title: s.title.trim(), ...(typeof s.why === 'string' ? { why: s.why } : {}), run,
-      ...(typeof s.cwd === 'string' ? { cwd: s.cwd } : {}), ...(s.mode === 'open' ? { mode: 'open' as const } : {}), ...(s.optional === true ? { optional: true } : {}),
+      ...(typeof s.cwd === 'string' ? { cwd: s.cwd } : {}), ...(s.mode === 'open' ? { mode: 'open' as const } : s.mode === 'tab' ? { mode: 'tab' as const, ...(typeof s.tab === 'string' && s.tab.trim() ? { tab: s.tab.trim().slice(0, 24) } : {}) } : {}), ...(s.optional === true ? { optional: true } : {}),
     })
   }
   return out
@@ -69,7 +71,8 @@ export interface PlannedStep {
   id: string
   title: string
   why?: string
-  mode: 'wait' | 'open'
+  mode: 'wait' | 'open' | 'tab'
+  tab?: string
   optional: boolean
   /** Exactly what would run, for the person to read. Absent when it cannot run here. */
   command?: { program: string; args: string[]; cwd: string }
@@ -107,7 +110,7 @@ export function planSetup(manifest: Pick<Manifest, 'setup'>, ctx: SetupContext):
   const p = (ctx.platform === 'win32' ? nodePath.win32 : nodePath.posix) as typeof nodePath.posix
   const roots = [ctx.presetDir, ...Object.values(ctx.folders)].filter(Boolean)
   return setupSteps(manifest).map((s) => {
-    const base = { id: s.id, title: s.title, ...(s.why ? { why: s.why } : {}), mode: s.mode ?? 'wait', optional: !!s.optional } as const
+    const base = { id: s.id, title: s.title, ...(s.why ? { why: s.why } : {}), mode: s.mode ?? 'wait', ...(s.tab ? { tab: s.tab } : {}), optional: !!s.optional } as const
     const cmd = s.run[ctx.platform] ?? s.run.any
     if (!cmd) return { ...base, problem: 'This step is not needed on this kind of computer.', fingerprint: '' }
     const missing: string[] = []

@@ -37,6 +37,16 @@ const api: Api = {
     state: () => call('git:state'),
     install: () => call('git:install'),
   },
+  script: {
+    start: (p, id, label) => call('script:start', p, id, label),
+    send: (id, msg) => call('script:send', id, msg),
+    stop: (id) => call('script:stop', id),
+    onEvent: (cb) => {
+      const h = (_e: unknown, d: { id: string; msg: Record<string, any> }) => cb(d)
+      ipcRenderer.on('script:event', h)
+      return () => ipcRenderer.removeListener('script:event', h)
+    },
+  },
   setup: {
     plan: (p) => call('setup:plan', p),
     run: (p, id) => call('setup:run', p, id),

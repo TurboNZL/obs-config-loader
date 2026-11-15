@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { SetupStepInfo } from '../../../electron/api'
 import { Card, Chip, Choice, Field, Message } from '../ui'
+import { useScriptTabs } from './ScriptTabs'
 
 type Run = { id: string; lines: string[]; done: boolean; exitCode?: number | null; message?: string }
 
@@ -15,12 +16,15 @@ export function SetupSteps({ presetPath, authoring, onChanged, title, card }: { 
   const [error, setError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const timer = useRef<number | undefined>(undefined)
+  const tabs = useScriptTabs()
+  const [presetName, setPresetName] = useState('')
 
-  const load = async () => { const r = await window.obsLoader.setup.plan(presetPath); setSteps(r.steps); setFolders(r.folders) }
+  const load = async () => { const r = await window.obsLoader.setup.plan(presetPath); setSteps(r.steps); setFolders(r.folders); setPresetName(r.name ?? '') }
   useEffect(() => { void load(); return () => window.clearTimeout(timer.current) }, [presetPath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const start = async (s: SetupStepInfo) => {
     setError(null)
+    if (s.mode === 'tab') { const err = await tabs.open(presetPath, s.id, s.tab ?? s.title, presetName || s.title); if (err) setError(err); else onChanged?.(); return }
     const r = await window.obsLoader.setup.run(presetPath, s.id)
     if (!r.ok) { setError(r.error); return }
     const state: Run = { id: s.id, lines: [], done: false }
@@ -50,7 +54,7 @@ export function SetupSteps({ presetPath, authoring, onChanged, title, card }: { 
             {s.ranBefore && <Chip tone="good">done earlier</Chip>}
             {s.changedSince && <Chip tone="warn">changed since you last ran it</Chip>}
             {s.command
-              ? <button className={'btn px-3 py-1 ' + (s.ranBefore ? '' : 'btn-accent')} disabled={busy} onClick={() => void start(s)}>{run?.id === s.id && busy ? 'Running…' : s.mode === 'open' ? 'Open it' : s.ranBefore ? 'Run again' : 'Run'}</button>
+              ? <button className={'btn px-3 py-1 ' + (s.ranBefore ? '' : 'btn-accent')} disabled={busy} onClick={() => void start(s)}>{run?.id === s.id && busy ? 'Running…' : s.mode === 'open' || s.mode === 'tab' ? 'Open it' : s.ranBefore ? 'Run again' : 'Run'}</button>
               : null}
             {authoring && <button className="btn btn-ghost px-2 py-0.5 text-xs" onClick={async () => { await window.obsLoader.setup.remove(presetPath, s.id); await load(); onChanged?.() }}>Remove</button>}
           </div>

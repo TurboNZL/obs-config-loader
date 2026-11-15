@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { execFile, spawn } from 'node:child_process'
@@ -8,7 +8,7 @@ import {
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
   assetBundlePath, attachSecrets, commitAll, fetchRepo, githubRenameRepo, githubRepoName, parseGithubUrl, pendingForObs, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
-  LAUNCH_FLAGS, launchArgs, renamePreset, renameSceneLayout, renameOutputSetting, removeSceneLayout, removeOutputSetting, systemsSavedOn, renameSceneOrSource, renameSourceInObs, RenameError,
+  LAUNCH_FLAGS, launchArgs, parseScriptLine, scriptReply, safeScriptUrl, renamePreset, renameSceneLayout, renameOutputSetting, removeSceneLayout, removeOutputSetting, systemsSavedOn, renameSceneOrSource, renameSourceInObs, RenameError,
   findRenamedAssets, missingFilesInObs, presetLastSaved, obsLastChanged, planSetup, setupSteps, findPython, runPlannedStep, resolveString, type PlannedStep, replacePathInObs, applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
   readLocalKeys, readLocalSettings, writeLocalKeys, writeLocalSettings, cloudSkippedPaths, writeExclude, LOCAL_DIR, EXTRAS_EXT, type LocalSettings,
   listPlatformSources, DEFAULT_PLATFORM_MAP, withIdentity, listAuthors, rewriteAuthor, discardNameChangeBackup, putFile, getFile, testStorage, objectKey, validateTarget, regionFromEndpoint, sha256OfFile, localMediaPath,
@@ -901,7 +901,7 @@ function registerIpc() {
     return planSetup(m, { platform: host.platform, home: host.home, presetDir: p, folders: folderVars(m), python: pythonNow(), ...(linkedObs(p) ? { obs: linkedObs(p)! } : {}) }).map((s) => ({ ...s, ranBefore: !!s.fingerprint && ran[s.id] === s.fingerprint, changedSince: !!s.fingerprint && !!ran[s.id] && ran[s.id] !== s.fingerprint }))
   }
   const setupRuns = new Map<string, { lines: string[]; done: boolean; exitCode?: number | null; message?: string }>()
-  handle('setup:plan', (_e, p: string) => memoised(`setup|${p}`, 5_000, () => heavy(() => ({ steps: setupPlan(p), folders: Object.keys(folderVars(readBundleDir(p, { keepMissing: true }).manifest)) }))))
+  handle('setup:plan', (_e, p: string) => memoised(`setup|${p}`, 5_000, () => heavy(() => { const mm = readBundleDir(p, { keepMissing: true }).manifest; return { steps: setupPlan(p), name: mm.name, folders: Object.keys(folderVars(mm)) } })))
   handle('setup:run', async (_e, p: string, stepId: string) => {
     try {
       const step = setupPlan(p).find((s) => s.id === stepId)
@@ -920,6 +920,61 @@ function registerIpc() {
       })
       return { ok: true, runId }
     } catch (e) { return { ok: false, error: errText(e) } }
+  })
+  // ── scripts that draw their screens in a tab (docs/SCRIPT_UI.md) ──
+  const scriptSessions = new Map<string, { child: ReturnType<typeof spawn>; sender: Electron.WebContents }>()
+  handle('script:start', async (e, p: string, stepId: string, label: string) => {
+    try {
+      const step = setupPlan(p).find((s) => s.id === stepId)
+      if (!step) return { ok: false, error: 'That step is not in this preset any more.' }
+      if (!step.command) return { ok: false, error: step.problem ?? 'This step cannot run here.' }
+      let { program, args } = step.command
+      if (host.platform === 'win32' && /\.(bat|cmd)$/i.test(program)) { args = ['/d', '/c', program, ...args]; program = 'cmd.exe' }
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const child = spawn(program, args, { cwd: step.command.cwd, env: { ...process.env, OBSCL_UI: '1', PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+      const sender = e.sender
+      scriptSessions.set(id, { child, sender })
+      const send = (msg: unknown) => { if (!sender.isDestroyed()) sender.send('script:event', { id, msg }) }
+      let buf = ''
+      const onOut = (chunk: Buffer, isErr: boolean) => {
+        buf += chunk.toString('utf8')
+        let i
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, i).replace(/\r$/, ''); buf = buf.slice(i + 1)
+          const m = isErr ? null : parseScriptLine(line)
+          if (!m) { if (line.trim()) send({ t: 'raw', line }); continue }
+          // what a script asks of the computer is done here, never by the page
+          if (m.t === 'open') { const u = safeScriptUrl(m.url); if (u) void shell.openExternal(u); continue }
+          if (m.t === 'copy') { if (typeof m.text === 'string' && m.text.length < 100_000) clipboard.writeText(m.text); continue }
+          if (m.t === 'save') {
+            void dialog.showSaveDialog({ title: 'Save', defaultPath: typeof m.name === 'string' ? m.name.replace(/[\\/:*?"<>|]/g, '_') : 'file.txt' }).then((d) => { if (!d.canceled && d.filePath && typeof m.text === 'string') fs.writeFileSync(d.filePath, m.text) })
+            continue
+          }
+          send(m)
+        }
+      }
+      child.stdout?.on('data', (c: Buffer) => onOut(c, false))
+      child.stderr?.on('data', (c: Buffer) => onOut(c, true))
+      child.on('error', (err) => send({ t: 'ended', code: null, error: err.message }))
+      child.on('close', (code) => { scriptSessions.delete(id); send({ t: 'ended', code }) })
+      const m = readBundleDir(p, { keepMissing: true }).manifest
+      const all = readRan(); all[m.id] = { ...(all[m.id] ?? {}), [step.id]: step.fingerprint }; try { fs.writeFileSync(ranPath(), JSON.stringify(all, null, 2)) } catch { /* only a reminder */ }
+      void label
+      return { ok: true, id }
+    } catch (err) { return { ok: false, error: errText(err) } }
+  })
+  handle('script:send', (_e, id: string, msg: unknown) => {
+    const s = scriptSessions.get(id)
+    if (!s || !s.child.stdin || s.child.stdin.destroyed) return false
+    const m = msg as { t?: string }
+    if (m?.t !== 'submit' && m?.t !== 'closed') return false
+    s.child.stdin.write(scriptReply(msg as never)); return true
+  })
+  handle('script:stop', (_e, id: string) => {
+    const s = scriptSessions.get(id)
+    if (!s) return
+    try { s.child.stdin?.write(scriptReply({ t: 'closed' })); s.child.stdin?.end() } catch { /* already gone */ }
+    setTimeout(() => { try { s.child.kill() } catch { /* gone */ } }, 1500)
   })
   handle('setup:poll', (_e, runId: string, from: number) => {
     const s = setupRuns.get(runId)
