@@ -48,6 +48,7 @@ export function App() {
     const key = r.id
     setScripts((l) => [...l, { key, id: r.id, kind, preset, screen: null, say: '', lines: [] }])
     setScriptTab(key)
+    window.dispatchEvent(new Event('obscl:script-opened')) // a manager popup underneath would cover the tab bar
     return null
   }
   const closeScript = (key: string) => {

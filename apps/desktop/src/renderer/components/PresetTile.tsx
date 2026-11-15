@@ -95,6 +95,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
    * Anything that needs a person (OBS open, a question nobody has answered, real unsaved OBS edits that would be replaced,
    * several OBS to choose from) opens the review page instead, and says why.
    */
+  useEffect(() => { const h = () => setOpen(false); window.addEventListener('obscl:script-opened', h); return () => window.removeEventListener('obscl:script-opened', h) }, [])
   const [renaming, setRenaming] = useState(false)
   const [newName, setNewName] = useState('')
   const renameHere = async () => {

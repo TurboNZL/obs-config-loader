@@ -50,6 +50,10 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
     env: { ...process.env, HOME: home, XDG_CONFIG_HOME: '', XDG_DOCUMENTS_DIR: path.join(home, 'Documents') },
   })
   const page = await app.firstWindow()
+
+  // the manager is a popup over everything: close it before using the tile's own buttons or the sidebar
+  const closeManager = async () => { const c = page.locator('div[role="dialog"] button[aria-label="Hide details"]'); if (await c.count()) await c.first().click() }
+  { const _click = page.click.bind(page); page.click = async (sel, ...a) => { if (/^nav/.test(sel)) await closeManager(); return _click(sel, ...a) } }
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await page.setViewportSize({ width: 1100, height: 1000 })
   await page.waitForSelector('text=Flatpak')
@@ -118,6 +122,7 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   const presetM = JSON.parse(fs.readFileSync(path.join(defaultRoot, 'Show/manifest.json'), 'utf8'))
   check('the big file has its own copy inside the preset (local part)', fs.existsSync(path.join(defaultRoot, 'Show/local/media/intro/intro.mp4')))
   check('and the stream key is kept there too, outside what git sees', fs.readFileSync(path.join(defaultRoot, 'Show/local/keys.json'), 'utf8').includes('live_SECRET'))
+  await closeManager()
   await show.locator('button[aria-label="Export this preset to a file"]').click()
   await page.waitForSelector('text=as a setup file')
   check('the file panel lists the big file with its size', /intro\.mp4[\s\S]*6\.0 MB/.test(await show.innerText()))
@@ -191,8 +196,10 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   await bc.locator('input[aria-label="Keep Scripts on this computer"]').click()
   await bc.locator('text=applies the next time you update').waitFor()
   check('"scripts" is back on in the preset', !JSON.parse(fs.readFileSync(path.join(defaultRoot, 'Both/manifest.json'), 'utf8')).exclude)
+  await closeManager()
   await bc.locator('button:has-text("Update preset from OBS")').click()
   await bc.locator('[role="status"]:has-text("Saved")').waitFor()
+  await bc.locator('button[aria-label="Show details"]').click()
   check('the next save puts the script back', fs.existsSync(path.join(defaultRoot, 'Both/scripts')))
   const sel = bc.locator('select[aria-label="Window Capture (X11) on Windows"]')
   await sel.waitFor()
@@ -211,6 +218,7 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   await page.waitForSelector('text=Moved “Both”')
   check('it is in the new folder', fs.existsSync(path.join(dest, 'Both/manifest.json')) && fs.existsSync(path.join(dest, 'Both/.git')))
   check('and gone from the old one', !fs.existsSync(path.join(defaultRoot, 'Both')))
+  await page.waitForTimeout(800); await closeManager()
   await card('Both').locator('button:has-text("Update preset from OBS")').click()
   await card('Both').locator('[role="status"]:has-text("Already up to date"), [role="status"]:has-text("Saved")').waitFor()
   check('and it still saves from OBS', true)
@@ -326,6 +334,7 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   check('a program that is not part of the setup is refused, in words', true)
   await page.screenshot({ path: OUT + '/p9-setup-steps.png', fullPage: true })
 
+  await closeManager()
   console.log('12b. a script that draws its screens in a tab of the app (no terminal, no window of its own)')
   {
     const { execFileSync } = require('child_process')
