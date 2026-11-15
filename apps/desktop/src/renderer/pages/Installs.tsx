@@ -27,6 +27,7 @@ export function InstallsPage({ installs, refresh, go }: {
           No OBS found in the usual places. Install OBS Studio, or add one that lives in its own folder below.
         </Message>
       )}
+      <GetObs refresh={refresh} />
       {installs?.map((i) => <InstallCard key={i.id} i={i} refresh={refresh} go={go} />)}
       <div className="flex gap-2">
         <button className="btn px-3 py-1.5" onClick={addPortable}>Add OBS from a folder…</button>
@@ -193,6 +194,44 @@ function StartOptions({ id }: { id: string }) {
         ))}
         <label className="block text-xs text-muted pt-1">Anything else (passed on exactly as typed, for example browser-engine switches)</label>
         <input className="input w-full px-2 py-1.5 mono" value={state.options.custom} onChange={(e) => save({ ...state.options, custom: e.target.value })} aria-label="Other start options" placeholder="--some-switch --another=value" />
+      </div>
+    </details>
+  )
+}
+
+
+/** Get OBS without a browser: Windows downloads the portable copy itself; elsewhere the app says what to install. */
+function GetObs({ refresh }: { refresh: () => Promise<void> }) {
+  const win = window.obsLoader.platform === 'win32'
+  const [parent, setParent] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [prog, setProg] = useState<{ text: string; done?: number; total?: number } | null>(null)
+  const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
+  useEffect(() => window.obsLoader.installs.onInstallProgress(setProg), [])
+  const go = async () => {
+    setBusy(true); setMsg(null)
+    const r = await window.obsLoader.installs.install(parent || undefined)
+    setBusy(false); setProg(null)
+    if (r.ok) { setMsg({ tone: 'good', text: `OBS ${r.version} is ready in ${r.root}. It is already in the list below.` }); await refresh() } else setMsg({ tone: 'bad', text: r.error })
+  }
+  return (
+    <details className="card p-4" open={false}>
+      <summary className="cursor-pointer font-semibold text-sm">Get OBS</summary>
+      <div className="mt-3 space-y-2">
+        {win ? (
+          <>
+            <p className="text-sm text-muted">Downloads the newest OBS as a portable copy (it keeps its settings inside its own folder, so nothing else on this computer changes). A folder with the same name is never overwritten: a new name is used instead.</p>
+            <div className="flex gap-2">
+              <input className="input flex-1 px-2 py-1.5" placeholder="Documents (default)" value={parent} onChange={(e) => setParent(e.target.value)} aria-label="Where to put OBS" />
+              <button className="btn px-3" onClick={async () => { const p = await window.obsLoader.files.pick('Where should OBS go?', true); if (p) setParent(p) }}>Choose…</button>
+            </div>
+            <button className="btn btn-accent px-3 py-1.5" disabled={busy} onClick={go}>{busy ? 'Working…' : 'Download OBS'}</button>
+            {prog && <p className="text-sm">{prog.text}{prog.total && prog.done ? ` ${Math.round((prog.done / prog.total) * 100)}%` : ''}</p>}
+          </>
+        ) : (
+          <p className="text-sm text-muted">On this system OBS comes from your package manager: on Ubuntu/Debian use “sudo apt install obs-studio” (or the Flatpak “com.obsproject.Studio”). This app cannot install system packages by itself yet.</p>
+        )}
+        {msg && <Message tone={msg.tone}>{msg.text}</Message>}
       </div>
     </details>
   )

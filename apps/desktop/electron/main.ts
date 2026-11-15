@@ -8,7 +8,7 @@ import {
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
   assetBundlePath, attachSecrets, commitAll, fetchRepo, githubRenameRepo, githubRepoName, parseGithubUrl, pendingForObs, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
-  LAUNCH_FLAGS, launchArgs, parseScriptLine, scriptReply, safeScriptUrl, renamePreset, renameSceneLayout, renameOutputSetting, removeSceneLayout, removeOutputSetting, systemsSavedOn, renameSceneOrSource, renameSourceInObs, RenameError,
+  LAUNCH_FLAGS, launchArgs, installPortableObs, parseScriptLine, scriptReply, safeScriptUrl, renamePreset, renameSceneLayout, renameOutputSetting, removeSceneLayout, removeOutputSetting, systemsSavedOn, renameSceneOrSource, renameSourceInObs, RenameError,
   findRenamedAssets, missingFilesInObs, presetLastSaved, obsLastChanged, planSetup, setupSteps, findPython, runPlannedStep, resolveString, type PlannedStep, replacePathInObs, applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
   readLocalKeys, readLocalSettings, writeLocalKeys, writeLocalSettings, cloudSkippedPaths, writeExclude, LOCAL_DIR, EXTRAS_EXT, type LocalSettings,
   listPlatformSources, DEFAULT_PLATFORM_MAP, withIdentity, listAuthors, rewriteAuthor, discardNameChangeBackup, putFile, getFile, testStorage, objectKey, validateTarget, regionFromEndpoint, sha256OfFile, localMediaPath,
@@ -445,6 +445,19 @@ function registerIpc() {
     const s = loadSettings()
     if (!s.customInstalls.some((c) => c.id === got.id)) { s.customInstalls.push(got); saveSettings(s) }
     return { added: await describe(got, await obsRunningFor(got)) }
+  })
+  /** Download a portable OBS (Windows) into a folder that does not exist yet and add it to the list. */
+  handle('obs:install', async (e, parent?: string) => {
+    if (process.platform !== 'win32') return { ok: false, error: 'The app downloads OBS for Windows only. On this system, install OBS from your package manager or Flatpak (see the notes on this page).' }
+    try {
+      const sender = e.sender
+      const r = await installPortableObs({ parent: parent || app.getPath('documents'), onProgress: (p) => { if (!sender.isDestroyed()) sender.send('obs:installProgress', p) } })
+      const got = portableInstall(host, r.root)
+      if ('error' in got) return { ok: false, error: got.error }
+      const s = loadSettings()
+      if (!s.customInstalls.some((c) => c.id === got.id)) { s.customInstalls.push(got); saveSettings(s) }
+      return { ok: true, root: r.root, version: r.version }
+    } catch (err) { return { ok: false, error: errText(err) } }
   })
   handle('installs:remove', (_e, id: string) => {
     const s = loadSettings()

@@ -182,6 +182,9 @@ export interface Api {
     list(): Promise<InstallInfo[]>
     /** Start this OBS (any install that has a known way to start it). */
     launch(id: string): Promise<{ ok: boolean; message: string; command?: string }>
+    /** Windows: download the newest portable OBS into a new folder inside `parent` (Documents by default) and add it. */
+    install(parent?: string): Promise<Done<{ root: string; version: string }>>
+    onInstallProgress(cb: (p: { phase: string; done?: number; total?: number; text: string }) => void): () => void
     /** Extra start options for this OBS: the known flags (from OBS's own source) and anything typed. */
     getLaunch(id: string): Promise<{ options: { flags: string[]; custom: string }; flags: { id: string; label: string; help: string }[] }>
     setLaunch(id: string, o: { flags: string[]; custom: string }): Promise<void>

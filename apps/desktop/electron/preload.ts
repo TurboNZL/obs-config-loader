@@ -12,6 +12,12 @@ const api: Api = {
     getLaunch: (id) => call('installs:getLaunch', id),
     setLaunch: (id, o) => call('installs:setLaunch', id, o),
     launch: (id) => call('installs:launch', id),
+    install: (parent) => call('obs:install', parent),
+    onInstallProgress: (cb) => {
+      const h = (_e: unknown, p: Parameters<typeof cb>[0]) => cb(p)
+      ipcRenderer.on('obs:installProgress', h)
+      return () => { ipcRenderer.removeListener('obs:installProgress', h) }
+    },
     verify: (id, since) => call('installs:verify', id, since),
     openFolder: (id) => call('installs:openFolder', id),
   },
