@@ -11,7 +11,7 @@ import type { Msg } from '../components/PresetDetails'
 export type PresetsGo = (t: 'settings' | 'import') => void
 
 export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstalls }: { installs: InstallInfo[] | null; applyRepo: (dir: string, installId?: string) => void; go: PresetsGo; startWith?: string; refreshInstalls: () => Promise<void> }) {
-  const [repos, setRepos] = useState<RepoInfo[] | null>(null)
+  const [repos, setRepos] = useState<RepoInfo[] | null>(() => { try { const c = localStorage.getItem('obscl.cache.repos'); return c ? (JSON.parse(c) as RepoInfo[]) : null } catch { return null } })
   const [git, setGit] = useState<GitState | null>(null)
   const [gh, setGh] = useState<GithubState>({ connected: false })
   const [notice, setNotice] = useState<Msg | null>(null)
@@ -21,7 +21,7 @@ export function PresetsPage({ installs, applyRepo, go, startWith, refreshInstall
   const [importing, setImporting] = useState(false)
 
   // OBS's own list of layouts and settings can change when a preset is renamed or loaded, so it is read again too
-  const refresh = async () => { await window.obsLoader.repos.list().then(setRepos); await refreshInstalls() }
+  const refresh = async () => { await window.obsLoader.repos.list().then((l) => { setRepos(l); try { localStorage.setItem('obscl.cache.repos', JSON.stringify(l)) } catch { /* only a speed-up */ } }); await refreshInstalls() }
   /** Replace one preset's entry in place: asking GitHub about a preset must not make every other one reload. */
   const patch = (r: RepoInfo) => setRepos((cur) => (cur ? cur.map((x) => (x.path === r.path ? r : x)) : cur))
   const refreshGit = () => window.obsLoader.git.state().then(setGit)

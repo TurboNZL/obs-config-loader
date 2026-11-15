@@ -8,7 +8,7 @@ import {
   pullRepo, pushRepo, readBundle, readBundleDir, realHost, redact, repoLog, repoNameFromUrl, repoStatus, setRemote, validateRemoteUrl,
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
   assetBundlePath, attachSecrets, commitAll, fetchRepo, githubRenameRepo, githubRepoName, parseGithubUrl, pendingForObs, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
-  LAUNCH_FLAGS, launchArgs, installPortableObs, parseScriptLine, scriptReply, safeScriptUrl, renamePreset, renameSceneLayout, renameOutputSetting, removeSceneLayout, removeOutputSetting, systemsSavedOn, renameSceneOrSource, renameSourceInObs, RenameError,
+  LAUNCH_FLAGS, launchArgs, COMPILE_TOGGLES, compileSteps, parseCustomFlags, findBuildProblems, freshFolder, findTailscale, tailscaleState, defaultRun, installCommand, serveCommands, installPortableObs, updatePlan, latestObsVersion, compareVersions, updatePortableObs, downloadFile, OBS_RELEASE_API, parseScriptLine, scriptReply, safeScriptUrl, renamePreset, renameSceneLayout, renameOutputSetting, removeSceneLayout, removeOutputSetting, systemsSavedOn, renameSceneOrSource, renameSourceInObs, RenameError,
   findRenamedAssets, missingFilesInObs, presetLastSaved, obsLastChanged, planSetup, setupSteps, findPython, runPlannedStep, resolveString, type PlannedStep, replacePathInObs, applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
   readLocalKeys, readLocalSettings, writeLocalKeys, writeLocalSettings, cloudSkippedPaths, writeExclude, LOCAL_DIR, EXTRAS_EXT, type LocalSettings,
   listPlatformSources, DEFAULT_PLATFORM_MAP, withIdentity, listAuthors, rewriteAuthor, discardNameChangeBackup, putFile, getFile, testStorage, objectKey, validateTarget, regionFromEndpoint, sha256OfFile, localMediaPath,
@@ -423,7 +423,7 @@ function memoised<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<
   v.catch(() => { if (memo.get(key)?.v === v) memo.delete(key) })
   return v
 }
-const READ_ONLY = new Set(['installs:list', 'installs:getLaunch', 'repos:list', 'repos:live', 'repos:needs', 'repos:renamed', 'setup:plan', 'setup:poll', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'github:orgs', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
+const READ_ONLY = new Set(['installs:list', 'installs:getLaunch', 'tailscale:state', 'repos:list', 'repos:live', 'repos:needs', 'repos:renamed', 'setup:plan', 'setup:poll', 'repos:log', 'repos:compare', 'repos:check', 'presets:overview', 'presets:details', 'presets:authors', 'presets:keys', 'presets:scanFile', 'presets:extrasInfo', 'obs:scan', 'git:state', 'github:state', 'github:repos', 'github:orgs', 'settings:get', 'identity:get', 'storage:state', 'app:version', 'locations:load', 'secrets:load', 'updates:state'])
 
 // ── IPC ──────────────────────────────────────────────────────────────────────
 function registerIpc() {
@@ -445,6 +445,122 @@ function registerIpc() {
     const s = loadSettings()
     if (!s.customInstalls.some((c) => c.id === got.id)) { s.customInstalls.push(got); saveSettings(s) }
     return { added: await describe(got, await obsRunningFor(got)) }
+  })
+  // ── building OBS from source (Linux and macOS) ──
+  handle('compile:info', () => ({ toggles: COMPILE_TOGGLES.filter((t) => t.platforms.includes(process.platform === 'darwin' ? 'darwin' : 'linux')), platform: process.platform }))
+  let compiling = false
+  handle('compile:run', async (e, r: { srcDir: string; prefix: string; toggles: Record<string, boolean>; custom: string; buildType?: 'Release' | 'RelWithDebInfo' | 'Debug' }) => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return { ok: false, error: 'Building from source is for Linux and macOS. On Windows the app downloads OBS ready-made.' }
+    if (compiling) return { ok: false, error: 'A build is already running.' }
+    const sender = e.sender
+    const send = (m: unknown) => { if (!sender.isDestroyed()) sender.send('compile:event', m) }
+    const flags = parseCustomFlags(r.custom ?? '')
+    if (flags.refused.length) return { ok: false, error: `These are not plain -DNAME=value flags, so they were not used: ${flags.refused.join(' ')}` }
+    const prefix = freshFolder(path.dirname(r.prefix), path.basename(r.prefix))
+    const steps = compileSteps({ platform: process.platform, srcDir: fs.existsSync(r.srcDir) && fs.readdirSync(r.srcDir).length ? freshFolder(path.dirname(r.srcDir), path.basename(r.srcDir)) : r.srcDir, prefix, toggles: r.toggles, custom: r.custom, buildType: r.buildType })
+    compiling = true
+    const tail: string[] = []
+    try {
+      for (const s of steps) {
+        send({ t: 'step', id: s.id, title: s.title, state: 'run' })
+        const code = await new Promise<number | null>((resolve) => {
+          const c = spawn(s.program, s.args, { cwd: s.cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+          const feed = (b: Buffer) => b.toString('utf8').split(/\r?\n/).filter((l) => l.trim()).forEach((l) => { tail.push(l); if (tail.length > 400) tail.shift(); send({ t: 'line', line: l.slice(0, 300) }) })
+          c.stdout.on('data', feed); c.stderr.on('data', feed)
+          c.on('error', (err) => { send({ t: 'line', line: `Could not start ${s.program}: ${err.message}` }); resolve(null) })
+          c.on('close', (k) => resolve(k))
+        })
+        if (code !== 0) {
+          send({ t: 'step', id: s.id, title: s.title, state: 'fail' })
+          const problems = findBuildProblems(tail.join('\n'))
+          return { ok: false, error: `“${s.title}” did not finish.`, problems, hint: s.id === 'configure' ? 'Missing libraries show up as “Could NOT find …” above. Install what it names with your package manager and press Build again.' : undefined }
+        }
+        send({ t: 'step', id: s.id, title: s.title, state: 'ok' })
+      }
+      const got = portableInstall(host, prefix)
+      if (!('error' in got)) { const st = loadSettings(); if (!st.customInstalls.some((c) => c.id === got.id)) { st.customInstalls.push(got); saveSettings(st) } }
+      return { ok: true, prefix, added: !('error' in got) }
+    } finally { compiling = false }
+  })
+  // ── Tailscale: a private way for friends to reach this computer ──
+  const tsCli = () => findTailscale(process.platform)
+  const tsRunAsync = (cmd: string, args: string[], timeoutMs = 900_000) => new Promise<{ code: number; out: string }>((resolve) => {
+    execFile(cmd, args, { timeout: timeoutMs, windowsHide: true }, (e, so, se) => resolve({ code: e ? ((e as NodeJS.ErrnoException & { code?: number | string }).code === 'ENOENT' ? 127 : Number((e as { code?: number }).code) || 1) : 0, out: `${so ?? ''}${se ?? ''}` }))
+  })
+  handle('tailscale:state', () => tailscaleState(defaultRun, tsCli()))
+  handle('tailscale:install', async () => {
+    const plan = installCommand(process.platform, (n) => defaultRun(process.platform === 'win32' ? 'where' : 'which', [n]).code === 0)
+    if (!plan.cmd) return { ok: false, error: plan.manual ?? 'This cannot be installed from here.' }
+    const r = await tsRunAsync(plan.cmd.program, plan.cmd.args)
+    return r.code === 0 ? { ok: true } : { ok: false, error: `Tailscale could not be installed automatically.${plan.manual ? ' ' + plan.manual : ''} ${r.out.trim().slice(-200)}` }
+  })
+  handle('tailscale:signIn', async (e) => {
+    const cli = tsCli()
+    if (!cli) return { ok: false, error: 'Tailscale is not installed yet.' }
+    if (tailscaleState(defaultRun, cli).running) return { ok: true }
+    const child = spawn(cli, ['up'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    let opened = false
+    const feed = (b: Buffer) => { const m = /https:\/\/login\.tailscale\.com\/\S+/.exec(b.toString('utf8')); if (m && !opened) { opened = true; void shell.openExternal(m[0]) } }
+    child.stdout.on('data', feed); child.stderr.on('data', feed)
+    const deadline = Date.now() + 5 * 60_000
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000))
+      if (tailscaleState(defaultRun, cli).running) { try { child.kill() } catch { /* done */ } return { ok: true } }
+    }
+    try { child.kill() } catch { /* gone */ }
+    return { ok: false, error: 'Signing in was not finished. Press the button again when you are ready.' }
+  })
+  handle('tailscale:serve', async (_e, port: number) => {
+    const cli = tsCli()
+    if (!cli || !Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, error: 'Tailscale is not ready, or that is not a port number.' }
+    for (const c of serveCommands(cli, port)) { const r = await tsRunAsync(c[0], c.slice(1), 60_000); if (r.code !== 0) return { ok: false, error: /enable/i.test(r.out) && /https/i.test(r.out) ? 'Tailscale needs “HTTPS” switched on once at https://login.tailscale.com/admin/dns, then try again.' : r.out.trim().slice(-200) } }
+    return { ok: true }
+  })
+  // ── keeping OBS up to date, for every kind of install ──
+  handle('obs:updateInfo', async (_e, id: string) => {
+    try {
+      const i = findInstall(id)
+      const plan = updatePlan(i.kind)
+      const installed = (versionsOf(i) as { obs?: string } | undefined)?.obs
+      const latest = await latestObsVersion()
+      return { ok: true, installed, latest, newer: installed ? compareVersions(installed, latest) < 0 : undefined, method: plan.method, explain: plan.explain }
+    } catch (err) { return { ok: false, error: errText(err) } }
+  })
+  handle('obs:update', async (e, id: string) => {
+    const sender = e.sender
+    const say = (text: string, done?: number, total?: number) => { if (!sender.isDestroyed()) sender.send('obs:updateProgress', { text, done, total }) }
+    try {
+      const i = findInstall(id)
+      if (await obsRunningFor(i)) return { ok: false, error: 'This OBS is open. Close it first, then update.' }
+      const plan = updatePlan(i.kind)
+      if (plan.method === 'portable-zip') {
+        const root = path.win32.dirname(path.win32.dirname(i.configDir))
+        const v = await updatePortableObs(root, say)
+        versionsCache.delete(i.id)
+        return { ok: true, message: `OBS is now version ${v}. Your settings were not touched.` }
+      }
+      if (plan.method === 'windows-installer') {
+        const rel = await (await fetch(OBS_RELEASE_API, { headers: { 'User-Agent': 'obs-config-loader' } })).json() as { assets?: { name: string; browser_download_url: string }[] }
+        const a = (rel.assets ?? []).find((x) => /Windows-x64-Installer\.exe$/i.test(x.name))
+        if (!a) return { ok: false, error: 'Could not find OBS\'s installer on its release page.' }
+        const dest = path.join(app.getPath('temp'), a.name)
+        await downloadFile(a.browser_download_url, dest, (d, t) => say('Downloading the OBS installer…', d, t))
+        await shell.openPath(dest)
+        return { ok: true, message: 'The OBS installer is open. Follow it, and OBS is updated.' }
+      }
+      if (plan.command) {
+        const code = await new Promise<number | null>((resolve) => {
+          const c = spawn(plan.command!.program, plan.command!.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+          const feed = (b: Buffer) => b.toString('utf8').split(/\r?\n/).filter((l) => l.trim()).forEach((l) => say(l.slice(0, 200)))
+          c.stdout.on('data', feed); c.stderr.on('data', feed)
+          c.on('error', (err) => { say(`Could not start: ${err.message}`); resolve(null) })
+          c.on('close', (k) => resolve(k))
+        })
+        versionsCache.delete(i.id)
+        return code === 0 ? { ok: true, message: 'OBS is up to date.' } : { ok: false, error: 'The update did not finish. Open the lines above for what it said; if your system asked for a password, it may have been cancelled.' }
+      }
+      return { ok: false, error: plan.explain }
+    } catch (err) { return { ok: false, error: errText(err) } }
   })
   /** Download a portable OBS (Windows) into a folder that does not exist yet and add it to the list. */
   handle('obs:install', async (e, parent?: string) => {

@@ -29,6 +29,7 @@ export function SettingsPage() {
       <Card title={<span className="inline-flex items-center gap-2"><Icon name="home" /> When the app opens</span>}>
           <StartTabChoice />
         </Card>
+      <Card title={<span className="inline-flex items-center gap-2"><Icon name="cloud" /> Private sharing (Tailscale)</span>}><TailscaleCard /></Card>
       {s && (
         <Card title={<span className="inline-flex items-center gap-2"><Icon name="folder" /> Where presets are kept</span>}>
           <p className="text-sm text-muted">Every preset gets its own folder here, in the place your system keeps an app's own data. Changing this does not move presets you already have; they stay where they are.</p>
@@ -90,5 +91,41 @@ function StartTabChoice() {
         <option value="last">The tab I was on last time</option>
       </select>
     </label>
+  )
+}
+
+
+/** Tailscale: a free private network so friends can send video to this computer without opening anything on the router. */
+function TailscaleCard() {
+  const [st, setSt] = useState<Awaited<ReturnType<typeof window.obsLoader.tailscale.state>> | null>(null)
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
+  const [port, setPort] = useState('8080')
+  const load = () => window.obsLoader.tailscale.state().then(setSt)
+  useEffect(() => { void load() }, [])
+  const act = async (name: string, fn: () => Promise<{ ok: true } | { ok: false; error: string }>, done: string) => {
+    setBusy(name); setMsg(null)
+    const r = await fn()
+    setBusy(''); setMsg(r.ok ? { tone: 'good', text: done } : { tone: 'bad', text: r.error }); await load()
+  }
+  if (!st) return <p className="text-sm text-muted">Looking…</p>
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-muted">Tailscale is a free app that gives the people who send video to you a private way to reach this computer. Nothing is opened on your router.</p>
+      <p className="text-sm">{st.detail}{st.ip ? ` This computer’s private address is ${st.ip}${st.dns ? ` (${st.dns})` : ''}.` : ''}</p>
+      <div className="flex gap-2 flex-wrap">
+        {!st.installed && <button className="btn btn-accent px-3 py-1.5" disabled={!!busy} onClick={() => act('install', () => window.obsLoader.tailscale.install(), 'Installed. Now sign in.')}>{busy === 'install' ? 'Installing…' : 'Install Tailscale'}</button>}
+        {st.installed && !st.running && <button className="btn btn-accent px-3 py-1.5" disabled={!!busy} onClick={() => act('signin', () => window.obsLoader.tailscale.signIn(), 'You are signed in.')}>{busy === 'signin' ? 'Waiting for sign-in…' : 'Sign in'}</button>}
+        {st.running && st.ip && <button className="btn px-3 py-1.5" onClick={() => void navigator.clipboard.writeText(st.dns || st.ip)}>Copy the address</button>}
+        <button className="btn btn-ghost px-3 py-1.5" onClick={() => void load()}>Check again</button>
+      </div>
+      {st.running && (
+        <div className="flex gap-2 items-center flex-wrap">
+          <input className="input w-24 px-2 py-1.5" value={port} onChange={(e) => setPort(e.target.value)} aria-label="Local web page port" />
+          <button className="btn px-3 py-1.5" disabled={!!busy} onClick={() => act('serve', () => window.obsLoader.tailscale.serve(Number(port)), 'That page is now shared on your private address.')}>Share a page on this computer (port)</button>
+        </div>
+      )}
+      {msg && <Message tone={msg.tone}>{msg.text}</Message>}
+    </div>
   )
 }

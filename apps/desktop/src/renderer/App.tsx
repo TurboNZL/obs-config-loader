@@ -33,7 +33,8 @@ function startTab(): Tab {
 export function App() {
   const [tab, setTab] = useState<Tab>(startTab)
   useEffect(() => { if (tab !== 'import') ls.set('obscl.lastTab', tab) }, [tab])
-  const [installs, setInstalls] = useState<InstallInfo[] | null>(null)
+  // the last answer is shown at once while the real one is worked out (a cold start otherwise shows an empty page for seconds)
+  const [installs, setInstalls] = useState<InstallInfo[] | null>(() => { try { const c = localStorage.getItem('obscl.cache.installs'); return c ? (JSON.parse(c) as InstallInfo[]).map((i) => ({ ...i, running: false })) : null } catch { return null } })
   const [preselect, setPreselect] = useState<string | undefined>()
   const [openPath, setOpenPath] = useState<string | undefined>()
 
@@ -55,7 +56,7 @@ export function App() {
     setScripts((l) => l.filter((x) => x.key !== key))
     setScriptTab((cur) => (cur === key ? null : cur))
   }
-  const refresh = () => window.obsLoader.installs.list().then(setInstalls)
+  const refresh = () => window.obsLoader.installs.list().then((l) => { setInstalls(l); try { localStorage.setItem('obscl.cache.installs', JSON.stringify(l)) } catch { /* only a speed-up */ } })
   useEffect(() => { void refresh() }, [])
 
   const go = (t: Tab, installId?: string) => { setPreselect(installId); setOpenPath(undefined); setTab(t); void refresh() }

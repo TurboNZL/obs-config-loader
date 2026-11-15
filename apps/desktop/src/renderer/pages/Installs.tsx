@@ -28,6 +28,7 @@ export function InstallsPage({ installs, refresh, go }: {
         </Message>
       )}
       <GetObs refresh={refresh} />
+      {window.obsLoader.platform !== 'win32' && <BuildObs refresh={refresh} />}
       {installs?.map((i) => <InstallCard key={i.id} i={i} refresh={refresh} go={go} />)}
       <div className="flex gap-2">
         <button className="btn px-3 py-1.5" onClick={addPortable}>Add OBS from a folder…</button>
@@ -98,6 +99,7 @@ function InstallCard({ i, refresh, go }: { i: InstallInfo; refresh: () => Promis
       )}
 
       {i.launch && <StartOptions id={i.id} />}
+      {!isInstance && <UpdateObs id={i.id} running={i.running} refresh={refresh} />}
       <div className="flex gap-2 flex-wrap">
         {i.launch && <button className="btn px-3 py-1.5" disabled={start.phase === 'starting' || start.phase === 'checking'} onClick={launch}>Start OBS</button>}
         <button className="btn btn-accent px-3 py-1.5" onClick={() => go('import', i.id)}>Apply a setup here</button>
@@ -232,6 +234,103 @@ function GetObs({ refresh }: { refresh: () => Promise<void> }) {
           <p className="text-sm text-muted">On this system OBS comes from your package manager: on Ubuntu/Debian use “sudo apt install obs-studio” (or the Flatpak “com.obsproject.Studio”). This app cannot install system packages by itself yet.</p>
         )}
         {msg && <Message tone={msg.tone}>{msg.text}</Message>}
+      </div>
+    </details>
+  )
+}
+
+
+/** Is there a newer OBS, and update it in one press, whatever kind of OBS this is. */
+function UpdateObs({ id, running, refresh }: { id: string; running: boolean; refresh: () => Promise<void> }) {
+  const [info, setInfo] = useState<Awaited<ReturnType<typeof window.obsLoader.installs.updateInfo>> | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [line, setLine] = useState('')
+  const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
+  useEffect(() => window.obsLoader.installs.onUpdateProgress((p) => setLine(p.text + (p.total && p.done ? ` ${Math.round((p.done / p.total) * 100)}%` : ''))), [])
+  const check = async () => { setBusy(true); setMsg(null); setInfo(await window.obsLoader.installs.updateInfo(id)); setBusy(false) }
+  const update = async () => {
+    setBusy(true); setMsg(null); setLine('')
+    const r = await window.obsLoader.installs.update(id)
+    setBusy(false); setLine('')
+    setMsg(r.ok ? { tone: 'good', text: r.message } : { tone: 'bad', text: r.error })
+    if (r.ok) { setInfo(null); await refresh() }
+  }
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button className="btn btn-ghost px-3 py-1.5" disabled={busy} onClick={check}>Check for a newer OBS</button>
+        {info && info.ok && <span className="text-sm">{info.installed ? `This is OBS ${info.installed}. ` : ''}{info.newer === false ? 'It is up to date.' : `The newest is ${info.latest}.`}</span>}
+        {info && info.ok && info.newer !== false && info.method !== 'manual' && <button className="btn btn-accent px-3 py-1.5" disabled={busy || running} onClick={update}>{busy ? 'Updating…' : 'Update OBS'}</button>}
+      </div>
+      {info && info.ok && info.newer !== false && <p className="text-xs text-muted">{info.explain}{running ? ' Close OBS first.' : ''}</p>}
+      {info && !info.ok && <Message tone="bad">{info.error}</Message>}
+      {line && <p className="text-sm">{line}</p>}
+      {msg && <Message tone={msg.tone}>{msg.text}</Message>}
+    </div>
+  )
+}
+
+
+/** Build OBS from its source: switches that exist in OBS's own build files, your own flags, and the compile errors shown plainly. */
+function BuildObs({ refresh }: { refresh: () => Promise<void> }) {
+  const [info, setInfo] = useState<Awaited<ReturnType<typeof window.obsLoader.compile.info>> | null>(null)
+  const [on, setOn] = useState<Record<string, boolean>>({})
+  const [custom, setCustom] = useState('')
+  const [src, setSrc] = useState('')
+  const [prefix, setPrefix] = useState('')
+  const [type, setType] = useState<'Release' | 'RelWithDebInfo' | 'Debug'>('RelWithDebInfo')
+  const [steps, setSteps] = useState<{ id: string; title: string; state: string }[]>([])
+  const [lines, setLines] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [res, setRes] = useState<Awaited<ReturnType<typeof window.obsLoader.compile.run>> | null>(null)
+  useEffect(() => { void window.obsLoader.compile.info().then((i) => { setInfo(i); setOn(Object.fromEntries(i.toggles.map((t) => [t.id, t.defaultOn || t.id === 'ENABLE_PORTABLE_CONFIG']))) }) }, [])
+  useEffect(() => window.obsLoader.compile.onEvent((m) => {
+    if (m.t === 'step') setSteps((l) => (l.some((x) => x.id === m.id) ? l.map((x) => (x.id === m.id ? { ...x, state: m.state } : x)) : [...l, { id: m.id, title: m.title, state: m.state }]))
+    else setLines((l) => [...l.slice(-400), m.line])
+  }), [])
+  const run = async () => {
+    setBusy(true); setRes(null); setSteps([]); setLines([])
+    const home = window.obsLoader.homeDir ?? ''
+    const r = await window.obsLoader.compile.run({ srcDir: src || `${home}/obs-studio-source`, prefix: prefix || `${home}/OBS Studio (built)`, toggles: on, custom, buildType: type })
+    setRes(r); setBusy(false)
+    if (r.ok) await refresh()
+  }
+  if (!info) return null
+  return (
+    <details className="card p-4">
+      <summary className="cursor-pointer font-semibold text-sm">Build OBS yourself (advanced)</summary>
+      <div className="mt-3 space-y-3">
+        <p className="text-sm text-muted">Makes an OBS from its source code in its own folder, for when your system has no portable build. It needs build tools and libraries installed first (git, cmake, a compiler, Qt and more): if something is missing, the build stops and the lines below say what.</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="text-sm">Where to keep the source<input className="input w-full px-2 py-1.5 mt-1" value={src} placeholder="~/obs-studio-source" onChange={(e) => setSrc(e.target.value)} /></label>
+          <label className="text-sm">Where OBS should go<input className="input w-full px-2 py-1.5 mt-1" value={prefix} placeholder="~/OBS Studio (built)" onChange={(e) => setPrefix(e.target.value)} /></label>
+        </div>
+        <label className="text-sm block">Build type
+          <select className="input px-2 py-1.5 ml-2" value={type} onChange={(e) => setType(e.target.value as typeof type)}>
+            <option value="RelWithDebInfo">Normal (recommended)</option><option value="Release">Smallest</option><option value="Debug">For debugging (slow)</option>
+          </select>
+        </label>
+        <div className="space-y-1">
+          {info.toggles.map((t) => (
+            <label key={t.id} className="flex items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-1" checked={!!on[t.id]} onChange={(e) => setOn({ ...on, [t.id]: e.target.checked })} />
+              <span>{t.label}{t.help && <span className="text-xs text-muted"> — {t.help}</span>} <span className="mono text-xs text-muted">{t.id}</span></span>
+            </label>
+          ))}
+        </div>
+        <label className="text-sm block">Your own CMake flags
+          <input className="input w-full px-2 py-1.5 mono mt-1" value={custom} placeholder="-DENABLE_SOMETHING=ON" onChange={(e) => setCustom(e.target.value)} aria-label="Custom build flags" />
+        </label>
+        <button className="btn btn-accent px-3 py-1.5" disabled={busy} onClick={run}>{busy ? 'Building…' : 'Build OBS'}</button>
+        {steps.map((s) => <p key={s.id} className="text-sm">{s.state === 'ok' ? '✔' : s.state === 'fail' ? '✘' : '…'} {s.title}</p>)}
+        {res && res.ok && <Message tone="good">OBS was built in {res.prefix}.{res.added ? ' It is in the list.' : ' Add it with “Add OBS from a folder”.'}</Message>}
+        {res && !res.ok && (
+          <Message tone="bad">
+            {res.error}{res.hint ? ` ${res.hint}` : ''}
+            {res.problems && res.problems.length > 0 && <ul className="mono text-xs mt-1 space-y-0.5">{res.problems.map((p) => <li key={p}>{p}</li>)}</ul>}
+          </Message>
+        )}
+        {lines.length > 0 && <details><summary className="text-xs cursor-pointer text-muted">Everything it printed ({lines.length} lines)</summary><pre className="cmd mono rounded-theme max-h-64 overflow-auto text-xs">{lines.slice(-300).join('\n')}</pre></details>}
       </div>
     </details>
   )

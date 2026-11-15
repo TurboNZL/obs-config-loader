@@ -51,7 +51,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
 
   const loadOverview = () => window.obsLoader.presets.overview(repo.path).then(setOv).catch(() => setOv(null))
   useEffect(() => { void loadOverview() }, [repo.path, st.commits, st.dirtyFiles.length]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { onWide(open) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { onWide(false) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // never matched on this computer: the app cannot say which side changed, so it shows when each was last changed instead
   const [unsync, setUnsync] = useState<{ saved?: { date: string; by: string }; obs?: string } | null>(null)
@@ -265,7 +265,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           ? <IconButton icon="link" kind="local" active label={`Linked to ${obsName}. Press to unlink (the preset stays as it is)`} onClick={unlink} />
           : <IconButton icon="unlink" label="Not linked to an OBS. Press to link it to one" active={linking} onClick={() => { setLinking(!linking); setLinkTo(usable[0]?.id ?? '') }} disabled={usable.length === 0} />}
         <IconButton icon="fileUp" kind="file" label="Export this preset to a file" active={exporting} onClick={() => setExporting(!exporting)} />
-        <IconButton icon={open ? 'up' : 'down'} label={open ? 'Hide details' : 'Show details'} onClick={() => setOpen(!open)} />
+        <IconButton icon="settings" label="Show details" onClick={() => setOpen(true)} />
       </div>
       <div className="flex gap-1.5 flex-wrap items-center text-xs text-muted">
         {linkedId || repo.installId ? <Chip icon="link">linked to {obsName}</Chip> : <Chip icon="unlink">not linked to an OBS</Chip>}
@@ -471,22 +471,26 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
       {exporting && <ExportPanel repo={repo} onDone={(m) => { setMsg(m) }} onClose={() => setExporting(false)} />}
 
       {open && (
-        <div className="space-y-4 border-t border-line pt-3">
-          {ov && <StoragePanel repo={repo} ov={ov} changed={async () => { await loadOverview(); await refresh() }} />}
+        <div className="fixed inset-0 z-40 flex items-stretch justify-center p-4 bg-black/50" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false) }}>
+        <div className="card w-full max-w-5xl flex flex-col min-h-0 overflow-hidden" role="dialog" aria-modal="true" aria-label={`Manage ${repo.name}`}>
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-line">
+            <Icon name="layers" size={18} className="text-muted" />
+            <h2 className="font-semibold flex-1 truncate">Manage “{repo.name}”</h2>
+            <button className="btn btn-ghost px-2 py-1" aria-label="Hide details" onClick={() => setOpen(false)}><Icon name="x" size={14} /> Close</button>
+          </div>
+          <div className="flex min-h-0 flex-1">
+            <nav className="w-44 shrink-0 border-r border-line p-3 space-y-1 text-sm overflow-y-auto" aria-label="Sections">
+              {[['m-parts', 'Where parts are kept'], ['m-online', 'Online backup'], ['m-apply', 'Applying'], ['m-setup', 'Setup steps'], ['m-names', 'Names & parts'], ['m-more', 'History & more']].map(([id, label]) => (
+                <button key={id} className="bt-nav w-full text-left px-2 py-1.5" onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>{label}</button>
+              ))}
+            </nav>
+            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          <section id="m-parts">{ov && <StoragePanel repo={repo} ov={ov} changed={async () => { await loadOverview(); await refresh() }} />}</section>
 
-          {online && <div className="space-y-2">
+          <section id="m-online" className="space-y-3">{online ? <div className="space-y-2">
             <h3 className="font-semibold text-sm flex items-center gap-2"><Icon name="cloud" size={14} /> Online backup</h3>
             <Choice checked disabled={busy} onChange={(on) => !on && toggleOnline(false)} title="Back up online (GitHub)" help="Every save is uploaded automatically, so a copy is always on GitHub." />
-          </div>}
-
-          <div className="space-y-1">
-            <h3 className="font-semibold text-sm">Apply with a review</h3>
-            <p className="text-xs text-muted">“Apply to OBS” on the tile puts the whole preset into OBS straight away. This opens a page where you can see what will happen and choose parts first.</p>
-            <button className="btn px-3 py-1.5" disabled={busy} onClick={() => apply(repo.path, linkedId)}>Review before applying…</button>
-          </div>
-
-          <SetupSteps presetPath={repo.path} authoring />
-          <Details repo={repo} installId={linkedId} refresh={refresh} obsNote notify={notify} />
+          </div> : <p className="text-sm text-muted">This preset is not backed up online. Switch on “Back up online” on the tile to give it a GitHub copy.</p>}
           {online && gh.connected && repo.online && <RenameOnline repo={repo} refresh={refresh} notify={notify} />}
           <div className="space-y-1">
             <h3 className="font-semibold text-sm">Online address</h3>
@@ -502,8 +506,17 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
                 {editRemote && <button className="btn btn-ghost px-3" onClick={() => setEditRemote(false)}>Cancel</button>}
               </div>
             )}
-          </div>
-          <div className="flex gap-2 flex-wrap">
+          </div></section>
+
+          <section id="m-apply" className="space-y-1">
+            <h3 className="font-semibold text-sm">Apply with a review</h3>
+            <p className="text-xs text-muted">“Apply to OBS” on the tile puts the whole preset into OBS straight away. This opens a page where you can see what will happen and choose parts first.</p>
+            <button className="btn px-3 py-1.5" disabled={busy} onClick={() => apply(repo.path, linkedId)}>Review before applying…</button>
+          </section>
+
+          <section id="m-setup"><SetupSteps presetPath={repo.path} authoring /></section>
+          <section id="m-names"><Details repo={repo} installId={linkedId} refresh={refresh} obsNote notify={notify} /></section>
+          <section id="m-more" className="space-y-2"><div className="flex gap-2 flex-wrap">
             <button className="btn btn-ghost px-3 py-1.5 inline-flex items-center gap-1.5" onClick={async () => setLog(log ? null : await window.obsLoader.repos.log(repo.path))}><Icon name="clock" size={14} /> {log ? 'Hide history' : 'History'}</button>
             <button className="btn btn-ghost px-3 py-1.5 inline-flex items-center gap-1.5" onClick={() => window.obsLoader.repos.openFolder(repo.path)}><Icon name="folder" size={14} /> Open folder</button>
             <button className="btn btn-ghost px-3 py-1.5 inline-flex items-center gap-1.5" onClick={async () => { await window.obsLoader.repos.remove(repo.path); await refresh() }}><Icon name="trash" size={14} /> Remove from list</button>
@@ -513,6 +526,10 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
               {log.map((l) => <li key={l.hash} className="bt-row py-0.5"><span className="mono text-muted">{l.hash}</span> {l.subject} <span className="text-muted">· {new Date(l.date).toLocaleString()}</span></li>)}
             </ul>
           )}
+          </section>
+            </div>
+          </div>
+        </div>
         </div>
       )}
     </section>
