@@ -75,7 +75,7 @@ const s3 = http.createServer((req, res) => {
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await page.setViewportSize({ width: 1100, height: 1200 })
   await page.waitForSelector('text=Flatpak')
-  const card = (name) => page.locator(`section.card:has(h2:text-is("${name}"))`)
+  const card = require("./card-helper.cjs")(page)
   const docs = path.join(home, '.local/share/obs-config-loader/presets')
   const dir = path.join(docs, 'Show')
   const bare = path.join(remotes, 'OBS-Config-Show.git')
