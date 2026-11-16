@@ -29,6 +29,18 @@ const toLinux = (b: Bundle, opts: Record<string, unknown> = {}, cfgName = 'cfg')
   return { plan, col, byName: (n: string) => col.sources.find((s: any) => s.name === n) }
 }
 
+describe('applying twice', () => {
+  it('does not add a second audio source for the same capture', () => {
+    const b = windowsSetup()
+    const once = toLinux(b, { installed: { obs: '33.0.0' } })
+    // the scenes OBS saved back now already hold "Game window (audio)"; the preset still has the Windows capture
+    const saved = Buffer.from(JSON.stringify({ ...JSON.parse(b.files.get('collections/c.json')!.toString()), sources: [...JSON.parse(b.files.get('collections/c.json')!.toString()).sources, once.byName('Game window (audio)')] }))
+    b.files.set('collections/c.json', saved)
+    const again = toLinux(b, { installed: { obs: '33.0.0' } })
+    expect(again.col.sources.filter((s: any) => s.name === 'Game window (audio)').length).toBe(1)
+  })
+})
+
 describe('Windows to Linux, with the PipeWire plugins', () => {
   it('window capture becomes PipeWire screen capture; its "capture audio" becomes a real application audio source in the same scene', () => {
     const { col, byName, plan } = toLinux(windowsSetup(), { installed: { obs: '33.0.0' } })

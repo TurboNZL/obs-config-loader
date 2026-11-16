@@ -89,7 +89,7 @@ export type UpdateState = {
 
 export interface GitState { available: boolean; help: GitInstallHelp; platform: string }
 export interface SetupStepInfo {
-  id: string; title: string; why?: string; mode: 'wait' | 'open'; optional: boolean
+  id: string; title: string; why?: string; mode: 'wait' | 'open' | 'tab'; tab?: string; optional: boolean
   /** Exactly what will run, for the person to read. Absent when it cannot run here (then `problem` says why). */
   command?: { program: string; args: string[]; cwd: string }
   problem?: string
@@ -178,10 +178,18 @@ export type { ChangeDetail, OnlineComparison, ImportReport, ConflictMode, Plugin
 
 export interface Api {
   platform: 'win32' | 'darwin' | 'linux'
+  homeDir?: string
   installs: {
     list(): Promise<InstallInfo[]>
     /** Start this OBS (any install that has a known way to start it). */
     launch(id: string): Promise<{ ok: boolean; message: string; command?: string }>
+    /** Which version is installed, which is newest, and how this kind of OBS is updated. */
+    updateInfo(id: string): Promise<{ ok: true; installed?: string; latest: string; newer?: boolean; method: string; explain: string } | { ok: false; error: string }>
+    update(id: string): Promise<{ ok: true; message: string } | { ok: false; error: string }>
+    onUpdateProgress(cb: (p: { text: string; done?: number; total?: number }) => void): () => void
+    /** Windows: download the newest portable OBS into a new folder inside `parent` (Documents by default) and add it. */
+    install(parent?: string): Promise<Done<{ root: string; version: string }>>
+    onInstallProgress(cb: (p: { phase: string; done?: number; total?: number; text: string }) => void): () => void
     /** Extra start options for this OBS: the known flags (from OBS's own source) and anything typed. */
     getLaunch(id: string): Promise<{ options: { flags: string[]; custom: string }; flags: { id: string; label: string; help: string }[] }>
     setLaunch(id: string, o: { flags: string[]; custom: string }): Promise<void>
@@ -219,9 +227,28 @@ export interface Api {
     /** Runs the platform's installer route. Always followed by state() to see whether it worked. */
     install(): Promise<{ ok: boolean; message: string }>
   }
+  compile: {
+    info(): Promise<{ toggles: { id: string; label: string; help: string; defaultOn: boolean }[]; platform: string }>
+    run(r: { srcDir: string; prefix: string; toggles: Record<string, boolean>; custom: string; buildType?: 'Release' | 'RelWithDebInfo' | 'Debug' }): Promise<{ ok: true; prefix: string; added: boolean } | { ok: false; error: string; problems?: string[]; hint?: string }>
+    onEvent(cb: (e: { t: 'step'; id: string; title: string; state: string } | { t: 'line'; line: string }) => void): () => void
+  }
+  tailscale: {
+    state(): Promise<{ installed: boolean; running: boolean; needsLogin: boolean; ip: string; dns: string; detail: string }>
+    install(): Promise<{ ok: true } | { ok: false; error: string }>
+    signIn(): Promise<{ ok: true } | { ok: false; error: string }>
+    /** Share a local web page on this computer's private address. */
+    serve(port: number): Promise<{ ok: true } | { ok: false; error: string }>
+  }
+  /** A script that draws its screens in a tab of the app. Events arrive through `onEvent`. */
+  script: {
+    start(path: string, stepId: string, label: string): Promise<Done<{ id: string }>>
+    send(id: string, msg: { t: 'submit'; id: string; button: string; values: Record<string, string | boolean> } | { t: 'closed' }): Promise<boolean>
+    stop(id: string): Promise<void>
+    onEvent(cb: (e: { id: string; msg: Record<string, any> }) => void): () => void
+  }
   setup: {
     /** `folders`: the folder names this preset knows (what a step can point at with `{{var:NAME}}`). */
-    plan(path: string): Promise<{ steps: SetupStepInfo[]; folders: string[] }>
+    plan(path: string): Promise<{ steps: SetupStepInfo[]; folders: string[]; name?: string }>
     /** Starts the step (never by itself: only when the person pressed the button). */
     run(path: string, stepId: string): Promise<Done<{ runId: string }>>
     poll(runId: string, from: number): Promise<SetupPoll>

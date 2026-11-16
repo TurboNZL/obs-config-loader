@@ -60,6 +60,7 @@ export function Details({ repo, installId, refresh, obsNote, notify }: { repo: R
         {d.layouts.map((l) => (
           <div key={l.id}>
             <RenameRow label="Scene layout" value={l.name} onRename={rename({ kind: 'layout', id: l.id })} />
+            {d.layouts.filter((x) => x.name === l.name).length > 1 && <p className="text-xs text-muted pl-1">Another scene layout has this same name. This one is “{l.id}” ({l.scenes.length} scenes, {l.sources.length} sources).</p>}
             <RemovePart repo={repo} kind="layout" id={l.id} name={l.name} refresh={refresh} notify={notify} load={load} />
             {l.scenes.length > 0 && l.scenes.map((s) => <RenameRow key={'s' + s} indent label="Scene" value={s} onRename={rename({ kind: 'scene', layoutId: l.id, from: s })} />)}
             {l.sources.length > 0 && (

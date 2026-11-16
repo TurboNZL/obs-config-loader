@@ -5,6 +5,7 @@ const call = <T>(channel: string, ...args: unknown[]) => ipcRenderer.invoke(chan
 
 const api: Api = {
   platform: process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux',
+  homeDir: process.env.HOME ?? process.env.USERPROFILE ?? '',
   installs: {
     list: () => call('installs:list'),
     addPortable: () => call('installs:addPortable'),
@@ -12,6 +13,19 @@ const api: Api = {
     getLaunch: (id) => call('installs:getLaunch', id),
     setLaunch: (id, o) => call('installs:setLaunch', id, o),
     launch: (id) => call('installs:launch', id),
+    updateInfo: (id) => call('obs:updateInfo', id),
+    update: (id) => call('obs:update', id),
+    onUpdateProgress: (cb) => {
+      const h = (_e: unknown, p: Parameters<typeof cb>[0]) => cb(p)
+      ipcRenderer.on('obs:updateProgress', h)
+      return () => { ipcRenderer.removeListener('obs:updateProgress', h) }
+    },
+    install: (parent) => call('obs:install', parent),
+    onInstallProgress: (cb) => {
+      const h = (_e: unknown, p: Parameters<typeof cb>[0]) => cb(p)
+      ipcRenderer.on('obs:installProgress', h)
+      return () => { ipcRenderer.removeListener('obs:installProgress', h) }
+    },
     verify: (id, since) => call('installs:verify', id, since),
     openFolder: (id) => call('installs:openFolder', id),
   },
@@ -36,6 +50,31 @@ const api: Api = {
   git: {
     state: () => call('git:state'),
     install: () => call('git:install'),
+  },
+  compile: {
+    info: () => call('compile:info'),
+    run: (r) => call('compile:run', r),
+    onEvent: (cb) => {
+      const h = (_e: unknown, m: Parameters<typeof cb>[0]) => cb(m)
+      ipcRenderer.on('compile:event', h)
+      return () => { ipcRenderer.removeListener('compile:event', h) }
+    },
+  },
+  tailscale: {
+    state: () => call('tailscale:state'),
+    install: () => call('tailscale:install'),
+    signIn: () => call('tailscale:signIn'),
+    serve: (port) => call('tailscale:serve', port),
+  },
+  script: {
+    start: (p, id, label) => call('script:start', p, id, label),
+    send: (id, msg) => call('script:send', id, msg),
+    stop: (id) => call('script:stop', id),
+    onEvent: (cb) => {
+      const h = (_e: unknown, d: { id: string; msg: Record<string, any> }) => cb(d)
+      ipcRenderer.on('script:event', h)
+      return () => ipcRenderer.removeListener('script:event', h)
+    },
   },
   setup: {
     plan: (p) => call('setup:plan', p),

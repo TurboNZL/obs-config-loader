@@ -50,6 +50,10 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
     env: { ...process.env, HOME: home, XDG_CONFIG_HOME: '', XDG_DOCUMENTS_DIR: path.join(home, 'Documents') },
   })
   const page = await app.firstWindow()
+
+  // the manager is a popup over everything: close it before using the tile's own buttons or the sidebar
+  const closeManager = async () => { const c = page.locator('div[role="dialog"] button[aria-label="Hide details"]'); if (await c.count()) await c.first().click() }
+  { const _click = page.click.bind(page); page.click = async (sel, ...a) => { if (/^nav/.test(sel)) await closeManager(); return _click(sel, ...a) } }
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await page.setViewportSize({ width: 1100, height: 1000 })
   await page.waitForSelector('text=Flatpak')
@@ -118,6 +122,7 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   const presetM = JSON.parse(fs.readFileSync(path.join(defaultRoot, 'Show/manifest.json'), 'utf8'))
   check('the big file has its own copy inside the preset (local part)', fs.existsSync(path.join(defaultRoot, 'Show/local/media/intro/intro.mp4')))
   check('and the stream key is kept there too, outside what git sees', fs.readFileSync(path.join(defaultRoot, 'Show/local/keys.json'), 'utf8').includes('live_SECRET'))
+  await closeManager()
   await show.locator('button[aria-label="Export this preset to a file"]').click()
   await page.waitForSelector('text=as a setup file')
   check('the file panel lists the big file with its size', /intro\.mp4[\s\S]*6\.0 MB/.test(await show.innerText()))
@@ -191,8 +196,10 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   await bc.locator('input[aria-label="Keep Scripts on this computer"]').click()
   await bc.locator('text=applies the next time you update').waitFor()
   check('"scripts" is back on in the preset', !JSON.parse(fs.readFileSync(path.join(defaultRoot, 'Both/manifest.json'), 'utf8')).exclude)
+  await closeManager()
   await bc.locator('button:has-text("Update preset from OBS")').click()
   await bc.locator('[role="status"]:has-text("Saved")').waitFor()
+  await bc.locator('button[aria-label="Show details"]').click()
   check('the next save puts the script back', fs.existsSync(path.join(defaultRoot, 'Both/scripts')))
   const sel = bc.locator('select[aria-label="Window Capture (X11) on Windows"]')
   await sel.waitFor()
@@ -211,6 +218,7 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   await page.waitForSelector('text=Moved “Both”')
   check('it is in the new folder', fs.existsSync(path.join(dest, 'Both/manifest.json')) && fs.existsSync(path.join(dest, 'Both/.git')))
   check('and gone from the old one', !fs.existsSync(path.join(defaultRoot, 'Both')))
+  await page.waitForTimeout(800); await closeManager()
   await card('Both').locator('button:has-text("Update preset from OBS")').click()
   await card('Both').locator('[role="status"]:has-text("Already up to date"), [role="status"]:has-text("Saved")').waitFor()
   check('and it still saves from OBS', true)
@@ -325,6 +333,57 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   await sc.locator('text=This step wants to run a program that is not part of this setup').waitFor()
   check('a program that is not part of the setup is refused, in words', true)
   await page.screenshot({ path: OUT + '/p9-setup-steps.png', fullPage: true })
+
+  await closeManager()
+  console.log('12b. a script that draws its screens in a tab of the app (no terminal, no window of its own)')
+  {
+    const { execFileSync } = require('child_process')
+    const showDir = path.join(root, 'MyPresets/Show')
+    fs.writeFileSync(path.join(showDir, 'scripts/switcher/screens.py'), [
+      'import sys, json',
+      'P = "@@obscl "',
+      'def send(m): sys.stdout.write(P + json.dumps(m) + "\\n"); sys.stdout.flush()',
+      'def read():',
+      '    for line in sys.stdin:',
+      '        if line.startswith(P): return json.loads(line[len(P):])',
+      '    sys.exit(0)',
+      'send({"t": "hello", "title": "Demo"})',
+      'send({"t": "screen", "id": "a", "title": "Welcome to the demo", "sub": "Drawn by the app", "wait": True,',
+      '      "blocks": [{"k": "field", "name": "who", "label": "Your name", "value": "friend"}, {"k": "check", "name": "ok", "label": "I agree", "value": True}],',
+      '      "buttons": [{"id": "next", "label": "Go on", "primary": True}]})',
+      'r = read()',
+      'send({"t": "screen", "id": "b", "title": "Working", "wait": False, "blocks": [{"k": "steps", "items": [{"id": "x", "title": "Step one", "state": "run"}]}], "buttons": []})',
+      'send({"t": "update", "id": "b", "item": {"id": "x", "state": "ok", "text": "hello " + r["values"]["who"]}})',
+      'send({"t": "update", "id": "b", "buttons": [{"id": "done", "label": "Finish", "primary": True}]})',
+      'read()',
+      'send({"t": "exit", "code": 0})',
+    ].join('\n') + '\n')
+    const mm = JSON.parse(fs.readFileSync(path.join(showDir, 'manifest.json'), 'utf8'))
+    mm.setup.steps.push({ id: 'demo-screens', title: 'Demo installer', why: 'Opens in its own tab.', mode: 'tab', tab: 'Installer', run: { any: { program: '{{python}}', args: ['{{bundle}}/scripts/switcher/screens.py'] } } })
+    fs.writeFileSync(path.join(showDir, 'manifest.json'), JSON.stringify(mm, null, 2) + '\n')
+    execFileSync('git', ['add', '-A'], { cwd: showDir }); execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'demo step'], { cwd: showDir })
+    await page.click('nav >> text=Home'); await page.click('nav >> text=Presets')
+    await page.click('button:has-text("Refresh")')
+    await page.waitForTimeout(500)
+    const d = card('Show')
+    await d.locator('button[aria-label="Show details"]').click()
+    check('no tab bar is shown before a script is opened', (await page.locator('[role="tablist"]').count()) === 0)
+    await d.locator('div.bt-row:has-text("Demo installer") button:has-text("Open it")').click()
+    await page.locator('text=Welcome to the demo').waitFor({ timeout: 30000 })
+    check('a tab appears: [Installer] with the preset name', (await page.locator('[role="tablist"]').innerText()).includes('[Installer] Show'))
+    check('the script\'s own screen is drawn by the app (field with its value)', (await page.locator('input[aria-label="Your name"]').inputValue()) === 'friend')
+    await page.locator('input[aria-label="Your name"]').fill('Ada')
+    await page.click('button:has-text("Go on")')
+    await page.locator('text=hello Ada').waitFor({ timeout: 30000 })
+    check('live updates reach the screen', true)
+    await page.click('button:has-text("Finish")')
+    await page.locator('text=The script has ended').waitFor({ timeout: 30000 })
+    await page.click('[role="tablist"] button:has-text("Config Loader")')
+    check('back on the app itself, the preset tile is still there', await card('Show').count() === 1)
+    await page.click('button[aria-label^="Close Installer"]')
+    await page.waitForFunction(() => document.querySelectorAll('[role="tablist"]').length === 0)
+    check('closing the tab removes the bar again', true)
+  }
 
   console.log('13. an OBS that was never compared with the preset (a preset that came from GitHub, then linked): no guessing about who changed what')
   {

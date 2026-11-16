@@ -48,6 +48,7 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
   const [drag, setDrag] = useState(false)
   const [liveChanges, setLiveChanges] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
+  const [fetching, setFetching] = useState(false)
 
   const usable = useMemo(() => installs ?? [], [installs])
   useEffect(() => { if (!installId && usable[0]) setInstallId(usable[0].id) }, [usable, installId])
@@ -258,6 +259,18 @@ export function ImportPage({ installs, preselect, openPath, refresh, onBack }: {
                 {usable.map((i) => <option key={i.id} value={i.id}>{i.label} ({KIND_LABEL[i.kind] ?? i.kind})</option>)}
               </select>
             ) : install ? <p className="text-sm"><strong>{install.label}</strong> <span className="text-muted">({KIND_LABEL[install.kind] ?? install.kind})</span></p> : <Message tone="warn">No OBS found. Add one under “OBS on this computer”.</Message>}
+            {window.obsLoader.platform === 'win32' && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <button className="btn px-3 py-1.5" disabled={busy || fetching} onClick={async () => {
+                  setFetching(true); setError(null)
+                  const r = await window.obsLoader.installs.install()
+                  if (!r.ok) setError(r.error)
+                  else { await refresh(); const fresh = (await window.obsLoader.installs.list()).find((i) => i.configDir.toLowerCase().startsWith(r.root.toLowerCase())); if (fresh) setInstallId(fresh.id) }
+                  setFetching(false)
+                }}>{fetching ? 'Downloading OBS…' : 'Download a fresh portable OBS for this (recommended)'}</button>
+                <span className="text-xs text-muted">A new folder is made; your other OBS is not touched.</span>
+              </div>
+            )}
             {install?.running && <Message tone="warn">This OBS is open right now. Close it first: it saves over its files when it closes and would undo it.</Message>}
           </Step>
 

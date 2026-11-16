@@ -205,7 +205,12 @@ function adaptSources(collection: any, manifest: Manifest, target: Platform, ctx
       subs.push({ source: s.name, from: id, result: 'disabled', note: chosenNow === null ? 'Hidden, as you chose.' : hasOwn ? 'Hidden, as you set it in the preset settings.' : 'No equivalent on this platform; kept as is and hidden.', key, sourceKey: srcKey, fromName: sourceName(key), options: standInOptions(key, target).map((o) => ({ id: o, name: sourceName(o) })) })
     }
     if (program && to) subs[subs.length - 1].note = `${subs[subs.length - 1].note ?? ''} It was capturing ${program}.`.trim()
-    if (audioTo) {
+    // applying twice must not add a second copy: the first one is already in the saved scenes (OBS saved it back with the layout)
+    const audioName = `${s.name} (audio)`
+    const alreadyThere = (collection.sources ?? []).some((x: any) => x?.name === audioName) || added.some((a) => a.source.name === audioName)
+    if (audioTo && alreadyThere) {
+      subs.push({ source: audioName, from: `${id} with “capture audio” on`, to: audioTo, result: 'added', note: 'Its audio source is already in the scenes, so it was not added again.' })
+    } else if (audioTo) {
       const uuid = crypto.randomUUID()
       added.push({ parent: s, source: audioSource(`${s.name} (audio)`, audioTo, uuid) })
       subs.push({ source: `${s.name} (audio)`, from: `${id} with “capture audio” on`, to: audioTo, result: 'added', note: `The window's own audio became a separate source; pick the application again.${audioProgram ? ` It was capturing ${audioProgram}.` : ''}` })

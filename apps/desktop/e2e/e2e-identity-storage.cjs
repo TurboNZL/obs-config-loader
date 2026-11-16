@@ -68,6 +68,10 @@ const s3 = http.createServer((req, res) => {
     env: { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: path.join(home, '.gitconfig'), XDG_CONFIG_HOME: '', XDG_DOCUMENTS_DIR: path.join(home, 'Documents'), OBSCL_GITHUB_API: `http://127.0.0.1:${api.address().port}` },
   })
   const page = await app.firstWindow()
+
+  // the manager is a popup over everything: close it before using the tile's own buttons or the sidebar
+  const closeManager = async () => { const c = page.locator('div[role="dialog"] button[aria-label="Hide details"]'); if (await c.count()) await c.first().click() }
+  { const _click = page.click.bind(page); page.click = async (sel, ...a) => { if (/^nav/.test(sel)) await closeManager(); return _click(sel, ...a) } }
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await page.setViewportSize({ width: 1100, height: 1200 })
   await page.waitForSelector('text=Flatpak')
