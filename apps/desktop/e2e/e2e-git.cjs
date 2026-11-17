@@ -79,7 +79,7 @@ const reopen = async (page) => { await page.click('nav >> text=OBS on this compu
 ;(async () => {
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
   const { app, page } = await launch()
-  const card = (name) => page.locator(`section.card:has(h2:text-is("${name}"))`)
+  const card = require("./card-helper.cjs")(page)
   const docs = path.join(home, '.local/share/obs-config-loader/presets')
 
   console.log('1. sign in to GitHub from the app (Settings)')

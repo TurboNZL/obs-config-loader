@@ -48,7 +48,7 @@ fs.writeFileSync(path.join(cfg, 'user.ini'), '[Basic]\nProfile=Main\nProfileDir=
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await page.setViewportSize({ width: 1300, height: 1000 })
   await page.waitForSelector('text=Flatpak')
-  const tile = (name) => page.locator(`section[aria-label="Preset ${name}"]`)
+  const tile = require("./card-helper.cjs")(page, (n) => `section[aria-label="Preset ${n}"]`)
   const presets = path.join(home, '.local/share/obs-config-loader/presets')
   const saveTo = (p) => app.evaluate(({ dialog }, f) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: f }) }, p)
 
@@ -133,7 +133,7 @@ fs.writeFileSync(path.join(cfg, 'user.ini'), '[Basic]\nProfile=Main\nProfileDir=
   check('ticking it again tracks it again', git(dir, 'ls-files').includes('collections/main.json'))
   const big = t.locator('input[aria-label="Upload intro.mp4 to GitHub"]')
   check('a 6 MB file can be uploaded if wanted', await big.isEnabled())
-  await t.locator('button[aria-label="Hide details"]').click()
+  await page.locator('div[role="dialog"] button[aria-label="Hide details"]').click()
 
   console.log('7. Home: numbers and what needs a look')
   await page.click('nav >> text=Home')

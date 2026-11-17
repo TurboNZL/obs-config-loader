@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { AssetNeed, ChangeDetail, RenamedFile, GithubState, InstallInfo, LogEntry, OnlineComparison, PresetOverview, PullResult, RepoInfo, SaveResult } from '../../../electron/api'
 import { Chip, Choice, Field, IconButton, KIND_LABEL, KindPanel, Message, plural, size } from '../ui'
 import { Icon } from './Icon'
@@ -469,9 +470,9 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         </div>
       )}
 
-      {exporting && <ExportPanel repo={repo} onDone={(m) => { setMsg(m) }} onClose={() => setExporting(false)} />}
+      {exporting && createPortal(<ExportPanel repo={repo} onDone={(m) => { setMsg(m) }} onClose={() => setExporting(false)} />, document.body)}
 
-      {open && (
+      {open && createPortal(
         <div className="fixed inset-0 z-40 flex items-stretch justify-center p-4 bg-black/50" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false) }}>
         <div className="card w-full max-w-5xl flex flex-col min-h-0 overflow-hidden" role="dialog" aria-modal="true" aria-label={`Manage ${repo.name}`}>
           <div className="flex items-center gap-2 px-4 py-3 border-b border-line">
@@ -531,7 +532,8 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
             </div>
           </div>
         </div>
-        </div>
+        </div>,
+        document.body
       )}
     </section>
   )
