@@ -58,14 +58,14 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
   useEffect(() => { onWide(false) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // never matched on this computer: the app cannot say which side changed, so it shows when each was last changed instead
-  const [loaderNote, setLoaderNote] = useState<{ from: string; to: string } | null>(null)
+  const [refreshed, setRefreshed] = useState<{ files: string[]; from: string; to: string; obsChanged: string } | null>(null)
   const [unsync, setUnsync] = useState<{ saved?: { date: string; by: string }; obs?: string } | null>(null)
   const [removeAsk, setRemoveAsk] = useState<string[] | null>(null)
   const check = async () => {
-    if (!linkedId) { setLive(null); setPending(null); setLoaderNote(null); setDetails(undefined); setUnsync(null); return }
+    if (!linkedId) { setLive(null); setPending(null); setRefreshed(null); setDetails(undefined); setUnsync(null); return }
     const r = await window.obsLoader.repos.live(repo.path, linkedId)
     setLive('error' in r ? null : r.changed)
-    setLoaderNote('error' in r ? null : r.loader ?? null)
+    setRefreshed('error' in r ? null : r.loaderRefresh ?? null)
     setUnsync('error' in r || !r.unsynced ? null : { saved: r.presetSaved, obs: r.obsChanged })
     setDetails(undefined) // the line-by-line preview is only read when it is asked for
     setPending('error' in r ? null : r.pending ?? null)
@@ -91,8 +91,8 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
   // an online preset asks what is new when it is shown, so "newer version online" is true and not last time's guess
   const [checked, setChecked] = useState(false)
   const [cmp, setCmp] = useState<OnlineComparison | null>(null)
-  const [sure, setSure] = useState<'mine' | 'theirs' | null>(null)
-  const disagree = !!cmp && cmp.unrelated && st.ahead > 0
+  // a sync that met a real clash with GitHub: the latest update on each side is shown, and one is chosen for the clashing parts
+  const [clash, setClash] = useState<{ files: string[]; cmp: OnlineComparison | null } | null>(null)
   useEffect(() => { if (online) void window.obsLoader.repos.check(repo.path).then((r) => { setChecked(true); patch(r.repo) }); else setChecked(true) }, [repo.path, online, tick]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (online && checked && (st.behind > 0 || st.ahead > 0)) void window.obsLoader.repos.compare(repo.path).then(setCmp); else setCmp(null) }, [online, checked, st.behind, st.ahead, repo.path])
 
@@ -113,11 +113,11 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     notify({ tone: 'good', text: `Renamed to “${newName.trim()}”.${repo.online ? ' The GitHub copy keeps its own name: rename it under the details if you want them to match.' : ''}` })
     await refresh()
   }
-  const applyNow = async (installId?: string, auto = false) => {
+  const applyNow = async (installId?: string, afterSync = false) => {
     const target = installId ?? (usable.length === 1 ? usable[0].id : undefined)
     if (!target) { notify({ tone: 'warn', text: 'Link this preset to an OBS (the chain button) so it knows where to apply, or use “Review before applying…” in its details to pick one.' }); return }
     // never forces the review page open: say why it did not apply, and point to the advanced button
-    const review = (why: string) => { notify({ tone: 'warn', text: auto ? `${repo.name} is up to date with GitHub, but it was not put into OBS: ${why} Press “Apply to OBS” when that is sorted.` : `${why} To go through it step by step, open this preset’s details (the gear at the top right) and press “Review before applying…”.` }) }
+    const review = (why: string) => { notify({ tone: 'warn', text: afterSync ? `Synced, but OBS was not updated: ${why} Sort that out and press Sync again.` : `${why} To go through it step by step, open this preset’s details (the gear at the top right) and press “Review before applying…”.` }) }
     setBusy(true); setMsg(null)
     try {
       const b = await window.obsLoader.bundle.openPath(repo.path)
@@ -148,17 +148,17 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
   const when = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'not known')
   const obsLine = !linkedId ? ''
     : live === null ? `Checking the linked OBS…`
-    : unsync && changes > 0 ? `Not compared yet: they differ in ${plural(changes, 'place')}. The preset was last saved ${when(unsync.saved?.date)}${unsync.saved?.by ? ` (by ${unsync.saved.by})` : ''}; the linked OBS last changed ${when(unsync.obs)}. Apply the preset if it is right, or update it from OBS if OBS is.`
-    : changes > 0 && toObs > 0 ? `The linked OBS has changes the preset does not have, and the preset has changes the linked OBS does not have.`
-    : changes > 0 ? `The linked OBS has ${plural(changes, 'change')} this preset does not have yet: ${namesOf(live ?? [])}. “Update preset from OBS” keeps them; “Apply to OBS” replaces them with the preset’s version.`
+    : unsync && changes > 0 ? `Not compared yet: they differ in ${plural(changes, 'place')}. The preset was last saved ${when(unsync.saved?.date)}${unsync.saved?.by ? ` (by ${unsync.saved.by})` : ''}; the linked OBS last changed ${when(unsync.obs)}. Sync takes OBS’s version as right; to use the preset’s instead, open its details and apply it.`
+    : changes > 0 && toObs > 0 ? `The linked OBS has ${plural(changes, 'change')} the preset does not have (${namesOf(live ?? [])}), and the preset has ${plural(toObs, 'update')} OBS does not have (${namesOf(pending ?? [])}). Sync combines them.`
+    : changes > 0 ? `The linked OBS has ${plural(changes, 'change')} this preset does not have yet: ${namesOf(live ?? [])}.`
     : toObs > 0 ? `This preset has ${plural(toObs, 'update')} that the linked OBS does not have yet: ${namesOf(pending ?? [])}.`
     : `The linked OBS and this preset match.`
-  const loaderLine = loaderNote && (changes > 0 || toObs > 0) ? `OBS Config Loader was updated (${loaderNote.from} to ${loaderNote.to}) since this preset was last saved, so some of these differences may come from the app itself and not from any edit.` : ''
-  const obsAccent: 'save' | 'apply' | null = unsync ? null : changes > 0 ? 'save' : toObs > 0 ? 'apply' : null
-  const ghLine = !checked ? 'Asking GitHub…'
-    : st.ahead > 0 && st.behind > 0 ? 'Both this computer and GitHub have changed: combining them, GitHub’s version winning where they clash.'
-    : st.behind > 0 ? `GitHub has ${plural(st.behind, 'newer change')}: getting ${st.behind === 1 ? 'it' : 'them'}…`
-    : st.ahead > 0 ? `${plural(st.ahead, 'save')} not uploaded yet: uploading…`
+  // only said when proven: OBS has not changed since the last sync, yet the preset differs, so the newer loader reads OBS differently
+  const loaderLine = refreshed && changes === 0 ? `OBS Config Loader was updated (${refreshed.from} to ${refreshed.to}) and now reads ${namesOf(refreshed.files)} differently. OBS itself has not changed since ${when(refreshed.obsChanged)}, so this is the app, not an edit. The next sync refreshes the preset.` : ''
+    const ghLine = !checked ? 'Asking GitHub…'
+    : st.ahead > 0 && st.behind > 0 ? 'Both this computer and GitHub have changed. Sync combines them.'
+    : st.behind > 0 ? `GitHub has ${plural(st.behind, 'newer change')} this computer does not have yet.`
+    : st.ahead > 0 ? `${plural(st.ahead, 'save')} not uploaded yet.`
     : 'Same as GitHub.'
 
   const run = async (f: () => Promise<void>) => { setBusy(true); try { await f() } catch (e) { setMsg({ tone: 'bad', text: (e as Error).message }) } setBusy(false); await refresh() }
@@ -183,78 +183,47 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     await check(); await loadOverview()
   })
 
-  const showPull = (r: PullResult) => {
-    setConflict(null)
-    if (r.status === 'updated') setMsg({ tone: 'good', text: `Got ${r.files.length} changed file${r.files.length === 1 ? '' : 's'}. Press “Apply to OBS” to put them into OBS.` })
-    else if (r.status === 'conflict') { setConflict({ kind: 'pull', files: r.conflicts }); setMsg(null) }
-    else if (r.status === 'dirty') setMsg({ tone: 'warn', text: `Save your changes first (${r.files.length} file${r.files.length === 1 ? ' was' : 's were'} changed by hand). Use “Update preset from OBS”.` })
-    else if (r.status === 'error') setMsg({ tone: 'bad', text: r.message })
-    else if (r.status === 'no-remote') setMsg({ tone: 'warn', text: 'This preset is not backed up online yet.' })
-    else setMsg({ tone: 'good', text: 'Already up to date.' })
-  }
-  const pull = (onConflict?: 'abort' | 'keep-mine' | 'keep-theirs') => run(async () => showPull(await window.obsLoader.repos.pull(repo.path, onConflict)))
-  const push = () => run(async () => {
-    const r = await window.obsLoader.repos.push(repo.path)
-    setMsg(r.status === 'pushed' ? { tone: 'good', text: 'Uploaded.' } : r.status === 'nothing' ? { tone: 'good', text: 'Nothing new to upload.' }
-      : r.status === 'no-remote' ? { tone: 'warn', text: 'This preset is not backed up online yet.' }
-      : r.rejected ? { tone: 'warn', text: 'The online copy has changes this computer does not have. See the box at the top of this preset and choose which version is right.' }
-      : { tone: 'bad', text: r.message })
-  })
-  const keepMine = () => run(async () => {
-    const r = await window.obsLoader.repos.push(repo.path, true)
-    setSure(null)
-    setMsg(r.status === 'pushed' ? { tone: 'good', text: 'The online copy now matches this computer.' }
-      : r.status === 'error' ? { tone: 'bad', text: r.rejected ? 'Someone saved to the online copy just now, so it was not replaced. Look at the two again and choose.' : r.message }
-      : { tone: 'good', text: 'Nothing to replace.' })
-  })
-  const useOnline = () => run(async () => {
-    const r = await window.obsLoader.repos.useOnline(repo.path)
-    setSure(null)
-    setMsg(r.ok ? { tone: 'good', text: 'This computer now has the online version. Your previous one is kept in History. Apply it to OBS to use it.' } : { tone: 'bad', text: r.error })
-  })
-  // GitHub is the source of truth: when it has something this computer lacks, take it (and put it into a clean, closed OBS); when this computer
-  // has saves GitHub lacks, upload them. Both sides changed: GitHub wins, and what this computer had stays in History.
-  const autoKey = useRef('')
-  useEffect(() => {
-    if (!online || !checked || busy || st.dirtyFiles.length > 0) return
-    if (st.behind === 0 && st.ahead === 0 && !disagree) return
-    const key = `${repo.path}|${st.ahead}|${st.behind}|${tick ?? 0}`
-    if (autoKey.current === key) return
-    autoKey.current = key
-    void (async () => {
-      setBusy(true)
-      let got = false
-      const wasClean = !!linkedId && live?.length === 0 && !unsync
-      try {
-        if (st.behind > 0 || disagree) {
-          // unrelated histories cannot be combined: GitHub's version replaces this one (kept in History). Otherwise both sets of edits are
-          // combined, and where they clash on the same line GitHub's wins, so nothing else is lost.
-          if (disagree) { const r = await window.obsLoader.repos.useOnline(repo.path); got = r.ok }
-          else { const r = await window.obsLoader.repos.pull(repo.path, 'keep-theirs'); got = r.status === 'updated' }
-          if (got) {
-            if (st.ahead > 0) await window.obsLoader.repos.push(repo.path)
-            setMsg({ tone: 'good', text: st.ahead > 0 ? 'Got the newest version from GitHub and combined it with your latest saves; where both changed the same thing, GitHub’s version won.' : 'Got the newest version from GitHub: this preset now matches it.' })
-          }
-        } else {
-          const r = await window.obsLoader.repos.push(repo.path)
-          if (r.status === 'pushed') setMsg({ tone: 'good', text: 'Uploaded your saves to GitHub.' })
-          else if (r.status === 'error' && r.rejected) {
-            // GitHub had something newer that this computer had not looked for yet: take it, combine, and upload the result
-            const p = await window.obsLoader.repos.pull(repo.path, 'keep-theirs')
-            if (p.status === 'updated') {
-              got = true
-              await window.obsLoader.repos.push(repo.path)
-              setMsg({ tone: 'good', text: 'Got the newest version from GitHub and combined it with your latest saves; where both changed the same thing, GitHub’s version won.' })
-            }
-          }
+  /**
+   * The one button. The preset follows OBS and GitHub follows the preset: whatever was changed here (OBS or the loader) is saved into the
+   * preset, combined with what is on GitHub, uploaded, and anything new from GitHub is put into OBS. A change that slots in cleanly asks
+   * nothing. Only a real clash on the same part asks, showing the latest update on each side. (OBS vs preset never asks: OBS wins, the
+   * preset follows OBS.)
+   */
+  const sync = async (choice?: 'mine' | 'theirs', confirmRemoval = false) => {
+    setBusy(true); setMsg(null); setClash(null); setRemoveAsk(null); setDirtyAsk(null)
+    const did: string[] = []
+    let stop = false
+    try {
+      if (linkedId) {
+        const r = await window.obsLoader.repos.save(repo.path, linkedId, true, 'keep-obs', confirmRemoval)
+        if (r.status === 'would-remove') { setRemoveAsk(r.removes); stop = true }
+        else if (r.status === 'error') { setMsg({ tone: 'bad', text: r.message }); stop = true }
+        else if (r.status === 'committed') { did.push('saved what changed in OBS'); if (r.upload === 'uploaded') did.push('uploaded to GitHub') }
+      }
+      if (!stop && online) {
+        const c = await window.obsLoader.repos.check(repo.path); patch(c.repo)
+        if (c.repo.status.behind > 0) {
+          const p = await window.obsLoader.repos.pull(repo.path, choice === 'mine' ? 'keep-mine' : choice === 'theirs' ? 'keep-theirs' : 'abort')
+          if (p.status === 'conflict') { setClash({ files: p.conflicts, cmp: await window.obsLoader.repos.compare(repo.path) }); stop = true }
+          else if (p.status === 'error') { setMsg({ tone: 'bad', text: p.message }); stop = true }
+          else if (p.status === 'dirty') { setMsg({ tone: 'warn', text: `Some files in the preset were changed by hand (${p.files.length}) and this preset is not linked to an OBS to keep them from, so they were not combined with GitHub.` }); stop = true }
+          else if (p.status === 'updated') did.push('got the newest from GitHub')
         }
-      } catch { /* the buttons below still work by hand */ }
-      setBusy(false)
-      await refresh()
-      if (got && wasClean) void applyNow(linkedId, true)
-    })()
-  }, [online, checked, busy, st.behind, st.ahead, st.dirtyFiles.length, disagree, tick]) // eslint-disable-line react-hooks/exhaustive-deps
-
+        if (!stop) {
+          const u = await window.obsLoader.repos.push(repo.path)
+          if (u.status === 'pushed' && !did.includes('uploaded to GitHub')) did.push('uploaded to GitHub')
+          else if (u.status === 'error') { setMsg({ tone: 'bad', text: u.rejected ? 'GitHub changed again while syncing. Press Sync once more.' : u.message }); stop = true }
+        }
+      }
+      if (!stop && linkedId) {
+        const lv = await window.obsLoader.repos.live(repo.path, linkedId)
+        if (!('error' in lv) && (lv.pending?.length ?? 0) > 0) { setBusy(false); await applyNow(linkedId, true); did.push('put the preset’s updates into OBS') }
+      }
+      if (!stop) setMsg({ tone: 'good', text: did.length ? `Synced: ${did.join(', ')}.` : 'Already in sync: nothing to do.' })
+    } catch (e) { setMsg({ tone: 'bad', text: (e as Error).message }) }
+    setBusy(false)
+    await refresh(); void check()
+  }
   // a repository with that name is already on GitHub: the person may want exactly that one (say, an organisation's) to hold this preset
   const [replaceAsk, setReplaceAsk] = useState(false)
   const toggleOnline = (on: boolean, replace = false) => run(async () => {
@@ -340,10 +309,6 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           <div className="space-y-2">
             <p className="text-sm">{obsLine}</p>
             {loaderLine && <p className="text-xs text-muted">{loaderLine}</p>}
-            <div className="grid grid-cols-2 gap-2">
-              <button className={'btn px-3 py-1.5 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => void applyNow(linkedId)}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
-              <button className={'btn px-3 py-1.5 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy} onClick={() => save(false)}>Update preset from OBS</button>
-            </div>
             <div>
               {changes > 0 && (
               <div>
@@ -357,10 +322,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         ) : !repo.installId && (
           <div className="space-y-2">
             <p className="text-sm">This preset stands on its own: it only changes when you change it here.</p>
-            <div className="grid grid-cols-2 gap-2">
-              <button className="btn px-3 py-1.5" disabled={busy} onClick={() => void applyNow()}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
-              <span />
-            </div>
+            <button className="btn px-3 py-1.5 w-full" disabled={busy} onClick={() => void applyNow()}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
           </div>
         )}
       </KindPanel>
@@ -373,10 +335,6 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         {online ? (
           <div className="space-y-2">
             <p className="text-sm">{ghLine}</p>
-            <div className="grid grid-cols-2 gap-2">
-              <button className={'btn px-3 py-1.5 ' + (checked && st.behind > 0 && st.ahead === 0 ? 'btn-accent' : '')} disabled={busy} onClick={() => pull()}>Get updates</button>
-              <button className={'btn px-3 py-1.5 ' + (checked && st.ahead > 0 && st.behind === 0 ? 'btn-accent' : '')} disabled={busy} onClick={push}>Upload</button>
-            </div>
           </div>
         ) : (
           <div className="space-y-1">
@@ -414,32 +372,26 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         {online && ov && ov.onlyHere.length === 0 && ov.keys.count === 0 && <p className="text-xs text-muted">Everything in this preset is uploaded.</p>}
       </KindPanel>
 
-      {online && checked && (st.behind > 0 && st.ahead > 0 || disagree) && (
+      {(linkedId || online) && (
+        <button className="btn btn-accent px-3 py-2 w-full" disabled={busy || !checked} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync'}</button>
+      )}
+      {(linkedId || online) && <p className="text-xs text-muted -mt-1">{linkedId && online ? 'Saves what changed in OBS or here, combines it with GitHub, uploads it, and puts anything new from GitHub into OBS.' : linkedId ? 'Saves what changed in OBS into the preset, and puts the preset’s updates into OBS.' : 'Combines this preset with GitHub and uploads what is new.'}</p>}
+
+      {clash && (
         <Message tone="bad">
-          <strong>This computer and the online copy have both changed.</strong> Choose which one is right.
-          {cmp?.mine && cmp?.theirs && (
-            <ul className="mt-1 space-y-0.5">
-              <li>This computer: last saved {new Date(cmp.mine.date).toLocaleString()} (“{cmp.mine.subject}”), {plural(st.ahead, 'save')} the online copy does not have.</li>
-              <li>Online: last changed {new Date(cmp.theirs.date).toLocaleString()} by {cmp.theirs.author} (“{cmp.theirs.subject}”), {plural(st.behind, 'change')} this computer does not have.</li>
-              {cmp.unrelated && <li>They were started separately, so they have no saves in common.</li>}
+          <strong>This computer and GitHub both changed {clash.files.map(friendlyFile).join('; ')}.</strong> Everything else was combined. Choose whose version to keep for just that part.
+          {clash.cmp?.mine && clash.cmp?.theirs && (
+            <ul className="mt-1 space-y-0.5 text-sm">
+              <li><strong>This computer:</strong> last update {new Date(clash.cmp.mine.date).toLocaleString()}, “{clash.cmp.mine.subject}”.</li>
+              <li><strong>GitHub:</strong> last update {new Date(clash.cmp.theirs.date).toLocaleString()} by {clash.cmp.theirs.author}, “{clash.cmp.theirs.subject}”.</li>
             </ul>
           )}
           <div className="mt-2 flex gap-2 flex-wrap">
-            <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => pull()}>Combine them</button>
-            <button className="btn px-3 py-1" disabled={busy} onClick={() => setSure('mine')}>Keep mine (replace the online copy)</button>
-            <button className="btn px-3 py-1" disabled={busy} onClick={() => setSure('theirs')}>Use the online one (replace mine)</button>
+            <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => void sync('mine')}>Keep this computer’s</button>
+            <button className="btn px-3 py-1" disabled={busy} onClick={() => void sync('theirs')}>Use GitHub’s</button>
+            <button className="btn btn-ghost px-3 py-1" onClick={() => setClash(null)}>Cancel</button>
           </div>
-          {sure && (
-            <div className="mt-2 space-y-1">
-              <p className="text-sm">{sure === 'mine'
-                ? 'The online copy will be replaced by this computer\'s version. Its saves stay in GitHub\'s history, but it will no longer be the current one. Sure?'
-                : 'This computer\'s version will be replaced by the online one. Yours is kept (under History, on a branch named “before-online-…”), so nothing is lost. Sure?'}</p>
-              <div className="flex gap-2">
-                <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => (sure === 'mine' ? keepMine() : useOnline())}>{sure === 'mine' ? 'Yes, replace the online copy' : 'Yes, replace mine'}</button>
-                <button className="btn btn-ghost px-3 py-1" onClick={() => setSure(null)}>Cancel</button>
-              </div>
-            </div>
-          )}
+          <p className="text-xs text-muted mt-1">Nothing is lost: the one you do not pick stays in History.</p>
         </Message>
       )}
 
@@ -447,10 +399,11 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         <Message tone="bad">
           <strong>Updating the preset from the linked OBS would remove things from the preset.</strong> It has never been compared with this preset, and does not have: {removeAsk.map(friendlyFile).join('; ')}. They are in the preset (probably saved on another computer).
           <div className="mt-2 flex gap-2 flex-wrap">
-            <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => save(false, undefined, true)}>Yes, remove them from the preset</button>
-            <button className="btn px-3 py-1" onClick={() => setRemoveAsk(null)}>No, keep the preset as it is</button>
+            <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => void sync(undefined, true)}>Yes, remove them from the preset</button>
+            <button className="btn px-3 py-1" disabled={busy} onClick={() => { setRemoveAsk(null); void applyNow(linkedId) }}>No, put the preset into OBS instead</button>
+            <button className="btn btn-ghost px-3 py-1" onClick={() => setRemoveAsk(null)}>Cancel</button>
           </div>
-          <p className="text-xs text-muted mt-1">To put them into OBS instead, press “Apply to OBS”. Nothing has been changed yet.</p>
+          <p className="text-xs text-muted mt-1">Nothing has been changed yet.</p>
         </Message>
       )}
 
@@ -466,21 +419,10 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
 
       {conflict && (
         <Message tone="bad">
-          {conflict.kind === 'save'
-            ? <>The preset and OBS both changed the same part of {conflict.files.join(', ')}. Everything else combines fine; choose whose version to keep for just that part.</>
-            : <>You and the online copy both changed the same part of {conflict.files.join(', ')}. Everything else combines fine; choose whose version to keep for just that part.</>}
+          The preset and OBS both changed the same part of {conflict.files.join(', ')}. Everything else combines fine; choose whose version to keep for just that part.
           <div className="mt-2 flex gap-2 flex-wrap">
-            {conflict.kind === 'save' ? (
-              <>
-                <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => save(false, 'keep-repo')}>Keep the preset's version</button>
-                <button className="btn px-3 py-1" disabled={busy} onClick={() => save(false, 'keep-obs')}>Keep OBS's version</button>
-              </>
-            ) : (
-              <>
-                <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => pull('keep-mine')}>Keep mine</button>
-                <button className="btn px-3 py-1" disabled={busy} onClick={() => pull('keep-theirs')}>Take the online version</button>
-              </>
-            )}
+            <button className="btn btn-accent px-3 py-1" disabled={busy} onClick={() => save(false, 'keep-repo')}>Keep the preset's version</button>
+            <button className="btn px-3 py-1" disabled={busy} onClick={() => save(false, 'keep-obs')}>Keep OBS's version</button>
             <button className="btn btn-ghost px-3 py-1" onClick={() => setConflict(null)}>Cancel</button>
           </div>
           <p className="text-xs text-muted mt-1">Nothing has been changed yet. Earlier saves stay in History either way.</p>
@@ -558,7 +500,12 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           <section id="m-apply" className="space-y-1">
             <h3 className="font-semibold text-sm">Apply with a review</h3>
             <p className="text-xs text-muted">“Apply to OBS” on the tile puts the whole preset into OBS straight away. This opens a page where you can see what will happen and choose parts first.</p>
-            <button className="btn px-3 py-1.5" disabled={busy} onClick={() => apply(repo.path, linkedId)}>Review before applying…</button>
+            <div className="flex gap-2 flex-wrap">
+              <button className="btn px-3 py-1.5" disabled={busy} onClick={() => apply(repo.path, linkedId)}>Review before applying…</button>
+              {linkedId && <button className="btn px-3 py-1.5" disabled={busy} onClick={() => { setOpen(false); void applyNow(linkedId) }}>Replace OBS with this preset</button>}
+              {linkedId && <button className="btn px-3 py-1.5" disabled={busy} onClick={() => { setOpen(false); save(false) }}>Only save OBS into the preset</button>}
+            </div>
+            <p className="text-xs text-muted">The tile’s Sync does the right thing for everyday use. These two force one direction: the first makes OBS match the preset (what OBS has that the preset lacks is lost, replaced files are backed up), the second updates just the preset.</p>
           </section>
 
           <section id="m-setup"><SetupSteps presetPath={repo.path} authoring /></section>

@@ -197,8 +197,8 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   await bc.locator('text=applies the next time you update').waitFor()
   check('"scripts" is back on in the preset', !JSON.parse(fs.readFileSync(path.join(defaultRoot, 'Both/manifest.json'), 'utf8')).exclude)
   await closeManager()
-  await bc.locator('button:has-text("Update preset from OBS")').click()
-  await bc.locator('[role="status"]:has-text("Saved")').waitFor()
+  await bc.locator('button:text-is("Sync")').click()
+  await bc.locator('[role="status"]:has-text("Synced")').waitFor()
   await bc.locator('button[aria-label="Show details"]').click()
   check('the next save puts the script back', fs.existsSync(path.join(defaultRoot, 'Both/scripts')))
   const sel = bc.locator('select[aria-label="Window Capture (X11) on Windows"]')
@@ -219,8 +219,8 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   check('it is in the new folder', fs.existsSync(path.join(dest, 'Both/manifest.json')) && fs.existsSync(path.join(dest, 'Both/.git')))
   check('and gone from the old one', !fs.existsSync(path.join(defaultRoot, 'Both')))
   await page.waitForTimeout(800); await closeManager()
-  await card('Both').locator('button:has-text("Update preset from OBS")').click()
-  await card('Both').locator('[role="status"]:has-text("Already up to date"), [role="status"]:has-text("Saved")').waitFor()
+  await card('Both').locator('button:text-is("Sync")').click()
+  await card('Both').locator('[role="status"]:has-text("Already in sync"), [role="status"]:has-text("Synced")').waitFor()
   check('and it still saves from OBS', true)
 
   console.log('9. Settings: change where presets are kept')
@@ -246,7 +246,7 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
   check('"move my existing presets too" moved them all', fs.existsSync(path.join(mine, 'Show/manifest.json')) && fs.existsSync(path.join(mine, 'Both/manifest.json')) && !fs.existsSync(path.join(defaultRoot, 'Show')))
   await page.click('nav >> text=Presets')
   await card('Show').waitFor()
-  check('and they are still listed and work', await card('Show').locator('button:has-text("Update preset from OBS")').isEnabled())
+  check('and they are still listed and work', await card('Show').locator('button:text-is("Sync")').isEnabled())
 
   console.log('10. applying a setup made on Windows: plugins that only exist on Linux never stop it, and each swapped source can be chosen')
   const wz = new JSZip()
@@ -398,15 +398,13 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
     const t = await o.innerText()
     check('it says they were never compared, and when each side last changed', /Not compared yet: they differ in/.test(t) && /was last saved/.test(t) && /the linked OBS last changed/.test(t))
     check('it does not claim OBS made changes', !/has \d+ changes? this preset does not have yet/.test(t))
-    check('neither button is pushed as the right one', (await o.locator('button.btn-accent:has-text("Update preset from OBS")').count()) === 0 && (await o.locator('button.btn-accent:has-text("Apply to OBS")').count()) === 0)
-    await o.locator('button:has-text("Update preset from OBS")').click()
+    await o.locator('button:text-is("Sync")').click()
     await o.locator('text=/would remove things from the preset/').waitFor({ timeout: 30000 })
     check('updating from it asks first, and names what would go', (await o.innerText()).includes('Scene layout'))
     check('nothing was removed by asking', fs.readdirSync(path.join(gitDir, 'collections')).length > 0)
     await page.screenshot({ path: OUT + '/p10-unsynced.png', fullPage: true })
-    await o.locator('button:has-text("No, keep the preset as it is")').click()
-    // Apply is authoritative: one click, and the "not compared" notice is gone afterwards
-    await o.locator('button:has-text("Apply to OBS")').click()
+    // the way out that keeps the preset: put it into OBS (one click, authoritative), and the "not compared" notice is gone afterwards
+    await o.locator('button:has-text("No, put the preset into OBS instead")').click()
     await page.waitForSelector('text=/Applied “Other”/', { timeout: 30000 })
     await o.locator('text=/Not compared yet/').waitFor({ state: 'detached', timeout: 30000 })
     check('after Apply the notice is gone', !/Not compared yet/.test(await o.innerText()))
@@ -423,6 +421,27 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
     check('History & more keeps the popup inside the window', !!bb && bb.y >= 0 && bb.y + bb.height <= vp.height + 1)
     await page.screenshot({ path: OUT + '/p11-manager-history.png' })
     await dlg.locator('button:has-text("Close")').click()
+  }
+
+  console.log('14. a difference that only the loader can have caused (OBS untouched, an older loader version looked last) is named as such')
+  {
+    const gitDir = path.join(root, 'MyPresets/Other')
+    const { execFileSync } = require('child_process')
+    const g = (...a) => execFileSync('git', a, { cwd: gitDir, encoding: 'utf8' }).trim()
+    const scenesDir = path.join(gitDir, 'collections'); const f = path.join(scenesDir, fs.readdirSync(scenesDir).find((x) => x.endsWith('.json') && !x.includes('platforms')))
+    const j = JSON.parse(fs.readFileSync(f, 'utf8')); j.current_scene = 'READ-DIFFERENTLY'; fs.writeFileSync(f, JSON.stringify(j, null, 4) + '\n')
+    g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qam', 'simulated newer reading'); const head = g('rev-parse', 'HEAD')
+    for (const r of g('for-each-ref', '--format=%(refname)', 'refs/obs-config-loader/synced').split('\n').filter(Boolean)) g('update-ref', r, head)
+    const mp = path.join(root, 'ud', 'sync-marks.json'); const marks = JSON.parse(fs.readFileSync(mp, 'utf8'))
+    for (const k of Object.keys(marks)) if (k.startsWith(path.resolve(gitDir) + '|')) marks[k] = { obsChanged: '2999-01-01T00:00:00.000Z', version: '0.0.1' }
+    fs.writeFileSync(mp, JSON.stringify(marks))
+    await page.click('button:has-text("Refresh")')
+    const o = card('Other')
+    await o.locator('text=/OBS Config Loader was updated \\(0\\.0\\.1 to /').waitFor({ timeout: 30000 })
+    const t = await o.innerText()
+    check('it names the loader update and says OBS itself did not change', /now reads .* differently/.test(t) && /OBS itself has not changed since/.test(t))
+    check('and does not claim OBS made changes', !/has \d+ changes? this preset does not have yet/.test(t))
+    await page.screenshot({ path: OUT + '/p12-loader-refresh.png', fullPage: true })
   }
 
   await app.close()
