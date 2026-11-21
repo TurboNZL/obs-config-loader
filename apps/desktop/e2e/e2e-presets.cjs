@@ -405,6 +405,24 @@ fs.writeFileSync(path.join(cfg, 'plugin_manager/modules.json'), JSON.stringify([
     check('nothing was removed by asking', fs.readdirSync(path.join(gitDir, 'collections')).length > 0)
     await page.screenshot({ path: OUT + '/p10-unsynced.png', fullPage: true })
     await o.locator('button:has-text("No, keep the preset as it is")').click()
+    // Apply is authoritative: one click, and the "not compared" notice is gone afterwards
+    await o.locator('button:has-text("Apply to OBS")').click()
+    await page.waitForSelector('text=/Applied “Other”/', { timeout: 30000 })
+    await o.locator('text=/Not compared yet/').waitFor({ state: 'detached', timeout: 30000 })
+    check('after Apply the notice is gone', !/Not compared yet/.test(await o.innerText()))
+    check('and it says OBS and the preset match', /match/.test(await o.innerText()))
+    check('the layout that was missing is back in OBS', fs.existsSync(path.join(cfg, 'basic/scenes/Gameplay.json')))
+    // the manager popup: jumping to the last section scrolls only its own content, the popup stays inside the window
+    await o.locator('button[aria-label="Show details"]').click()
+    const dlg = page.locator('div[role="dialog"][aria-label="Manage Other"]')
+    await dlg.waitFor()
+    await dlg.locator('button:has-text("History & more")').click()
+    await page.waitForTimeout(700)
+    const vp = page.viewportSize() ?? { width: 1280, height: 800 }
+    const bb = await dlg.boundingBox()
+    check('History & more keeps the popup inside the window', !!bb && bb.y >= 0 && bb.y + bb.height <= vp.height + 1)
+    await page.screenshot({ path: OUT + '/p11-manager-history.png' })
+    await dlg.locator('button:has-text("Close")').click()
   }
 
   await app.close()

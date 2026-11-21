@@ -281,7 +281,7 @@ export interface Api {
     publish(path: string, name: string, priv: boolean, org?: string, replace?: boolean): Promise<Done<{ url: string; pushed: boolean }>>
     /** What OBS has changed since the last save (dry run). */
     /** `changed`: what OBS has that the preset does not. `pending`: what the preset has that this OBS does not (null: not known yet). */
-    live(path: string, installId: string, withDiff?: boolean): Promise<{ changed: string[]; details?: ChangeDetail[]; pending?: string[] | null; unsynced?: boolean; presetSaved?: { date: string; by: string; subject: string }; obsChanged?: string } | { error: string }>
+    live(path: string, installId: string, withDiff?: boolean): Promise<{ changed: string[]; details?: ChangeDetail[]; pending?: string[] | null; loader?: { from: string; to: string }; unsynced?: boolean; presetSaved?: { date: string; by: string; subject: string }; obsChanged?: string } | { error: string }>
     save(path: string, installId: string, commitDirtyFirst: boolean, onConflict?: SaveConflictChoice, confirmRemoval?: boolean): Promise<SaveResult>
     pull(path: string, onConflict?: PullConflictChoice): Promise<PullResult>
     /** `force`: replace the online copy with this one (refused if someone pushed since we last looked). */

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { AssetNeed, ChangeDetail, RenamedFile, GithubState, InstallInfo, LogEntry, OnlineComparison, PresetOverview, PullResult, RepoInfo, SaveResult } from '../../../electron/api'
 import { Chip, Choice, Field, IconButton, KIND_LABEL, KindPanel, Message, plural, size } from '../ui'
@@ -47,6 +47,9 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
   const [priv, setPriv] = useState(true)
   const [org, setOrg] = useState('')
   const [open, setOpen] = useState(false)
+  const pane = useRef<HTMLDivElement>(null)
+  // scroll the popup's own content: scrollIntoView also moves the page and the popup with it (History & more pushed the popup out of the window)
+  const jump = (id: string) => { const box = pane.current; const el = document.getElementById(id); if (box && el) box.scrollTo({ top: el.offsetTop - 8, behavior: 'smooth' }) }
   const [exporting, setExporting] = useState(false)
   const online = !!repo.remoteUrl
 
@@ -55,12 +58,14 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
   useEffect(() => { onWide(false) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // never matched on this computer: the app cannot say which side changed, so it shows when each was last changed instead
+  const [loaderNote, setLoaderNote] = useState<{ from: string; to: string } | null>(null)
   const [unsync, setUnsync] = useState<{ saved?: { date: string; by: string }; obs?: string } | null>(null)
   const [removeAsk, setRemoveAsk] = useState<string[] | null>(null)
   const check = async () => {
-    if (!linkedId) { setLive(null); setPending(null); setDetails(undefined); setUnsync(null); return }
+    if (!linkedId) { setLive(null); setPending(null); setLoaderNote(null); setDetails(undefined); setUnsync(null); return }
     const r = await window.obsLoader.repos.live(repo.path, linkedId)
     setLive('error' in r ? null : r.changed)
+    setLoaderNote('error' in r ? null : r.loader ?? null)
     setUnsync('error' in r || !r.unsynced ? null : { saved: r.presetSaved, obs: r.obsChanged })
     setDetails(undefined) // the line-by-line preview is only read when it is asked for
     setPending('error' in r ? null : r.pending ?? null)
@@ -108,11 +113,11 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     notify({ tone: 'good', text: `Renamed to “${newName.trim()}”.${repo.online ? ' The GitHub copy keeps its own name: rename it under the details if you want them to match.' : ''}` })
     await refresh()
   }
-  const applyNow = async (installId?: string) => {
+  const applyNow = async (installId?: string, auto = false) => {
     const target = installId ?? (usable.length === 1 ? usable[0].id : undefined)
     if (!target) { notify({ tone: 'warn', text: 'Link this preset to an OBS (the chain button) so it knows where to apply, or use “Review before applying…” in its details to pick one.' }); return }
     // never forces the review page open: say why it did not apply, and point to the advanced button
-    const review = (why: string) => { notify({ tone: 'warn', text: `${why} To go through it step by step, open this preset’s details (the arrow at the top right) and press “Review before applying…”.` }) }
+    const review = (why: string) => { notify({ tone: 'warn', text: auto ? `${repo.name} is up to date with GitHub, but it was not put into OBS: ${why} Press “Apply to OBS” when that is sorted.` : `${why} To go through it step by step, open this preset’s details (the gear at the top right) and press “Review before applying…”.` }) }
     setBusy(true); setMsg(null)
     try {
       const b = await window.obsLoader.bundle.openPath(repo.path)
@@ -126,17 +131,12 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
       const plan = await window.obsLoader.import.plan(req)
       if (plan.blockers.length > 0) return review(plan.blockers[0])
       if (plan.missingVariables.some((v) => v.kind !== 'secret' && v.required)) return review('This preset needs an answer (a folder or file) before it can be applied.')
-      const lv = await window.obsLoader.repos.live(repo.path, target)
-      if (!('error' in lv) && lv.changed.length > 0 && !lv.unsynced) return review('OBS has changes the preset does not have, and applying would replace them. Press “Update preset from OBS” to keep them, or use the advanced apply to replace them anyway.')
       const r = await window.obsLoader.import.apply(req)
       await window.obsLoader.locations.save(b.manifest.id, { assets: loc.assets, variables: Object.fromEntries(Object.entries(loc.variables)) })
       const where = installs.find((i) => i.id === target)?.label ?? 'OBS'
       notify({ tone: 'good', text: `Applied “${repo.name}” to ${where}.${r.backedUp > 0 ? ` ${plural(r.backedUp, 'file')} it replaced ${r.backedUp === 1 ? 'was' : 'were'} backed up first.` : ''}` })
-      // still different after applying? Say which button fixes it, instead of leaving the same warning to come back
-      const after = await window.obsLoader.repos.live(repo.path, target)
-      if (!('error' in after) && after.changed.length > 0) {
-        notify({ tone: 'warn', text: `Applied “${repo.name}” to ${where}, but ${plural(after.changed.length, 'part')} of OBS still differ from the preset (${[...new Set(after.changed.map(friendlyFile))].slice(0, 3).join('; ')}). That means OBS changed them itself or could not use the preset’s version, so applying again will not help. If OBS’s version is the right one, press “Update preset from OBS”.` })
-      }
+      // the tile must look at OBS again: it still held the answer from before the apply (the notice never went away)
+      setUnsync(null); setLive([]); await check()
       await refresh()
     } catch (e) { setMsg({ tone: 'bad', text: (e as Error).message }) } finally { setBusy(false) }
   }
@@ -153,11 +153,12 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     : changes > 0 ? `The linked OBS has ${plural(changes, 'change')} this preset does not have yet: ${namesOf(live ?? [])}. “Update preset from OBS” keeps them; “Apply to OBS” replaces them with the preset’s version.`
     : toObs > 0 ? `This preset has ${plural(toObs, 'update')} that the linked OBS does not have yet: ${namesOf(pending ?? [])}.`
     : `The linked OBS and this preset match.`
+  const loaderLine = loaderNote && (changes > 0 || toObs > 0) ? `OBS Config Loader was updated (${loaderNote.from} to ${loaderNote.to}) since this preset was last saved, so some of these differences may come from the app itself and not from any edit.` : ''
   const obsAccent: 'save' | 'apply' | null = unsync ? null : changes > 0 ? 'save' : toObs > 0 ? 'apply' : null
   const ghLine = !checked ? 'Asking GitHub…'
-    : st.ahead > 0 && st.behind > 0 ? 'Both this computer and GitHub have changed: choose below.'
-    : st.behind > 0 ? `GitHub has ${plural(st.behind, 'newer change')}.`
-    : st.ahead > 0 ? `${plural(st.ahead, 'save')} not uploaded yet.`
+    : st.ahead > 0 && st.behind > 0 ? 'Both this computer and GitHub have changed: combining them, GitHub’s version winning where they clash.'
+    : st.behind > 0 ? `GitHub has ${plural(st.behind, 'newer change')}: getting ${st.behind === 1 ? 'it' : 'them'}…`
+    : st.ahead > 0 ? `${plural(st.ahead, 'save')} not uploaded yet: uploading…`
     : 'Same as GitHub.'
 
   const run = async (f: () => Promise<void>) => { setBusy(true); try { await f() } catch (e) { setMsg({ tone: 'bad', text: (e as Error).message }) } setBusy(false); await refresh() }
@@ -211,6 +212,49 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
     setSure(null)
     setMsg(r.ok ? { tone: 'good', text: 'This computer now has the online version. Your previous one is kept in History. Apply it to OBS to use it.' } : { tone: 'bad', text: r.error })
   })
+  // GitHub is the source of truth: when it has something this computer lacks, take it (and put it into a clean, closed OBS); when this computer
+  // has saves GitHub lacks, upload them. Both sides changed: GitHub wins, and what this computer had stays in History.
+  const autoKey = useRef('')
+  useEffect(() => {
+    if (!online || !checked || busy || st.dirtyFiles.length > 0) return
+    if (st.behind === 0 && st.ahead === 0 && !disagree) return
+    const key = `${repo.path}|${st.ahead}|${st.behind}|${tick ?? 0}`
+    if (autoKey.current === key) return
+    autoKey.current = key
+    void (async () => {
+      setBusy(true)
+      let got = false
+      const wasClean = !!linkedId && live?.length === 0 && !unsync
+      try {
+        if (st.behind > 0 || disagree) {
+          // unrelated histories cannot be combined: GitHub's version replaces this one (kept in History). Otherwise both sets of edits are
+          // combined, and where they clash on the same line GitHub's wins, so nothing else is lost.
+          if (disagree) { const r = await window.obsLoader.repos.useOnline(repo.path); got = r.ok }
+          else { const r = await window.obsLoader.repos.pull(repo.path, 'keep-theirs'); got = r.status === 'updated' }
+          if (got) {
+            if (st.ahead > 0) await window.obsLoader.repos.push(repo.path)
+            setMsg({ tone: 'good', text: st.ahead > 0 ? 'Got the newest version from GitHub and combined it with your latest saves; where both changed the same thing, GitHub’s version won.' : 'Got the newest version from GitHub: this preset now matches it.' })
+          }
+        } else {
+          const r = await window.obsLoader.repos.push(repo.path)
+          if (r.status === 'pushed') setMsg({ tone: 'good', text: 'Uploaded your saves to GitHub.' })
+          else if (r.status === 'error' && r.rejected) {
+            // GitHub had something newer that this computer had not looked for yet: take it, combine, and upload the result
+            const p = await window.obsLoader.repos.pull(repo.path, 'keep-theirs')
+            if (p.status === 'updated') {
+              got = true
+              await window.obsLoader.repos.push(repo.path)
+              setMsg({ tone: 'good', text: 'Got the newest version from GitHub and combined it with your latest saves; where both changed the same thing, GitHub’s version won.' })
+            }
+          }
+        }
+      } catch { /* the buttons below still work by hand */ }
+      setBusy(false)
+      await refresh()
+      if (got && wasClean) void applyNow(linkedId, true)
+    })()
+  }, [online, checked, busy, st.behind, st.ahead, st.dirtyFiles.length, disagree, tick]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // a repository with that name is already on GitHub: the person may want exactly that one (say, an organisation's) to hold this preset
   const [replaceAsk, setReplaceAsk] = useState(false)
   const toggleOnline = (on: boolean, replace = false) => run(async () => {
@@ -295,6 +339,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
         {linkedId ? (
           <div className="space-y-2">
             <p className="text-sm">{obsLine}</p>
+            {loaderLine && <p className="text-xs text-muted">{loaderLine}</p>}
             <div className="grid grid-cols-2 gap-2">
               <button className={'btn px-3 py-1.5 ' + (obsAccent === 'apply' ? 'btn-accent' : '')} disabled={busy} onClick={() => void applyNow(linkedId)}>{busy ? 'Applying…' : 'Apply to OBS'}</button>
               <button className={'btn px-3 py-1.5 ' + (obsAccent === 'save' ? 'btn-accent' : '')} disabled={busy} onClick={() => save(false)}>Update preset from OBS</button>
@@ -473,7 +518,7 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
       {exporting && createPortal(<ExportPanel repo={repo} onDone={(m) => { setMsg(m) }} onClose={() => setExporting(false)} />, document.body)}
 
       {open && createPortal(
-        <div className="fixed inset-0 z-40 flex items-stretch justify-center p-4 bg-black/50" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false) }}>
+        <div className="modal-backdrop z-40 flex items-stretch justify-center p-4 bg-black/50" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false) }}>
         <div className="card w-full max-w-5xl flex flex-col min-h-0 overflow-hidden" role="dialog" aria-modal="true" aria-label={`Manage ${repo.name}`}>
           <div className="flex items-center gap-2 px-4 py-3 border-b border-line">
             <Icon name="layers" size={18} className="text-muted" />
@@ -483,10 +528,10 @@ export function PresetTile({ repo, installs, gh, refresh, patch, apply, go, noti
           <div className="flex min-h-0 flex-1">
             <nav className="w-44 shrink-0 border-r border-line p-3 space-y-1 text-sm overflow-y-auto" aria-label="Sections">
               {[['m-parts', 'Where parts are kept'], ['m-online', 'Online backup'], ['m-apply', 'Applying'], ['m-setup', 'Setup steps'], ['m-names', 'Names & parts'], ['m-more', 'History & more']].map(([id, label]) => (
-                <button key={id} className="bt-nav w-full text-left px-2 py-1.5" onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>{label}</button>
+                <button key={id} className="bt-nav w-full text-left px-2 py-1.5" onClick={() => jump(id)}>{label}</button>
               ))}
             </nav>
-            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+            <div ref={pane} className="relative flex-1 overflow-y-auto p-4 space-y-6">
           <section id="m-parts">{ov && <StoragePanel repo={repo} ov={ov} changed={async () => { await loadOverview(); await refresh() }} />}</section>
 
           <section id="m-online" className="space-y-3">{online ? <div className="space-y-2">

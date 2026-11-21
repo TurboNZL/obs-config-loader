@@ -9,7 +9,7 @@ import {
   writeBundleDir, writeBundleZip, GithubError, defaultGit, type Bundle, type GitRunner, type ObsInstall,
   assetBundlePath, attachSecrets, commitAll, fetchRepo, githubRenameRepo, githubRepoName, parseGithubUrl, pendingForObs, locateExtracted, onlineComparison, publicRemoteUrl, useOnlineVersion, serializeManifest, SOURCE_PLATFORMS, WEBSOCKET_FILE, standInOptions, sourceName, availableOn, detectVersions, listNames, obsHasLayout, obsHasOutput, renameLayoutInObs, renameOutputInObs,
   LAUNCH_FLAGS, launchArgs, COMPILE_TOGGLES, compileSteps, parseCustomFlags, findBuildProblems, freshFolder, findTailscale, tailscaleState, defaultRun, installCommand, serveCommands, installPortableObs, updatePlan, latestObsVersion, compareVersions, updatePortableObs, downloadFile, OBS_RELEASE_API, parseScriptLine, scriptReply, safeScriptUrl, renamePreset, renameSceneLayout, renameOutputSetting, removeSceneLayout, removeOutputSetting, systemsSavedOn, renameSceneOrSource, renameSourceInObs, RenameError,
-  findRenamedAssets, missingFilesInObs, presetLastSaved, obsLastChanged, planSetup, setupSteps, findPython, runPlannedStep, resolveString, type PlannedStep, replacePathInObs, applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
+  findRenamedAssets, missingFilesInObs, presetLastSaved, obsLastChanged, lastSavedWithLoader, planSetup, setupSteps, findPython, runPlannedStep, resolveString, type PlannedStep, replacePathInObs, applyCloudSettings, applyExtras, buildPresetFile, extrasContent, keepBundleLocals, localMediaLocations, presetFiles, readExtras, stripSecrets, writeExtras, slug, MAX_UPLOAD_FILE,
   readLocalKeys, readLocalSettings, writeLocalKeys, writeLocalSettings, cloudSkippedPaths, writeExclude, LOCAL_DIR, EXTRAS_EXT, type LocalSettings,
   listPlatformSources, DEFAULT_PLATFORM_MAP, withIdentity, listAuthors, rewriteAuthor, discardNameChangeBackup, putFile, getFile, testStorage, objectKey, validateTarget, regionFromEndpoint, sha256OfFile, localMediaPath,
   type GitIdentity, type StorageTarget, type StorageKeys, encodePairCode, decodePairCode,
@@ -177,6 +177,20 @@ function readLocations(): Record<string, Locations> {
 function writeLocations(all: Record<string, Locations>) {
   fs.mkdirSync(path.dirname(locationsPath()), { recursive: true })
   fs.writeFileSync(locationsPath(), JSON.stringify(all, null, 2))
+}
+
+// ── "what OBS looked like right after this preset was applied": differences that are still there then are OBS's own doing (it rewrites
+// files on exit), not edits, so they are not shown as changes until OBS looks different again ──
+const appliedPath = () => path.join(app.getPath('userData'), 'applied-trees.json')
+const readApplied = (): Record<string, string> => { try { return JSON.parse(fs.readFileSync(appliedPath(), 'utf8')) } catch { return {} } }
+const appliedKey = (dir: string, installId: string) => `${path.resolve(dir)}|${installId}`
+async function rememberApplied(dir: string, install: ObsInstall) {
+  try {
+    const r = await captureLive({ host, install, dir, dryRun: true, keepKeysDefault: keepKeysDefault(), git: gitRunner(dir), assetIdHints: await assetHintsFor(dir) })
+    const all = readApplied(); const k = appliedKey(dir, install.id)
+    if (r.status === 'changes' && r.tree) all[k] = r.tree; else delete all[k]
+    fs.writeFileSync(appliedPath(), JSON.stringify(all))
+  } catch { /* only a convenience */ }
 }
 
 /** Remember where this computer keeps each file a preset's scenes use (only those the preset knows, and that really exist). */
@@ -688,7 +702,7 @@ function registerIpc() {
       writeLocations(all)
     }
     // Loaded from a repository: OBS now matches its current state, so later live edits are measured from here.
-    if (fs.existsSync(path.join(opts.bundle.source, '.git'))) await markSynced(opts.bundle.source, opts.install)
+    if (fs.existsSync(path.join(opts.bundle.source, '.git'))) { await markSynced(opts.bundle.source, opts.install); await rememberApplied(opts.bundle.source, opts.install) }
     return { written: res.written.length, backedUp: res.backedUp.length, backupDir: res.backupDir }
   })
 
@@ -958,14 +972,20 @@ function registerIpc() {
     } catch (e) { return { ok: false, error: e instanceof GithubError ? errText(e) : errText(e) } }
   })
 
+  /** Was this preset last saved by an older version of the loader than the one running now? Then some differences may come from the app. */
+  const loaderNote = async (p: string) => { const from = await lastSavedWithLoader(p, gitRunner(p)); return from && from !== app.getVersion() ? { from, to: app.getVersion() } : undefined }
   handle('repos:live', (_e, p: string, installId: string, withDiff?: boolean) => memoised(`live|${p}|${installId}|${withDiff === true}`, 30_000, () => heavy(async () => {
     const inst = findInstall(installId)
     const r = await captureLive({ host, install: inst, dir: p, dryRun: true, withDiff: withDiff === true, keepKeysDefault: keepKeysDefault(), git: gitRunner(p), assetIdHints: await assetHintsFor(p) })
     if (r.status === 'error') return { error: r.message }
+    // the same leftover differences as right after the last apply: OBS's own rewriting, not an edit
+    if (r.status === 'changes' && r.tree && readApplied()[appliedKey(p, installId)] === r.tree) {
+      return { changed: [], pending: await pendingForObs(p, inst, gitRunner(p)), loader: await loaderNote(p) }
+    }
     // and the other direction: what the preset has that this OBS has not got yet (typically after getting updates)
     const unsynced = r.status === 'changes' && r.unsynced === true
     return {
-      changed: r.status === 'changes' ? r.files : [], details: r.status === 'changes' ? r.details : undefined, pending: await pendingForObs(p, inst, gitRunner(p)),
+      changed: r.status === 'changes' ? r.files : [], details: r.status === 'changes' ? r.details : undefined, pending: await pendingForObs(p, inst, gitRunner(p)), loader: await loaderNote(p),
       // never matched on this computer: say so, and say when each side last changed, so a person can tell which is newer
       ...(unsynced ? { unsynced: true, presetSaved: (await presetLastSaved(p, gitRunner(p))) ?? undefined, obsChanged: obsLastChanged(inst.configDir) ?? undefined } : {}),
     }
