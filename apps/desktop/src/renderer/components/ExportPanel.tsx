@@ -47,7 +47,7 @@ export function ExportPanel({ repo, onDone, onClose }: { repo: RepoInfo; onDone:
 
   const totalBytes = files.filter((f) => media.includes(f.id)).reduce((n, f) => n + f.size, 0)
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="modal-backdrop z-50 flex items-center justify-center p-4 bg-black/50" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <div className="card p-5 w-full max-w-xl max-h-[88vh] overflow-y-auto space-y-4" role="dialog" aria-modal="true" aria-label={`Export ${repo.name}`}>
         <div className="flex items-center gap-2">
           <Icon name="fileUp" className="kind-file kind-text" />

@@ -112,8 +112,8 @@ fs.writeFileSync(path.join(cfg, 'user.ini'), '[Basic]\nProfile=Main\nProfileDir=
   await t.locator('button:has-text("Link")').last().click()
   await page.waitForSelector('text=is now linked to')
   check('linked again', (await t.locator('button[aria-label^="Linked to"]').count()) === 1)
-  await t.locator('button:has-text("Update preset from OBS")').click()
-  await t.locator('[role="status"]:has-text("Saved")').waitFor()
+  await t.locator('button:text-is("Sync")').click()
+  await t.locator('[role="status"]:has-text("Synced")').waitFor()
   check('saving puts the OBS change into the preset', fs.readFileSync(path.join(dir, 'collections/main.json'), 'utf8').includes('Added in OBS'))
 
   console.log('5. where each part is kept: untick GitHub for a layout, the file stays here and out of git')

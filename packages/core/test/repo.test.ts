@@ -5,7 +5,7 @@ import * as nodePath from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
   captureLive, initRepo, repoStatus, repoLog, pullRepo, pushRepo, commitAll, cloneRepo, assetNeeds, preservePlatformSources,
-  readBundleDir, markSynced, type Manifest,
+  readBundleDir, markSynced, lastSavedWithLoader, type Manifest,
 } from '../src/index.js'
 import { host, install, makeSource } from './helpers.js'
 
@@ -41,13 +41,28 @@ describe('captureLive', () => {
     j.sources.push({ id: 'color_source', name: 'Backdrop', uuid: 'u-bd', settings: { color: 4278190335 } })
     fs.writeFileSync(scene, JSON.stringify(j))
     const dry = await captureLive({ host: h, install: inst, dir, dryRun: true })
-    expect(dry).toEqual({ status: 'changes', files: ['collections/main.json'] })
+    expect(dry).toEqual({ status: 'changes', tree: expect.any(String), files: ['collections/main.json'] })
     expect((await repoLog(dir)).length).toBe(1) // a dry run commits nothing
 
     const second = await captureLive({ host: h, install: inst, dir })
     expect(second).toMatchObject({ status: 'committed', merged: false, files: ['collections/main.json'] })
     expect(fs.readFileSync(nodePath.join(dir, 'collections/main.json'), 'utf8')).toContain('Backdrop')
     expect((await repoLog(dir)).length).toBe(2)
+  })
+
+  it('records which loader version made a save, and the dry run gives the same tree for the same leftovers', async () => {
+    const { dir, h, inst, scene } = setup()
+    await initRepo(dir)
+    await captureLive({ host: h, install: inst, dir, name: 'Mine', appVersion: '2026.11.1' })
+    expect(await lastSavedWithLoader(dir)).toBe(null) // a first capture has no live-edit commit message to carry it: nothing claimed
+    const j = JSON.parse(fs.readFileSync(scene, 'utf8'))
+    j.sources.push({ id: 'color_source', name: 'Backdrop', uuid: 'u-bd', settings: { color: 1 } })
+    fs.writeFileSync(scene, JSON.stringify(j))
+    const a = await captureLive({ host: h, install: inst, dir, dryRun: true })
+    const b = await captureLive({ host: h, install: inst, dir, dryRun: true })
+    expect(a.status === 'changes' && b.status === 'changes' && a.tree === b.tree && !!a.tree).toBe(true)
+    await captureLive({ host: h, install: inst, dir, appVersion: '2026.11.2' })
+    expect(await lastSavedWithLoader(dir)).toBe('2026.11.2')
   })
 
   it('follows a renamed scene collection and profile instead of wiping the repo', async () => {

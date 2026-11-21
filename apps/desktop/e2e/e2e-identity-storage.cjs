@@ -111,8 +111,8 @@ const s3 = http.createServer((req, res) => {
   writeScene([{ id: 'color_source', name: 'Backdrop', uuid: 'u-c', settings: { color: 3 } }])
   await page.click('nav >> text=Presets')
   const show = card('Show')
-  await show.locator('button:has-text("Update preset from OBS")').click()
-  await show.locator('[role="status"]:has-text("backed up online")').waitFor()
+  await show.locator('button:text-is("Sync")').click()
+  await show.locator('[role="status"]:has-text("uploaded to GitHub")').waitFor()
   check('the new save is by the chosen name', authors(dir, '-1', 'HEAD').join('|') === 'Stage Name <stage@example.com>')
   check('and the earlier one kept its name', authors(dir).includes('Stream Er <4242+streamer@users.noreply.github.com>'))
 

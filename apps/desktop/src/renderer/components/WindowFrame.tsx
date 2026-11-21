@@ -14,6 +14,8 @@ export function WindowFrame() {
     void window.obsLoader.window.frame().then((f) => setCustom(f.custom))
     return window.obsLoader.window.onState(setMax)
   }, [])
+  // popups start below the title bar: the bar is a drag area, and anything laid over it loses its top clicks and covers the window buttons
+  useEffect(() => { document.documentElement.style.setProperty('--wf-h', custom ? '2.25rem' : '0px') }, [custom])
   if (!custom) return null
   const ctl = (a: 'minimize' | 'maximize' | 'close') => void window.obsLoader.window.control(a)
   return (

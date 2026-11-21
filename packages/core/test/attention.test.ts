@@ -179,6 +179,6 @@ describe('a preset\'s setup steps survive saves from OBS', () => {
     const scenes = nodePath.join(cfg, 'basic/scenes'); const f = nodePath.join(scenes, fs.readdirSync(scenes).find((x) => x.endsWith('.json'))!)
     const j = JSON.parse(fs.readFileSync(f, 'utf8')); j.current_scene = 'changed'; fs.writeFileSync(f, JSON.stringify(j))
     expect((await captureLive({ host: h, install: inst, dir })).status).toBe('committed')
-    expect(readBundleDir(dir).manifest.setup?.steps?.[0]?.id).toBe('go')
+    expect((readBundleDir(dir).manifest.setup as { steps?: { id: string }[] } | undefined)?.steps?.[0]?.id).toBe('go')
   })
 })

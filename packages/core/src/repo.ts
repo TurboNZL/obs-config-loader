@@ -332,7 +332,7 @@ export interface ChangeDetail { file: string; status: 'added' | 'modified' | 'de
 
 export type CaptureResult =
   | { status: 'unchanged' }
-  | { status: 'changes'; files: string[]; details?: ChangeDetail[]; localChanges?: string[]; /** This OBS was never matched to the preset here: the differences cannot be called OBS's changes. */ unsynced?: boolean } // dry run only
+  | { status: 'changes'; /** Content id of what a save from OBS would produce right now: lets a caller recognise "the same leftover differences as after the last apply". */ tree?: string; files: string[]; details?: ChangeDetail[]; localChanges?: string[]; /** This OBS was never matched to the preset here: the differences cannot be called OBS's changes. */ unsynced?: boolean } // dry run only
   /** Saving from an OBS that was never matched to this preset would remove these from the preset (scene layouts / output settings): ask first. */
   | { status: 'would-remove'; removes: string[] }
   | { status: 'committed'; files: string[]; commit: string; merged: boolean; keys?: number; copied?: number }
@@ -648,7 +648,8 @@ export async function captureLive(o0: CaptureOptions): Promise<CaptureResult> {
       if (o.dryRun) {
         let details: ChangeDetail[] | undefined
         if (o.withDiff) details = [...(await describeStaged(wt, git)), ...shown.map((f): ChangeDetail => ({ file: f, status: 'modified', added: 0, removed: 0, local: true }))]
-        return { status: 'changes', files: [...files, ...shown], ...(details ? { details } : {}), ...(shown.length ? { localChanges: shown } : {}), ...(unsynced ? { unsynced: true } : {}) }
+        const tree = (await git(['write-tree'], wt)).stdout.trim() || undefined
+        return { status: 'changes', ...(tree ? { tree } : {}), files: [...files, ...shown], ...(details ? { details } : {}), ...(shown.length ? { localChanges: shown } : {}), ...(unsynced ? { unsynced: true } : {}) }
       }
       // An OBS this preset was never compared with has fewer things than a preset that other computers added to: saving from it would
       // delete those from the preset. That needs a clear yes, not a button press.
@@ -665,7 +666,7 @@ export async function captureLive(o0: CaptureOptions): Promise<CaptureResult> {
         return { status: 'committed', files: local, commit: (await git(['rev-parse', '--short', 'HEAD'], o.dir)).stdout.trim(), merged: false, ...loc }
       }
       if (files.length) {
-        const c = await git([...id, 'commit', '-m', `Live edits from ${o.install.label}`], wt)
+        const c = await git([...id, 'commit', '-m', `Live edits from ${o.install.label}`, ...(o.appVersion ? ['-m', `Saved-with: OBS Config Loader ${o.appVersion}`] : [])], wt)
         if (c.code !== 0) return { status: 'error', message: `git commit failed: ${c.stderr.trim() || c.stdout.trim()}` }
       }
       const live = (await git(['rev-parse', 'HEAD'], wt)).stdout.trim()
@@ -853,3 +854,14 @@ export async function applyCloudSettings(dir: string, git: GitRunner = defaultGi
 }
 
 export { serializeManifest }
+
+/** The loader version that made the newest save of a preset (from the `Saved-with:` line of the commit), if it says. */
+export async function lastSavedWithLoader(dir: string, git: GitRunner = defaultGit): Promise<string | null> {
+  const r = await git(['--no-optional-locks', 'log', '-50', '--format=%(trailers:key=Saved-with,valueonly,separator=%x2C)%x00'], dir)
+  if (r.code !== 0) return null
+  for (const chunk of r.stdout.split('\0')) {
+    const m = /OBS Config Loader\s+(\S+)/.exec(chunk)
+    if (m) return m[1]
+  }
+  return null
+}

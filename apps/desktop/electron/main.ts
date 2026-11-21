@@ -179,6 +179,22 @@ function writeLocations(all: Record<string, Locations>) {
   fs.writeFileSync(locationsPath(), JSON.stringify(all, null, 2))
 }
 
+// ── what OBS looked like at the last apply/save/sync of a preset: its content id (differences that are still there then are OBS rewriting
+// its own files, not edits), when OBS's own files last changed, and which loader version looked. If OBS has NOT changed since but the
+// preset now differs, only the loader can have caused it (a newer version reads OBS differently): that is proven, not guessed. ──
+type SyncMark = { tree?: string; obsChanged: string | null; version: string }
+const appliedPath = () => path.join(app.getPath('userData'), 'sync-marks.json')
+const readMarks = (): Record<string, SyncMark> => { try { return JSON.parse(fs.readFileSync(appliedPath(), 'utf8')) } catch { return {} } }
+const appliedKey = (dir: string, installId: string) => `${path.resolve(dir)}|${installId}`
+async function rememberApplied(dir: string, install: ObsInstall) {
+  try {
+    const r = await captureLive({ host, install, dir, dryRun: true, keepKeysDefault: keepKeysDefault(), git: gitRunner(dir), assetIdHints: await assetHintsFor(dir) })
+    const all = readMarks()
+    all[appliedKey(dir, install.id)] = { ...(r.status === 'changes' && r.tree ? { tree: r.tree } : {}), obsChanged: obsLastChanged(install.configDir), version: app.getVersion() }
+    fs.writeFileSync(appliedPath(), JSON.stringify(all))
+  } catch { /* only a convenience */ }
+}
+
 /** Remember where this computer keeps each file a preset's scenes use (only those the preset knows, and that really exist). */
 function rememberAssets(presetPath: string, found: { id: string; filename: string; path: string }[]) {
   try {
@@ -688,7 +704,7 @@ function registerIpc() {
       writeLocations(all)
     }
     // Loaded from a repository: OBS now matches its current state, so later live edits are measured from here.
-    if (fs.existsSync(path.join(opts.bundle.source, '.git'))) await markSynced(opts.bundle.source, opts.install)
+    if (fs.existsSync(path.join(opts.bundle.source, '.git'))) { await markSynced(opts.bundle.source, opts.install); await rememberApplied(opts.bundle.source, opts.install) }
     return { written: res.written.length, backedUp: res.backedUp.length, backupDir: res.backupDir }
   })
 
@@ -962,6 +978,16 @@ function registerIpc() {
     const inst = findInstall(installId)
     const r = await captureLive({ host, install: inst, dir: p, dryRun: true, withDiff: withDiff === true, keepKeysDefault: keepKeysDefault(), git: gitRunner(p), assetIdHints: await assetHintsFor(p) })
     if (r.status === 'error') return { error: r.message }
+    const mark = readMarks()[appliedKey(p, installId)]
+    if (r.status === 'changes' && mark) {
+      // the same leftover differences as right after the last sync: OBS's own rewriting, not an edit
+      if (r.tree && mark.tree === r.tree) return { changed: [], pending: await pendingForObs(p, inst, gitRunner(p)) }
+      // OBS untouched since, yet the preset differs, and a different loader version looked last time: the loader read OBS differently
+      const now = obsLastChanged(inst.configDir)
+      if (mark.version !== app.getVersion() && mark.obsChanged && now && now <= mark.obsChanged) {
+        return { changed: [], pending: await pendingForObs(p, inst, gitRunner(p)), loaderRefresh: { files: r.files, from: mark.version, to: app.getVersion(), obsChanged: mark.obsChanged } }
+      }
+    }
     // and the other direction: what the preset has that this OBS has not got yet (typically after getting updates)
     const unsynced = r.status === 'changes' && r.unsynced === true
     return {
@@ -978,6 +1004,7 @@ function registerIpc() {
       appVersion: app.getVersion(), versions: detectVersions(inst, host), onAsset: (a) => seen.push(a), keepKeysDefault: keepKeysDefault(), git: gitRunner(p), assetIdHints: await assetHintsFor(p), confirmRemoval: confirmRemoval === true,
     })
     rememberAssets(p, seen)
+    if (r.status === 'committed' || r.status === 'unchanged') await rememberApplied(p, inst)
     if (r.status === 'changes') return { status: 'unchanged' }
     if (r.status === 'committed' || r.status === 'unchanged') {
       const keys = r.status === 'committed' ? r.keys ?? 0 : 0
